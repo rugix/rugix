@@ -1,3 +1,0 @@
-description = "setup Alpine Linux for Raspberry Pi"
-priority = 100_000
-dependencies = ["rugix-ctrl"]

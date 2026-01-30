@@ -1,6 +1,0 @@
-parent = "yocto-base"
-
-recipes = [
-    "grub-setup",
-    "core/rugix-ctrl",
-]

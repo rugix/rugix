@@ -1,9 +1,0 @@
-[Unit]
-Description=Rugix Admin
-ConditionFileIsExecutable=/usr/bin/rugix-admin
-
-[Service]
-ExecStart=/usr/bin/rugix-admin
-
-[Install]
-WantedBy=multi-user.target

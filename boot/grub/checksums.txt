@@ -1,2 +1,0 @@
-02c990b9712b17c32bcfab9e26ba46c66508f7ef62db324d65bb9a41f95b018a  /build/outside/bin/BOOTAA64.efi
-7a830177d450186f0edcf412b83cc63fda2948717acd45e265e562912576e913  /build/outside/bin/BOOTX64.efi

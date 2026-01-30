@@ -1,7 +1,0 @@
-description = "setup Debian for `generic-grub-*` targets"
-dependencies = ["rugix-ctrl"]
-
-[parameters]
-with_firmware = { default = "true" }
-with_nonfree = { default = "true" }
-with_squashfs = { default = "true" }

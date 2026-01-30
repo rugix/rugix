@@ -58,7 +58,6 @@ rugix-common = { path = "crates/libs/rugix-common" }
 rugix-compression = { path = "crates/libs/rugix-compression" }
 rugix-fs = { path = "crates/libs/rugix-fs" }
 rugix-hooks = { path = "crates/libs/rugix-hooks" }
-rugix-isolator = { path = "crates/libs/rugix-isolator" }
 rugix-tasks = { path = "crates/libs/rugix-tasks" }
 rugix-version = { path = "crates/libs/rugix-version" }
 

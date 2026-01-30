@@ -12,10 +12,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: "ghcr.io/rugix/rugix-bakery"
-
 jobs:
   build_binaries_linux:
     name: "Build Binaries (${{ matrix.target }})"
@@ -109,50 +105,19 @@ jobs:
           path: ${{ matrix.target }}.tar
           if-no-files-found: error
 
-  bakery_metadata:
-    name: Bakery Image Metedata
+  test:
+    name: Test
     runs-on: ubuntu-latest
-    outputs:
-      labels: ${{ steps.meta.outputs.labels }}
-      json: ${{ steps.meta.outputs.json }}
-      version: ${{ steps.meta.outputs.version }}
-    steps:
-      - name: Docker Meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          # Include this once we released version 1.0.0.
-          # type=semver,pattern=v{{major}}
-          tags: |
-            type=schedule,pattern=nightly
-            type=schedule,pattern=nightly-{{date 'YYYYMMDD'}}
-            type=semver,pattern=v{{major}}.{{minor}}.{{patch}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=ref,event=branch,prefix=branch-
-            type=ref,event=pr,prefix=pr-
-            type=sha,prefix=git-
-          labels: |
-            org.opencontainers.image.title=Rugix Bakery
-            org.opencontainers.image.vendor=Silitics GmbH
-
-  build_bakery_images:
-    name: "Build Bakery Image (${{ matrix.arch }})"
-    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-      packages: write
+      packages: read
     needs:
-      - bakery_metadata
       - build_binaries_linux
-    strategy:
-      matrix:
-        include:
-          - { arch: amd64, runner: ubuntu-24.04 }
-          - { arch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: true
       - name: Download Binaries
         uses: actions/download-artifact@v4
         with:
@@ -167,72 +132,12 @@ jobs:
           for tar_file in *.tar; do
             if [ -f "${tar_file}" ]; then
               target_name="${tar_file%.tar}"
-              mkdir "$target_name"
+              mkdir -p "$target_name"
               tar -xf "$tar_file" -C "$target_name"
               rm -f "$tar_file"
             fi
           done
           find .
-      - name: Set up QEMU
-        if: ${{ matrix.arch != 'amd64' }}
-        uses: docker/setup-qemu-action@v3
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and Push Image
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: bakery/Dockerfile
-          platforms: linux/${{ matrix.arch }}
-          labels: ${{ needs.bakery_metadata.outputs.labels }}
-          push: true
-          tags: ${{ env.IMAGE_NAME }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          build-args: |
-            BUILDTIME=${{ fromJSON(needs.bakery_metadata.outputs.json).labels['org.opencontainers.image.created'] }}
-            VERSION=${{ fromJSON(needs.bakery_metadata.outputs.json).labels['org.opencontainers.image.version'] }}
-            REVISION=${{ fromJSON(needs.bakery_metadata.outputs.json).labels['org.opencontainers.image.revision'] }}
-      - name: Export Digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-      - name: Upload Digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: bakery-digest-${{ matrix.arch }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 2
-
-  test_bakery_image:
-    name: Test Bakery Image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    needs:
-      - bakery_metadata
-      - build_bakery_images
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Download AMD64 Digest
-        uses: actions/download-artifact@v4
-        with:
-          pattern: bakery-digest-amd64
-          path: /tmp/digests
       - name: Configure `binfmt_misc` for Foreign Architectures
         run: docker run --privileged --rm tonistiigi/binfmt --install all
       - name: Reclaim some disk space
@@ -241,89 +146,27 @@ jobs:
           sudo rm -rf /opt/ghc
           sudo rm -rf "/usr/local/share/boost"
           sudo rm -rf /opt/hostedtoolcache
-          # Make sure /mnt has plenty of empty space,
-          # but ignore the error we encounter on /mnt/swapfile
-          # since we can't delete that
           sudo rm -rf /mnt/* || true
       - name: Run Tests
         shell: bash
         run: |
           set -euo pipefail
-
-          DIGEST=$(ls /tmp/digests/bakery-digest-amd64/)
-
           cd tests
-
           ./generate-test-keys.sh
-          export RUGIX_BAKERY_IMAGE="${{ env.IMAGE_NAME }}@sha256:$DIGEST"
+          export RUGIX_BAKERY_IMAGE="ghcr.io/rugix/rugix-bakery:nightly"
+          export RUGIX_BINARIES_DIR="$(pwd)/../build/binaries"
           docker pull $RUGIX_BAKERY_IMAGE
-          echo "RUGIX_BAKERY_IMAGE=$RUGIX_BAKERY_IMAGE"
           ./run-all-tests.sh
-
-  build_bakery_image:
-    name: Build and Push Bakery Image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    needs:
-      - bakery_metadata
-      - build_bakery_images
-      - test_bakery_image
-    outputs:
-      digest: ${{ steps.digest.outputs.digest }}
-    steps:
-      - name: Download Digests
-        uses: actions/download-artifact@v4
-        with:
-          pattern: bakery-digest-*
-          path: /tmp/digests
-          merge-multiple: true
-      - name: List Digests
-        run: |
-          ls -l /tmp/digests
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Create Manifest List and Push
-        shell: bash
-        working-directory: /tmp/digests
-        env:
-          # We use an environment variable here because the shell knows how to properly escape JSON.
-          METADATA_JSON: ${{ needs.bakery_metadata.outputs.json }}
-        run: |
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$METADATA_JSON") \
-            --annotation "index:org.opencontainers.image.title=Rugix Bakery" \
-            --annotation "index:org.opencontainers.image.vendor=Silitics GmbH" \
-            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
-      - name: Inspect Image
-        run: |
-          docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ needs.bakery_metadata.outputs.version }}
-      - name: Extract Digest
-        id: digest
-        run: |
-          docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ needs.bakery_metadata.outputs.version }} \
-            --format "{{json .Manifest}}" \
-            | jq '.digest' > digest.txt
-          DIGEST=$(cat digest.txt)
-          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
 
   upload_release_assets:
     name: "Upload Release Assets"
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
     needs:
       - build_binaries_linux
       - build_binaries_mac
-      - test_bakery_image
+      - test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -339,32 +182,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          # draft: true
           files: build/binaries/*
-
-  # attest_bakery_image:
-  #   name: Attest Bakery Image
-  #   runs-on: ubuntu-latest
-  #   needs:
-  #     - build_bakery_image
-  #   permissions:
-  #     id-token: write
-  #     packages: write
-  #     contents: read
-  #     attestations: write
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #     - name: Login to GitHub Container Registry
-  #       uses: docker/login-action@v3
-  #       with:
-  #         registry: ${{ env.REGISTRY }}
-  #         username: ${{ github.actor }}
-  #         password: ${{ secrets.GITHUB_TOKEN }}
-  #     - name: Attest Image
-  #       uses: actions/attest-build-provenance@v1
-  #       id: attest
-  #       with:
-  #         subject-name: ${{ env.IMAGE_NAME }}
-  #         subject-digest: ${{ needs.build_bakery_image.outputs.digest }}
-  #         push-to-registry: true

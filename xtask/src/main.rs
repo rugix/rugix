@@ -13,7 +13,6 @@ pub struct Args {
 pub enum Task {
     Doc,
     Build,
-    BuildImage,
     BuildBinaries { target: Option<String> },
 }
 
@@ -76,32 +75,10 @@ pub fn build_binaries(target: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn build_image() -> anyhow::Result<()> {
-    let env = LocalEnv::new(project_path());
-    run!(
-        env,
-        [
-            "docker",
-            "build",
-            "-t",
-            "ghcr.io/rugix/rugix-bakery:dev",
-            "-f",
-            "bakery/Dockerfile",
-            "."
-        ]
-        .with_stdout(Out::Inherit)
-        .with_stderr(Out::Inherit)
-    )?;
-    Ok(())
-}
-
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let env = LocalEnv::new(project_path());
     match args.task {
-        Task::BuildImage => {
-            build_image()?;
-        }
         Task::Doc => {
             run!(
                 env,
@@ -117,8 +94,6 @@ fn main() -> anyhow::Result<()> {
         Task::Build => {
             build_binaries("aarch64-unknown-linux-musl")?;
             build_binaries("x86_64-unknown-linux-musl")?;
-            // build_binaries("arm-unknown-linux-musleabihf")?;
-            build_image()?;
         }
     }
     Ok(())

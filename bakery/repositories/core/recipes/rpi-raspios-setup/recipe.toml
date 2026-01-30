@@ -1,2 +1,0 @@
-description = "setup Raspberry Pi OS for Rugix"
-dependencies = ["rugix-ctrl", "rpi-raspios-cleanup", "persist-fake-hwclock"]

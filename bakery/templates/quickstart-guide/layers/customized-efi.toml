@@ -1,6 +1,0 @@
-parent = "customized"
-
-recipes = [
-    # Setup Debian for booting via Grub.
-    "core/debian-grub-setup",
-]

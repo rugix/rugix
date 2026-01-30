@@ -1,9 +1,0 @@
-parent = "customized-pi"
-
-recipes = [
-    # Include the firmware update for Raspberry Pi 4.
-    "core/rpi-include-firmware",
-]
-
-[parameters."core/rpi-include-firmware"]
-model = "pi4"

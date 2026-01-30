@@ -1,5 +1,0 @@
-description = "cleanup cache and delete package lists"
-priority = -900_000  # Execute after everything else.
-
-[parameters]
-autoremove = { default = false }

@@ -1,9 +1,0 @@
-[Unit]
-Description=Commit the Currently Booted System
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/rugix-ctrl system commit
-
-[Install]
-WantedBy=multi-user.target

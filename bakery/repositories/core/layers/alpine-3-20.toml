@@ -1,8 +1,0 @@
-root = true
-
-recipes = [
-    "alpine-bootstrap",
-]
-
-[parameters."alpine-bootstrap"]
-version = "3.20"

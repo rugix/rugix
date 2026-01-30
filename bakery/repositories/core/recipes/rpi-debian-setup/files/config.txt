@@ -1,6 +1,0 @@
-# Enable DRM VC4 V3D driver.
-dtoverlay=vc4-kms-v3d
-max_framebuffers=2
-
-# We want to run the processor in its 64-bit mode.
-arm_64bit=1

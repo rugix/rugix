@@ -1,8 +1,0 @@
-description = "install and configure Rugix Ctrl"
-priority = 700_000                               # Execute very early.
-dependencies = ["pkg-update"]
-
-[parameters]
-rugix_admin = { default = false }
-# Use MUSL builds by default.
-use_musl = { default = true }

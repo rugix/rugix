@@ -1,2 +1,0 @@
-description = "install state file for `/etc/fake-hwclock.data`"
-priority = 600_000  # Execute rather early.

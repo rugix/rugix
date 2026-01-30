@@ -1,8 +1,0 @@
-description = "setup Debian for Raspberry Pi"
-priority = 100_000
-dependencies = ["rugix-ctrl"]
-
-[parameters]
-with_firmware = { default = "true" }
-with_nonfree = { default = "true" }
-with_squashfs = { default = "true" }

@@ -1,7 +1,0 @@
-93216cc50e499d8ebccda467090e6be376f65b4f486525389818610d6788c745  bin/boot.scr
-215f4183d5966e739e18172dbc3cd11c6c4a22d15dbbdbd3740af54b9219473c  bin/second.scr
-e86b3caabc3bc8e84dec4bb0289d5684eb555274d8f05d46af6e8ff853008221  bin/u-boot-arm64.bin
-b8e51bb619fa34c0096b224cd36d6e2bc372b67f87b335ed69fa63d2024c4a3e  bin/u-boot-armhf-pi1.bin
-b1f2b6ae1e7b81c9f3da313610142fb22f5ba3ed8f285fbd90a1b47cac03ef5c  bin/u-boot-armhf-pi2.bin
-4f3ba87c28a1b340f3d288156ebf0ca6ede2d866f79f03468393326b079ef6ab  bin/u-boot-armhf-pi3.bin
-74b33cf2db1661ac13059d65eacf4efbef06abb0182593b6f974b9b8b43830f4  bin/u-boot-armhf-zerow.bin

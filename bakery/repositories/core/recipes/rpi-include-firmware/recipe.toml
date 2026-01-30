@@ -1,4 +1,0 @@
-description = "include firmware update for Raspberry Pi"
-
-[parameters]
-model = {}

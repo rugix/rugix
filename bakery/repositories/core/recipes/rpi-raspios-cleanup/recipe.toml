@@ -1,5 +1,0 @@
-description = "remove unnecessary Raspberry Pi OS functionality"
-priority = 700_000  # Execute very early.
-
-[parameters]
-disable_swapfile = { default = "true" }

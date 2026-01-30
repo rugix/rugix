@@ -1,3 +1,0 @@
-description = "upgrade all packages"
-priority = 899_900  # Execute before everything else but after `pkg-update`.
-dependencies = ["pkg-update"]

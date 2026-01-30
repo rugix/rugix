@@ -1,6 +1,0 @@
-description = "bootstrap Alpine Linux"
-priority = 10_000_000
-dependencies = ["pkg-cleanup"]
-
-[parameters]
-version = {}

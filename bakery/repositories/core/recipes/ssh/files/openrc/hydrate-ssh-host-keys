@@ -1,5 +1,0 @@
-#!/sbin/openrc-run
-
-start() {
-    /usr/lib/rugix/scripts/hydrate-ssh-host-keys.sh
-}

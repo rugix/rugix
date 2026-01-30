@@ -1,7 +1,0 @@
-description = "configure a static IP address"
-priority = 80_000
-
-[parameters]
-address = {}
-gateway = {}
-netmask = {}

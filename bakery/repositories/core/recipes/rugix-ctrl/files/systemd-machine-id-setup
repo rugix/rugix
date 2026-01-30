@@ -1,5 +1,0 @@
-#!/bin/sh
-
-if [ ! -f /etc/machine-id ]; then
-    tr -dc a-z0-9 </dev/urandom | head -c 13 >/run/rugix/mounts/data/overlay/root/etc/machine-id
-fi

@@ -1,6 +1,0 @@
-parent = "customized"
-
-recipes = [
-    # Prepares Debian for booting on a Raspberry Pi.
-    "core/rpi-debian-setup",
-]

@@ -1,6 +1,0 @@
-root = true
-
-recipes = ["debian-bootstrap"]
-
-[parameters."debian-bootstrap"]
-suite = "trixie"
