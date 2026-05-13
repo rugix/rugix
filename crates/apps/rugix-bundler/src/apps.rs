@@ -340,6 +340,7 @@ fn resolve_digest_skopeo(image: &str, platform: Option<&str>) -> BundleResult<St
 fn save_images_skopeo(
     images: &[String],
     platform: Option<&str>,
+    disable_pinning: bool,
     payloads_dir: &Path,
 ) -> BundleResult<Vec<SavedImage>> {
     let mut saved = Vec::new();
@@ -363,8 +364,14 @@ fn save_images_skopeo(
         if !status.success() {
             bail!("skopeo copy failed for {image}");
         }
-        let pinned = resolve_digest_skopeo(image, platform)?;
-        info!(image, pinned = %pinned, "resolved image digest");
+        let pinned = if disable_pinning {
+            info!(image, "image pinning disabled, skipping digest resolution");
+            image.clone()
+        } else {
+            let p = resolve_digest_skopeo(image, platform)?;
+            info!(image, pinned = %p, "resolved image digest");
+            p
+        };
         saved.push(SavedImage {
             original: image.clone(),
             pinned,
@@ -380,6 +387,7 @@ fn save_images_docker(
     images: &[String],
     platform: Option<&str>,
     pull: bool,
+    disable_pinning: bool,
     payloads_dir: &Path,
 ) -> BundleResult<Vec<SavedImage>> {
     if pull {
@@ -413,8 +421,14 @@ fn save_images_docker(
         if !status.success() {
             bail!("docker save failed for {image}");
         }
-        let pinned = resolve_digest_docker(image)?;
-        info!(image, pinned = %pinned, "resolved image digest");
+        let pinned = if disable_pinning {
+            info!(image, "image pinning disabled, skipping digest resolution");
+            image.clone()
+        } else {
+            let p = resolve_digest_docker(image)?;
+            info!(image, pinned = %p, "resolved image digest");
+            p
+        };
         saved.push(SavedImage {
             original: image.clone(),
             pinned,
@@ -434,12 +448,13 @@ fn save_images(
     images: &[String],
     platform: Option<&str>,
     pull: bool,
+    disable_pinning: bool,
     payloads_dir: &Path,
 ) -> BundleResult<Vec<SavedImage>> {
     if pull && has_skopeo() {
-        save_images_skopeo(images, platform, payloads_dir)
+        save_images_skopeo(images, platform, disable_pinning, payloads_dir)
     } else {
-        save_images_docker(images, platform, pull, payloads_dir)
+        save_images_docker(images, platform, pull, disable_pinning, payloads_dir)
     }
 }
 
@@ -463,7 +478,13 @@ pub fn pack_docker_compose(cmd: &super::PackDockerComposeCmd) -> BundleResult<()
     let saved_images = if !cmd.disable_image_bundling {
         let images = extract_compose_images(&cmd.compose_file)?;
         if !images.is_empty() {
-            save_images(&images, cmd.platform.as_deref(), cmd.pull, &payloads_dir)?
+            save_images(
+                &images,
+                cmd.platform.as_deref(),
+                cmd.pull,
+                cmd.disable_pinning,
+                &payloads_dir,
+            )?
         } else {
             Vec::new()
         }
