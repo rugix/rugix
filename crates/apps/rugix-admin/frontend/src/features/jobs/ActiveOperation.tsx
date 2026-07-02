@@ -3,7 +3,7 @@ import type { jobs } from "../../generated";
 import { Surface } from "../../shared/components/Surface";
 import { ProgressMeter } from "../../shared/components/ProgressMeter";
 import { formatBytes } from "../../shared/lib/format";
-import { uploadProgress } from "../../shared/lib/jobEvents";
+import { jobProgress, progressLabel } from "../../shared/lib/jobEvents";
 import { JobStatusBadge } from "../../shared/status/JobStatusBadge";
 import { buttonClass } from "../../shared/styles";
 import type { JobLog } from "../../types";
@@ -19,7 +19,7 @@ export function ActiveOperation({
   log?: JobLog;
   onOpen: () => void;
 }) {
-  const uploadPercent = uploadProgress(log);
+  const progressPercent = jobProgress(log);
   const latestLine = log?.lines.at(-1);
 
   return (
@@ -33,7 +33,7 @@ export function ActiveOperation({
           </div>
           <div className="mt-1 truncate font-mono text-xs text-foreground-muted">{latestLine ?? jobId}</div>
         </div>
-        <ProgressMeter percent={uploadPercent} fallback={log?.uploadedBytes ? `${formatBytes(Number(log.uploadedBytes))} uploaded` : undefined} />
+        <ProgressMeter label={progressLabel(log)} percent={progressPercent} fallback={log?.uploadedBytes ? `${formatBytes(Number(log.uploadedBytes))} uploaded` : undefined} />
         <button className={buttonClass} onClick={onOpen}>
           <Terminal size={16} /> View Log
         </button>

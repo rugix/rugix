@@ -12,10 +12,12 @@ export function SystemPage({
   system,
   onAction,
   onUpload,
+  onUrlInstall,
 }: {
   system?: api.SystemInfoResponse;
   onAction: (action: string) => void;
   onUpload: (file: File, options: InstallOptions) => void;
+  onUrlInstall: (url: string, options: InstallOptions) => void;
 }) {
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
@@ -28,7 +30,15 @@ export function SystemPage({
           </div>
         </Surface>
 
-        <UploadPanel title="System Update" fileLabel="Update bundle" icon={<Upload size={18} />} system onUpload={onUpload} />
+        <UploadPanel
+          title="System Update"
+          fileLabel="Update bundle"
+          icon={<Upload size={18} />}
+          system
+          allowUrl
+          onUpload={onUpload}
+          onUrlInstall={onUrlInstall}
+        />
       </div>
 
       <Surface title="System Actions">

@@ -15,9 +15,10 @@ export class ApiRequestError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const { headers, ...requestInit } = init ?? {};
   const response = await fetch(url, {
-    headers: { Accept: "application/json", ...(init?.headers ?? {}) },
-    ...init,
+    ...requestInit,
+    headers: { Accept: "application/json", ...(headers ?? {}) },
   });
   if (!response.ok) {
     let message = response.statusText;
@@ -67,6 +68,9 @@ export function subscribeJob(jobId: string, onEvent: (event: events.AdminEvent) 
   source.addEventListener("upload-progress", (message) =>
     onEvent(JSON.parse((message as MessageEvent).data) as events.AdminEvent),
   );
+  source.addEventListener("install-progress", (message) =>
+    onEvent(JSON.parse((message as MessageEvent).data) as events.AdminEvent),
+  );
   return source;
 }
 
@@ -77,6 +81,14 @@ export function uploadSystemUpdate(
   onProgress: (sent: number, total: number) => void,
 ) {
   return uploadBundle(`/api/system/update/${encodeURIComponent(jobId)}${installQuery(options)}`, "image", file, onProgress);
+}
+
+export function installSystemUpdateFromUrl(jobId: string, url: string, options: InstallOptions) {
+  return request<api.JobResponse>(`/api/system/update/${encodeURIComponent(jobId)}/url${installQuery(options)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  }).then((response) => response.job);
 }
 
 export function uploadAppBundle(

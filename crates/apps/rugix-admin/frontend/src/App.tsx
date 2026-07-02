@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AdminApi,
+  installSystemUpdateFromUrl,
   type InstallOptions,
   subscribeJob,
   uploadAppBundle,
@@ -151,6 +152,18 @@ export function App() {
     }
   }
 
+  async function installSystemUrl(url: string, options: InstallOptions) {
+    const jobId = createJobId();
+    setLogs((current) => ({ ...current, [jobId]: { lines: [] } }));
+    watchJob(jobId);
+    try {
+      const job = await installSystemUpdateFromUrl(jobId, url, options);
+      setLogs((current) => ({ ...current, [jobId]: { ...(current[jobId] ?? { lines: [] }), job } }));
+    } catch (error) {
+      setError(errorMessage(error));
+    }
+  }
+
   return (
     <div className="mesh-gradient min-h-screen bg-elevation-0 text-foreground">
       <TopNav
@@ -183,6 +196,7 @@ export function App() {
             system={system}
             onAction={(action) => void runSystemAction(action)}
             onUpload={(file, options) => void upload("system", file, options)}
+            onUrlInstall={(url, options) => void installSystemUrl(url, options)}
           />
         )}
         {tab === "components" && <ComponentsPage report={components} />}

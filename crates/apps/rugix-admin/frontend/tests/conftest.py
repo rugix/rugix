@@ -143,6 +143,18 @@ def wait_for_upload(fake_dir: Path, kind: str, timeout: float = 10) -> dict:
     raise AssertionError(f"timed out waiting for {kind} upload; saw {uploads!r}")
 
 
+def wait_for_command(fake_dir: Path, args: list[str], timeout: float = 10) -> dict:
+    deadline = time.monotonic() + timeout
+    commands: list[dict] = []
+    while time.monotonic() < deadline:
+        commands = read_jsonl(fake_dir / "commands.jsonl")
+        for command in reversed(commands):
+            if command.get("args") == args:
+                return command
+        time.sleep(0.1)
+    raise AssertionError(f"timed out waiting for command {args!r}; saw {commands!r}")
+
+
 def screenshot_path(request: pytest.FixtureRequest, name: str) -> Path:
     safe_name = (
         request.node.nodeid.replace("::", "--")

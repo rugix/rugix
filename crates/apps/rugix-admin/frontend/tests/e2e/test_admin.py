@@ -5,7 +5,7 @@ import hashlib
 import pytest
 from playwright.sync_api import Page, expect
 
-from conftest import AdminServer, read_jsonl, screenshot_path, wait_for_upload
+from conftest import AdminServer, read_jsonl, screenshot_path, wait_for_command, wait_for_upload
 
 
 pytestmark = pytest.mark.e2e
@@ -87,6 +87,47 @@ def test_uploads_system_update_through_browser_and_fake_rugix_ctrl(
     assert any(command["args"] == upload["args"] for command in commands)
 
     page.screenshot(path=str(screenshot_path(request, "system-upload")), full_page=True)
+
+
+def test_installs_system_update_from_url_through_browser_and_fake_rugix_ctrl(
+    page: Page,
+    admin_server: AdminServer,
+    request: pytest.FixtureRequest,
+) -> None:
+    page.goto(admin_server.frontend_url)
+    page.get_by_role("button", name="URL").click()
+    page.get_by_label("Update URL").fill("https://updates.example.com/update.rugixb")
+    page.get_by_text("Advanced").click()
+    page.get_by_label("Bundle hash").fill("url-system-hash")
+    page.get_by_label("Root certificate").fill("/etc/rugix/system-root.pem")
+    page.get_by_label("Reboot").select_option("deferred")
+    page.get_by_label("Skip verification").check()
+    page.get_by_label("Allow missing index").check()
+
+    page.get_by_role("button", name="Install").click()
+
+    expect(page.get_by_text("Install system update")).to_be_visible()
+    expect(page.get_by_text("succeeded").first).to_be_visible()
+    expect(page.get_by_text("100%").first).to_be_visible()
+    expect(page.get_by_text("fake system update install running")).to_be_visible()
+    expect(page.get_by_text('{"event":"UpdateProgress","progress":100.0}')).not_to_be_visible()
+
+    expected_args = [
+        "update",
+        "install",
+        "--insecure-skip-bundle-verification",
+        "--insecure-allow-missing-block-index",
+        "--root-cert",
+        "/etc/rugix/system-root.pem",
+        "--bundle-hash",
+        "url-system-hash",
+        "--reboot",
+        "deferred",
+        "https://updates.example.com/update.rugixb",
+    ]
+    wait_for_command(admin_server.fake_dir, expected_args)
+
+    page.screenshot(path=str(screenshot_path(request, "system-url")), full_page=True)
 
 
 def test_failed_app_upload_returns_job_instead_of_network_error(

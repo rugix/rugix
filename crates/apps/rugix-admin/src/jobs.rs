@@ -133,6 +133,17 @@ impl JobManager {
         .await;
     }
 
+    pub(crate) async fn emit_install_progress(&self, job_id: &str, progress: f64) {
+        self.push_event(
+            job_id,
+            events::AdminEvent::InstallProgress(events::InstallProgressEvent::new(
+                job_id.to_owned(),
+                progress,
+            )),
+        )
+        .await;
+    }
+
     async fn update_job(&self, job_id: &str, update: impl FnOnce(&mut jobs::Job)) {
         let event = {
             let mut inner = self.inner.write().await;

@@ -108,6 +108,13 @@ def main() -> int:
         write_json(app_info(args[2]))
         return 0
 
+    if is_url_update_command(args):
+        print("fake system update download started")
+        write_json({"event": "UpdateProgress", "progress": 12.4})
+        print("fake system update install running")
+        write_json({"event": "UpdateProgress", "progress": 100.0})
+        return 0
+
     if is_upload_command(args):
         early_exit = state / "early-exit-next-upload"
         if early_exit.exists():
@@ -176,6 +183,10 @@ def app_info(name: str) -> dict:
         "state": {"state": "active", "generation": active_generation},
         "generations": generations,
     }
+
+
+def is_url_update_command(args: list[str]) -> bool:
+    return bool(args and args[0:2] == ["update", "install"] and args[-1].startswith(("http://", "https://")))
 
 
 def is_upload_command(args: list[str]) -> bool:

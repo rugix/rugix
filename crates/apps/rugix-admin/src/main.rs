@@ -70,6 +70,10 @@ async fn main() {
             "/api/system/update/:job_id",
             post(handlers::upload_system_update),
         )
+        .route(
+            "/api/system/update/:job_id/url",
+            post(handlers::install_system_update_from_url),
+        )
         .route("/api/system/actions/:action", post(handlers::system_action))
         .route("/api/apps", get(handlers::list_apps))
         .route(

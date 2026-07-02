@@ -9,6 +9,8 @@ variant AdminEvent {
     JobOutput: JobOutputEvent,
     /// The upload phase changed.
     UploadProgress: UploadProgressEvent,
+    /// The installation phase changed.
+    InstallProgress: InstallProgressEvent,
 }
 
 /// Event emitted when a job changes.
@@ -33,4 +35,12 @@ record UploadProgressEvent {
     job_id: string,
     /// Number of uploaded bytes written to the child process.
     bytes: u64,
+}
+
+/// Event emitted while a system update is being installed.
+record InstallProgressEvent {
+    /// Stable job id.
+    job_id: string,
+    /// Installation progress percentage.
+    progress: f64,
 }

@@ -1569,7 +1569,8 @@ fn install_update_bundle<R: BundleSource>(
             .load_hooks("update-install")
             .whatever("unable to load `update-install` hooks")?;
 
-        let mut last_progress = 0.0;
+        let mut last_hook_progress = 0.0;
+        let mut last_output_progress = 0.0;
         move |source: &R| {
             let Some(bytes_total) = source.bytes_total() else {
                 return;
@@ -1583,7 +1584,7 @@ fn install_update_bundle<R: BundleSource>(
                 update_state.bytes_read = bytes_read.raw;
                 update_state.bytes_total = bytes_total.raw;
             }
-            if current_progress - last_progress > 0.9 {
+            if current_progress - last_hook_progress > 0.9 {
                 let hook_vars = vars! {
                     RUGIX_UPDATE_PROGRESS = format!("{current_progress:.2}")
                 };
@@ -1594,9 +1595,9 @@ fn install_update_bundle<R: BundleSource>(
                 ) {
                     warn!("error running 'update-install/progress' hooks: {error:?}");
                 }
-                last_progress = current_progress;
+                last_hook_progress = current_progress;
             }
-            if current_progress - last_progress > 0.4 && rugix_cli::stdout_is_piped() {
+            if current_progress - last_output_progress > 0.4 && rugix_cli::stdout_is_piped() {
                 let mut stdout = std::io::stdout();
                 stdout
                     .write_all(
@@ -1607,6 +1608,7 @@ fn install_update_bundle<R: BundleSource>(
                     )
                     .ok();
                 stdout.write_all(b"\n").ok();
+                last_output_progress = current_progress;
             }
         }
     };

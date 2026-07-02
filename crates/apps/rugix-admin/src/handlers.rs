@@ -65,18 +65,7 @@ pub(crate) async fn upload_system_update(
     Query(query): Query<SystemInstallQuery>,
     multipart: Multipart,
 ) -> ApiResult<Json<api::JobResponse>> {
-    let mut args = vec!["update".to_owned(), "install".to_owned()];
-    apply_install_options(&mut args, &query.common());
-    if let Some(reboot) = query.reboot {
-        args.extend(["--reboot".to_owned(), reboot]);
-    }
-    if let Some(boot_group) = query.boot_group {
-        args.extend(["--boot-group".to_owned(), boot_group]);
-    }
-    if query.keep_overlay.unwrap_or(false) {
-        args.push("--keep-overlay".to_owned());
-    }
-    args.push("-".to_owned());
+    let args = system_update_args(query, "-".to_owned());
 
     state
         .jobs
@@ -89,6 +78,34 @@ pub(crate) async fn upload_system_update(
         .await?;
     stream_upload_job(state.jobs.clone(), job_id.clone(), args, multipart, "image").await;
     Ok(Json(api::JobResponse::new(state.jobs.get(&job_id).await?)))
+}
+
+pub(crate) async fn install_system_update_from_url(
+    State(state): State<ServerState>,
+    Path(job_id): Path<String>,
+    Query(query): Query<SystemInstallQuery>,
+    Json(request): Json<SystemUpdateUrlRequest>,
+) -> ApiResult<Json<api::JobResponse>> {
+    let url = request.url.trim();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(ApiError::bad_request(
+            "invalid-url",
+            "system update URL must start with http:// or https://",
+        ));
+    }
+
+    let args = system_update_args(query, url.to_owned());
+    let job = state
+        .jobs
+        .create(
+            Some(job_id.clone()),
+            "Install system update".to_owned(),
+            "system-update".to_owned(),
+            None,
+        )
+        .await?;
+    spawn_command_job(state.jobs.clone(), job_id, args);
+    Ok(Json(api::JobResponse::new(job)))
 }
 
 pub(crate) async fn system_action(
@@ -323,6 +340,12 @@ pub(crate) struct SystemInstallQuery {
     keep_overlay: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SystemUpdateUrlRequest {
+    url: String,
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AppInstallQuery {
@@ -373,11 +396,28 @@ fn apply_install_options(args: &mut Vec<String>, query: &InstallQuery) {
     }
 }
 
+fn system_update_args(query: SystemInstallQuery, bundle: String) -> Vec<String> {
+    let mut args = vec!["update".to_owned(), "install".to_owned()];
+    apply_install_options(&mut args, &query.common());
+    if let Some(reboot) = query.reboot {
+        args.extend(["--reboot".to_owned(), reboot]);
+    }
+    if let Some(boot_group) = query.boot_group {
+        args.extend(["--boot-group".to_owned(), boot_group]);
+    }
+    if query.keep_overlay.unwrap_or(false) {
+        args.push("--keep-overlay".to_owned());
+    }
+    args.push(bundle);
+    args
+}
+
 fn sse_event(event: events::AdminEvent) -> Event {
     let event_name = match &event {
         events::AdminEvent::JobChanged(_) => "job-changed",
         events::AdminEvent::JobOutput(_) => "job-output",
         events::AdminEvent::UploadProgress(_) => "upload-progress",
+        events::AdminEvent::InstallProgress(_) => "install-progress",
     };
     Event::default()
         .event(event_name)

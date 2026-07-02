@@ -390,6 +390,12 @@ where
         match lines.next_line().await {
             Ok(Some(line)) => {
                 debug!(%job_id, %stream, line = %line, "rugix-ctrl output");
+                if stream == "stdout" {
+                    if let Some(progress) = parse_update_progress(&line) {
+                        jobs.emit_install_progress(&job_id, progress).await;
+                        continue;
+                    }
+                }
                 jobs.emit_output(&job_id, stream, line).await;
             }
             Ok(None) => break,
@@ -399,6 +405,15 @@ where
             }
         }
     }
+}
+
+fn parse_update_progress(line: &str) -> Option<f64> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("event").and_then(Value::as_str) != Some("UpdateProgress") {
+        return None;
+    }
+    let progress = value.get("progress").and_then(Value::as_f64)?;
+    progress.is_finite().then(|| progress.clamp(0.0, 100.0))
 }
 
 async fn drain_upload_after_failure(job_id: &str, multipart: &mut Multipart) {
