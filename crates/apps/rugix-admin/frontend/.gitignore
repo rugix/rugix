@@ -1,7 +1,0 @@
-__pycache__/
-test-results/
-tests/.cache/
-tests/.pytest_cache/
-tests/.tmp/
-tests/test-results/
-tests/.venv/

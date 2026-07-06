@@ -15,7 +15,6 @@
         inherit (self.packages.${final.stdenv.hostPlatform.system})
           rugix-ctrl
           rugix-bundler
-          rugix-admin
           rugix-util
           ;
       };
@@ -60,7 +59,6 @@
         packages = {
           rugix-ctrl = wrapWithXdelta (buildRugixPackage "rugix-ctrl");
           rugix-bundler = wrapWithXdelta (buildRugixPackage "rugix-bundler");
-          rugix-admin = buildRugixPackage "rugix-admin";
           rugix-util = buildRugixPackage "rugix-util";
           default = self.packages.${system}.rugix-ctrl;
         };

@@ -12,7 +12,6 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="${PROJECT_DIR}/build/binaries"
-RUGIX_ADMIN_FRONTEND_DIST="${PROJECT_DIR}/crates/apps/rugix-admin/frontend/dist"
 
 CROSS_VERSION="0.2.5"
 CARGO_CYCLONEDX_VERSION="0.5.7"
@@ -47,24 +46,6 @@ ensure_cargo_cyclonedx() {
     mv "${tmp_dir}"/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx "${CARGO_CYCLONEDX_BIN}"
     rm -rf "${tmp_dir}"
     echo "==> cargo-cyclonedx ${CARGO_CYCLONEDX_VERSION} installed to ${CARGO_CYCLONEDX_BIN}"
-}
-
-ensure_rugix_admin_frontend() {
-    if [ -f "${RUGIX_ADMIN_FRONTEND_DIST}/index.html" ]; then
-        return
-    fi
-    cat >&2 <<EOF
-error: Rugix Admin frontend distribution is missing.
-
-Build it before packaging binaries:
-
-    cd crates/apps/rugix-admin/frontend
-    pnpm install --frozen-lockfile
-    pnpm run build
-
-CI should provide this directory through the rugix-admin frontend artifact.
-EOF
-    exit 1
 }
 
 build_target() {
@@ -121,7 +102,6 @@ main() {
 
     ensure_cross
     ensure_cargo_cyclonedx
-    ensure_rugix_admin_frontend
     mkdir -p "${OUTPUT_DIR}"
 
     for target in "$@"; do

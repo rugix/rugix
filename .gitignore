@@ -3,10 +3,6 @@
 /target
 /playground
 /build
-/crates/apps/rugix-admin/frontend/dist
-/crates/apps/rugix-admin/frontend/node_modules
-/crates/apps/rugix-admin/frontend/src/generated
-/crates/apps/rugix-admin/frontend/tsconfig.tsbuildinfo
 
 .devenv*
 devenv.local.nix

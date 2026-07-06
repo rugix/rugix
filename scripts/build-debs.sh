@@ -65,7 +65,6 @@ compute_version() {
 description_for() {
     case "$1" in
         rugix-ctrl)    echo "Rugix system management tool" ;;
-        rugix-admin)   echo "Rugix admin API server" ;;
         rugix-bundler) echo "Rugix bundle creation tool" ;;
         rugix-util)    echo "Rugix system utility" ;;
         rugix-bakery)  echo "Rugix image builder" ;;

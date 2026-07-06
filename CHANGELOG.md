@@ -12,11 +12,6 @@ Rugix Ctrl:
 - Add component compatibility metadata discovery and `rugix-ctrl components` inspection commands for checking installed system, local, runtime, app, and synthetic host components.
 - Check component compatibility before installing system updates, installing apps, or removing apps. Pass `--skip-compatibility-check` to bypass these checks.
 
-Rugix Admin:
-
-- Rework the admin interface as a Vite, React, and Tailwind SPA with Sidex-generated API/event types, Rugix Apps support, streamed installations, embedded frontend assets, and CI frontend artifact injection for one-binary Linux builds.
-- Add a Components tab showing the current component compatibility report, including scanned roots, loaded components, capabilities, and consistency problems.
-
 Rugix Bundler:
 
 - Rework Docker Compose image bundling to copy images with Skopeo, infer Compose `build:` entries, default local builds to Podman, and rewrite packaged Compose files to Rugix-owned bundle-local image tags. `--disable-pinning` now keeps the original Compose image references while still bundling the images.
