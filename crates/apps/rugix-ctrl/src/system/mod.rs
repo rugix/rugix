@@ -4,7 +4,6 @@ use boot_groups::BootGroupIdx;
 use boot_groups::BootGroups;
 use config::load_system_config;
 use partitions::ConfigPartition;
-use reportify::whatever;
 use reportify::Report;
 use reportify::ResultExt;
 use root::find_system_device;
@@ -29,7 +28,7 @@ pub mod root;
 pub mod slots;
 
 reportify::new_whatever_type! {
-    SystemError
+    pub SystemError
 }
 
 pub type SystemResult<T> = Result<T, Report<SystemError>>;
@@ -170,7 +169,7 @@ impl System {
 
     pub fn require_config_partition(&self) -> SystemResult<&ConfigPartition> {
         self.config_partition()
-            .ok_or_else(|| whatever("config partition is required"))
+            .ok_or_else(|| Report::whatever("config partition is required"))
     }
 
     pub fn commit(&self) -> SystemResult<()> {

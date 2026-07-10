@@ -62,7 +62,7 @@ fn resolve_partition(
         }
         BlockDevice::new(device)
             .whatever("partition is not a block device")
-            .with_info(|_| format!("device: {device:?}"))?
+            .field_debug("device", device)?
     } else {
         let partition = match config.partition {
             Some(partition) => partition,

@@ -102,7 +102,7 @@ pub fn grub_envblk_encode(values: &HashMap<String, String>) -> Result<String, In
 }
 
 reportify::new_whatever_type! {
-    GrubEnvError
+    pub GrubEnvError
 }
 
 pub fn write_with_hash(

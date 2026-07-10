@@ -380,7 +380,7 @@ impl CustomDriver {
         ParentEnv
             .run(cmd)
             .whatever("custom data partition driver script failed")
-            .with_info(|_| format!("phase: {kind}"))?;
+            .field("phase", kind)?;
         Ok(())
     }
 }

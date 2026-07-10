@@ -10,7 +10,7 @@ use xscript::run;
 use xscript::Run;
 
 reportify::new_whatever_type! {
-    MountError
+    pub MountError
 }
 
 pub fn is_mount_point<P: AsRef<Path>>(path: P) -> bool {
@@ -48,8 +48,8 @@ impl Mounted {
         // which is not the case for `nix::mount::mount`.
         run!(["mount", dev, dst])
             .whatever("unable to mount filesystem")
-            .with_info(|_| format!("dev: {dev:?}"))
-            .with_info(|_| format!("dst: {dst:?}"))?;
+            .field_debug("dev", dev)
+            .field_debug("dst", dst)?;
         Ok(Mounted { path: dst.into() })
     }
 
@@ -74,9 +74,9 @@ impl Mounted {
             None as Option<&OsStr>,
         )
         .whatever("unable to mount filesystem")
-        .with_info(|_| format!("src: {src:?}"))
-        .with_info(|_| format!("dst: {dst:?}"))
-        .with_info(|_| format!("fstype: {fstype}"))?;
+        .field_debug("src", src)
+        .field_debug("dst", dst)
+        .field("fstype", fstype)?;
         Ok(Mounted { path: dst.into() })
     }
 
@@ -92,8 +92,8 @@ impl Mounted {
             None as Option<&OsStr>,
         )
         .whatever("unable to bind mount")
-        .with_info(|_| format!("src: {src:?}"))
-        .with_info(|_| format!("dst: {dst:?}"))?;
+        .field_debug("src", src)
+        .field_debug("dst", dst)?;
         Ok(Mounted { path: dst.into() })
     }
 
@@ -112,8 +112,8 @@ impl Mounted {
             None as Option<&OsStr>,
         )
         .whatever("unable to bind mount")
-        .with_info(|_| format!("src: {src:?}"))
-        .with_info(|_| format!("dst: {dst:?}"))?;
+        .field_debug("src", src)
+        .field_debug("dst", dst)?;
         Ok(Mounted { path: dst.into() })
     }
 }

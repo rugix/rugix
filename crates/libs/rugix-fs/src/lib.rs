@@ -30,7 +30,7 @@ compile_error!("only Unix-like systems are supported");
 
 new_whatever_type! {
     /// Error carrying out a filesystem operation.
-    FsError
+    pub FsError
 }
 
 /// Type alias for the result of filesystem APIs.
@@ -356,13 +356,13 @@ impl Copier {
             check_canceled();
             let entry = entry
                 .whatever("unable to walk directory")
-                .with_info(|_| format!("dir: {src_dir:?}"))?;
+                .field_debug("dir", src_dir)?;
             let tail = entry
                 .path()
                 .strip_prefix(src_dir)
                 .whatever("unable to strip path prefix from source path")
-                .with_info(|_| format!("path: {:?}", entry.path()))
-                .with_info(|_| format!("src: {src_dir:?}"))?;
+                .field_debug("path", entry.path())
+                .field_debug("src", src_dir)?;
             let dst = dst_dir.join(tail);
             if let Some(parent) = dst.parent() {
                 create_dir_recursive(parent)?;

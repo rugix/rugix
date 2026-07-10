@@ -548,7 +548,7 @@ fn run_deferred_data_wipe(root: &SystemRoot, system_config: &SystemConfig) -> Sy
 fn mount_essential_filesystems() -> SystemResult<()> {
     if !is_mount_point("/proc") {
         if let Err(error) = run!(["/usr/bin/env", "mount", "-t", "proc", "proc", "/proc"]) {
-            let error = error.whatever::<SystemError, _>("error mounting /proc");
+            let error = error.whatever::<SystemError>("error mounting /proc");
             warn!(error = ?error, "error mounting /proc");
         }
     } else {
@@ -563,7 +563,7 @@ fn mount_essential_filesystems() -> SystemResult<()> {
     }
     if !is_mount_point("/run") {
         if let Err(error) = run!(["/usr/bin/env", "mount", "-t", "tmpfs", "tmp", "/run"]) {
-            let error = error.whatever::<SystemError, _>("error mounting /run");
+            let error = error.whatever::<SystemError>("error mounting /run");
             warn!(error = ?error, "error mounting /run");
         }
     } else {
@@ -626,8 +626,8 @@ fn setup_root_overlay(
                         reportify::whatever!(
                             "unable to setup system overlay mounts with in-memory fallback"
                         )
-                        .with_info(format!("configured overlay error: {error:?}"))
-                        .with_info(format!("fallback overlay error: {fallback_error:?}"))
+                        .field_debug("configured overlay error", &error)
+                        .field_debug("fallback overlay error", &fallback_error)
                     },
                 )
             }

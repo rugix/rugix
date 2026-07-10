@@ -6,7 +6,7 @@ pub mod systemd;
 use reportify::Report;
 
 reportify::new_whatever_type! {
-    AppsError
+    pub AppsError
 }
 
 pub type AppsResult<T> = Result<T, Report<AppsError>>;

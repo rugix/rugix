@@ -2,10 +2,10 @@
 
 reportify::new_whatever_type! {
     /// Error loading hooks.
-    HooksLoadError
+    pub HooksLoadError
 }
 
 reportify::new_whatever_type! {
     /// Error running hooks.
-    HooksRunError
+    pub HooksRunError
 }

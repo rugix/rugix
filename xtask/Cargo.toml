@@ -8,8 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-anyhow = "1.0.71"
 clap = { version = "4.3.10", features = ["derive"] }
+reportify.workspace = true
 xscript = "0.2.0"
 
 [lints]

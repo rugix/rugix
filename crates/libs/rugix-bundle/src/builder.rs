@@ -178,7 +178,7 @@ fn load_bundle_components(path: &Path) -> BundleResult<Option<format::BundleComp
         Err(error) => {
             return Err(error
                 .whatever("unable to inspect bundle components directory")
-                .with_info(format!("path: {root:?}")));
+                .field_debug("path", &root));
         }
     };
     if metadata.file_type().is_symlink() {
@@ -203,16 +203,16 @@ fn collect_bundle_component_files(
 ) -> BundleResult<()> {
     let entries = std::fs::read_dir(path)
         .whatever("unable to read bundle components directory")
-        .with_info(|_| format!("path: {path:?}"))?;
+        .field_debug("path", path)?;
     for entry in entries {
         let entry = entry
             .whatever("unable to read bundle components directory entry")
-            .with_info(|_| format!("path: {path:?}"))?;
+            .field_debug("path", path)?;
         let path = entry.path();
         let file_type = entry
             .file_type()
             .whatever("unable to inspect bundle component path")
-            .with_info(|_| format!("path: {path:?}"))?;
+            .field_debug("path", &path)?;
         if file_type.is_symlink() {
             bail!("bundle component path must not be a symlink: {path:?}");
         }
@@ -230,7 +230,7 @@ fn collect_bundle_component_files(
         let relative_path = normalize_bundle_component_path(root, &path)?;
         let data = std::fs::read(&path)
             .whatever("unable to read bundle component file")
-            .with_info(|_| format!("path: {path:?}"))?;
+            .field_debug("path", &path)?;
         *total_size += data.len() as u64 + relative_path.len() as u64;
         if *total_size > COMPONENTS_SIZE_LIMIT {
             bail!(

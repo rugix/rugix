@@ -19,7 +19,7 @@ use xscript::run;
 use xscript::Run;
 
 reportify::new_whatever_type! {
-    FsError
+    pub FsError
 }
 
 /// Atomically write `data` to `path` using a write-fsync-rename pattern.

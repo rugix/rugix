@@ -51,7 +51,7 @@ xscript = { version = "0.4.0", features = ["tokio"] }
 
 # Colocated but not Rugix-specific crates.
 byte-calc = { path = "crates/libs/byte-calc", features = ["serde", "bytes"] }
-reportify = { path = "crates/libs/reportify" }
+reportify = "0.2.1"
 
 # Rugix-specific crates.
 rugix-bundle = { path = "crates/libs/rugix-bundle" }

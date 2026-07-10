@@ -48,7 +48,7 @@ pub mod rauc;
 pub mod systemd_boot;
 
 reportify::new_whatever_type! {
-    BootFlowError
+    pub BootFlowError
 }
 
 pub type BootFlowResult<T> = Result<T, Report<BootFlowError>>;

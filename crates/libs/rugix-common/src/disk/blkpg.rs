@@ -21,7 +21,7 @@ use crate::disk::NumBlocks;
 use crate::utils::units::NumBytes;
 
 reportify::new_whatever_type! {
-    BlkpgError
+    pub BlkpgError
 }
 
 pub fn update_kernel_partitions(

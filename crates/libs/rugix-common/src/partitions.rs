@@ -13,7 +13,7 @@ pub fn is_dir(path: impl AsRef<Path>) -> bool {
 }
 
 reportify::new_whatever_type! {
-    DiskError
+    pub DiskError
 }
 
 /// Returns the disk id of the provided image or device.
@@ -21,7 +21,7 @@ pub fn get_disk_id(path: impl AsRef<Path>) -> Result<String, Report<DiskError>> 
     fn _disk_id(path: &Path) -> Result<String, Report<DiskError>> {
         let disk_id = read_str!(["sfdisk", "--disk-id", path])
             .whatever("unable to retrieve disk id")
-            .with_info(|_| format!("disk: {path:?}"))?;
+            .field_debug("disk", path)?;
         if let Some(dos_id) = disk_id.strip_prefix("0x") {
             Ok(dos_id.to_owned())
         } else {

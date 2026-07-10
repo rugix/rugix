@@ -28,7 +28,7 @@ pub mod stream_hasher;
 pub mod utils;
 
 reportify::new_whatever_type! {
-    BootPatchError
+    pub BootPatchError
 }
 
 pub fn grub_patch_env(

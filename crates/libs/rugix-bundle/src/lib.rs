@@ -39,7 +39,7 @@ pub const BUNDLE_MAGIC: &[u8] = &[
 
 reportify::new_whatever_type! {
     /// Error reading or writing a bundle.
-    BundleError
+    pub BundleError
 }
 
 /// Result with [`BundleError`] as error type.

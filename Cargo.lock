@@ -325,6 +325,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "console"
+version = "0.16.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fe5f465a4f6fee88fad41b85d990f84c835335e85b5d9e6e63e0d06d28cba7c"
+dependencies = [
+ "encode_unicode",
+ "libc",
+ "unicode-width",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1286,11 +1298,13 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "reportify"
-version = "0.1.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe793860b26c1811ddacfe579f6f07e600287562bc7c585c288e79bc53a9c1a3"
 dependencies = [
  "backtrace",
- "console",
- "thiserror 2.0.18",
+ "console 0.16.4",
+ "tracing",
  "tracing-error",
 ]
 
@@ -1313,7 +1327,7 @@ name = "rugix-bundle"
 version = "0.1.0"
 dependencies = [
  "byte-calc",
- "console",
+ "console 0.15.11",
  "flume",
  "hashbrown 0.15.5",
  "libc",
@@ -1374,7 +1388,7 @@ dependencies = [
 name = "rugix-cli"
 version = "0.1.0"
 dependencies = [
- "console",
+ "console 0.15.11",
  "ctrlc",
  "flume",
  "rugix-tasks",
@@ -1392,7 +1406,7 @@ dependencies = [
  "byte-calc",
  "bytes",
  "clap",
- "console",
+ "console 0.15.11",
  "crc32fast",
  "digest",
  "hex",
@@ -1763,7 +1777,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f995acb80b95805f6cadb348fbc65ebccfe30a9772b21186cffa080515cc659"
 dependencies = [
  "clap",
- "console",
+ "console 0.15.11",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2790,8 +2804,8 @@ dependencies = [
 name = "xtask"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
+ "reportify",
  "xscript 0.2.0",
 ]
 

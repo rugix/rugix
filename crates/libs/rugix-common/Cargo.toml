@@ -33,7 +33,7 @@ xscript.workspace = true
 
 reportify.workspace = true
 si-crypto-hashes.workspace = true
-jiff = "0.2.14"
+jiff.workspace = true
 byte-calc.workspace = true
 
 [dev-dependencies]

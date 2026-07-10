@@ -234,7 +234,7 @@ impl InstalledComponents {
             let Some(generation) = manager
                 .current_generation(&app)
                 .whatever("unable to read app state")
-                .with_info(|_| format!("app: {app}"))?
+                .field_display("app", &app)?
             else {
                 continue;
             };
@@ -363,7 +363,7 @@ pub fn write_bundle_components(
     remove_component_root(root)?;
     fs::create_dir_all(root)
         .whatever("unable to create component root")
-        .with_info(|_| format!("path: {root:?}"))?;
+        .field_debug("path", root)?;
 
     let mut files = bundle_components.files.iter().collect::<Vec<_>>();
     files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -372,11 +372,11 @@ pub fn write_bundle_components(
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .whatever("unable to create component file parent directory")
-                .with_info(|_| format!("path: {parent:?}"))?;
+                .field_debug("path", parent)?;
         }
         fs::write(&path, &file.data.raw)
             .whatever("unable to write component file")
-            .with_info(|_| format!("path: {path:?}"))?;
+            .field_debug("path", &path)?;
     }
     Ok(())
 }
@@ -547,13 +547,13 @@ fn prepare_component_root_parent(root: &Path) -> SystemResult<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             fs::create_dir_all(parent)
                 .whatever("unable to create component root parent")
-                .with_info(|_| format!("path: {parent:?}"))?;
+                .field_debug("path", parent)?;
             return Ok(());
         }
         Err(error) => {
             return Err(error
                 .whatever("unable to inspect component root parent")
-                .with_info(format!("path: {parent:?}")));
+                .field_debug("path", parent));
         }
     };
 
@@ -567,11 +567,11 @@ fn prepare_component_root_parent(root: &Path) -> SystemResult<()> {
         fs::remove_dir_all(parent)
     }
     .whatever("unable to remove existing component root parent")
-    .with_info(|_| format!("path: {parent:?}"))?;
+    .field_debug("path", parent)?;
 
     fs::create_dir_all(parent)
         .whatever("unable to create component root parent")
-        .with_info(|_| format!("path: {parent:?}"))
+        .field_debug("path", parent)
 }
 
 fn remove_component_root(root: &Path) -> SystemResult<()> {
@@ -581,7 +581,7 @@ fn remove_component_root(root: &Path) -> SystemResult<()> {
         Err(error) => {
             return Err(error
                 .whatever("unable to inspect component root")
-                .with_info(format!("path: {root:?}")));
+                .field_debug("path", root));
         }
     };
     if metadata.is_dir() && !metadata.file_type().is_symlink() {
@@ -590,7 +590,7 @@ fn remove_component_root(root: &Path) -> SystemResult<()> {
         fs::remove_file(root)
     }
     .whatever("unable to remove existing component root")
-    .with_info(|_| format!("path: {root:?}"))
+    .field_debug("path", root)
 }
 
 fn component_output(component: &Component) -> ComponentOutput {
@@ -634,27 +634,25 @@ fn collect_component_files(root: &Path, component_files: &mut Vec<PathBuf>) -> S
         Err(error) => {
             return Err(error
                 .whatever("unable to inspect component root")
-                .with_info(format!("path: {root:?}")));
+                .field_debug("path", root));
         }
     };
     if !metadata.is_dir() {
-        return Err(
-            whatever!("component root is not a directory").with_info(format!("path: {root:?}"))
-        );
+        return Err(whatever!("component root is not a directory").field_debug("path", root));
     }
 
     let entries = fs::read_dir(root)
         .whatever("unable to read component directory")
-        .with_info(|_| format!("path: {root:?}"))?;
+        .field_debug("path", root)?;
     for entry in entries {
         let entry = entry
             .whatever("unable to read component directory entry")
-            .with_info(|_| format!("path: {root:?}"))?;
+            .field_debug("path", root)?;
         let path = entry.path();
         let file_type = entry
             .file_type()
             .whatever("unable to inspect component directory entry")
-            .with_info(|_| format!("path: {path:?}"))?;
+            .field_debug("path", &path)?;
         if file_type.is_dir() {
             collect_component_files(&path, component_files)?;
         } else if is_component_file(&path) && is_regular_file(&path)? {
@@ -668,7 +666,7 @@ fn collect_component_files(root: &Path, component_files: &mut Vec<PathBuf>) -> S
 fn read_component_file(path: &Path) -> SystemResult<Component> {
     let content = fs::read_to_string(path)
         .whatever("unable to read component file")
-        .with_info(|_| format!("path: {path:?}"))?;
+        .field_debug("path", path)?;
     parse_component_content(path, &content)
 }
 
@@ -678,9 +676,8 @@ fn read_bundle_component_file(
     validate_bundle_component_path(&file.path)?;
     let content = str::from_utf8(&file.data.raw)
         .whatever("bundle component file is not UTF-8")
-        .with_info(|_| format!("path: {:?}", file.path))?;
-    parse_component_content(Path::new(&file.path), content)
-        .with_info(|_| format!("path: {:?}", file.path))
+        .field_debug("path", &file.path)?;
+    parse_component_content(Path::new(&file.path), content).field_debug("path", &file.path)
 }
 
 fn parse_component_content(path: &Path, content: &str) -> SystemResult<Component> {
@@ -691,11 +688,11 @@ fn parse_component_content(path: &Path, content: &str) -> SystemResult<Component
     if extension.eq_ignore_ascii_case("json") {
         serde_json::from_str(content)
             .whatever("unable to parse JSON component file")
-            .with_info(|_| format!("path: {path:?}"))
+            .field_debug("path", path)
     } else {
         toml::from_str(content)
             .whatever("unable to parse TOML component file")
-            .with_info(|_| format!("path: {path:?}"))
+            .field_debug("path", path)
     }
 }
 
@@ -735,7 +732,7 @@ fn is_regular_file(path: &Path) -> SystemResult<bool> {
     fs::metadata(path)
         .map(|metadata| metadata.is_file())
         .whatever("unable to inspect component file")
-        .with_info(|_| format!("path: {path:?}"))
+        .field_debug("path", path)
 }
 
 #[cfg(test)]

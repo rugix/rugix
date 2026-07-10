@@ -106,7 +106,7 @@ fn set_rugix_state_flag(name: &str, value: Option<&str>) -> SystemResult<()> {
         value.unwrap_or_default(),
     )
     .whatever("unable to write state flag")
-    .with_info(|_| format!("name: {name}"))
+    .field("name", name.to_owned())
 }
 
 fn clear_rugix_state_flag(name: &str) -> SystemResult<()> {
@@ -115,10 +115,10 @@ fn clear_rugix_state_flag(name: &str) -> SystemResult<()> {
         io::ErrorKind::NotFound => Ok(()),
         _ => Err(error
             .whatever("unable to clear state flag")
-            .with_info(format!("name: {name}"))),
+            .field("name", name.to_owned())),
     })?;
     if path.exists() {
-        return Err(whatever!("unable to clear state flag").with_info(format!("name: {name}")));
+        return Err(whatever!("unable to clear state flag").field("name", name.to_owned()));
     }
     Ok(())
 }
@@ -870,7 +870,7 @@ impl<R> MaybeStreamHasher<R> {
             MaybeStreamHasher::Sha256 { hasher, expected } => {
                 let found = hasher.finalize();
                 if expected.as_slice() != found.as_slice() {
-                    return Err(whatever(indoc::formatdoc! {
+                    return Err(reportify::Report::whatever(indoc::formatdoc! {
                         r#"
                             **Image Hash Mismatch:**
                             Expected: {}

@@ -121,7 +121,7 @@ define_struct! {
 impl Decode for HashDigest {
     fn decode<S: BundleSource>(decoder: &mut Decoder<S>, atom: AtomHead) -> BundleResult<Self> {
         String::decode(decoder, atom)?
-            .parse()
+            .parse::<Self>()
             .whatever("invalid hash digest")
     }
 }
@@ -259,7 +259,7 @@ impl Encode for HashAlgorithm {
 impl Decode for HashAlgorithm {
     fn decode<S: BundleSource>(decoder: &mut Decoder<S>, atom: AtomHead) -> BundleResult<Self> {
         String::decode(decoder, atom)?
-            .parse()
+            .parse::<Self>()
             .whatever("unknown hash algorithm")
     }
 }
@@ -294,7 +294,7 @@ impl Encode for ChunkerAlgorithm {
 impl Decode for ChunkerAlgorithm {
     fn decode<S: BundleSource>(decoder: &mut Decoder<S>, atom: AtomHead) -> BundleResult<Self> {
         String::decode(decoder, atom)?
-            .parse()
+            .parse::<Self>()
             .whatever("unknown chunker algorithm")
     }
 }
@@ -308,7 +308,7 @@ impl Encode for CompressionFormat {
 impl Decode for CompressionFormat {
     fn decode<S: BundleSource>(decoder: &mut Decoder<S>, atom: AtomHead) -> BundleResult<Self> {
         String::decode(decoder, atom)?
-            .parse()
+            .parse::<Self>()
             .whatever("unknown compression format")
     }
 }

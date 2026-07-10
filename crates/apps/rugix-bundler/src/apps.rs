@@ -195,7 +195,7 @@ fn stage_component_path(
 ) -> BundleResult<()> {
     let metadata = fs::symlink_metadata(path)
         .whatever("unable to inspect component path")
-        .with_info(|_| format!("path: {}", path.display()))?;
+        .field("path", path)?;
     if metadata.file_type().is_symlink() {
         bail!("component path must not be a symlink: {}", path.display());
     }
@@ -224,7 +224,7 @@ fn stage_component_dir(
 ) -> BundleResult<()> {
     let mut entries = fs::read_dir(dir)
         .whatever("unable to read component directory")
-        .with_info(|_| format!("path: {}", dir.display()))?
+        .field("path", dir)?
         .collect::<Result<Vec<_>, _>>()
         .whatever("unable to read component directory entry")?;
     entries.sort_by_key(|entry| entry.file_name());
@@ -234,7 +234,7 @@ fn stage_component_dir(
         let file_type = entry
             .file_type()
             .whatever("unable to inspect component directory entry")
-            .with_info(|_| format!("path: {}", path.display()))?;
+            .field("path", path.as_path())?;
         if file_type.is_symlink() {
             bail!("component path must not be a symlink: {}", path.display());
         }
@@ -272,7 +272,8 @@ fn stage_component_file(
     }
     fs::copy(src, &dst)
         .whatever("unable to copy component file")
-        .with_info(|_| format!("source: {}, destination: {}", src.display(), dst.display()))?;
+        .field("source", src)
+        .field("destination", dst.as_path())?;
     Ok(())
 }
 
