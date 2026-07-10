@@ -42,17 +42,15 @@ tracing = "0.1"
 xz2 = "0.1.7"
 
 # In-house crates.
-si-observability = { version = "0.1.2", features = ["clap4"] }
+anyver = "0.1.0"
+byte-calc = { version = "0.2.0", features = ["serde", "bytes"] }
+reportify = "0.2.2"
 si-crypto-hashes = { version = "0.1.2", features = ["serde", "legacy"] }
+si-observability = { version = "0.1.2", features = ["clap4"] }
 sidex = { git = "https://github.com/silitics/sidex.git" }
 sidex-build-rs = { git = "https://github.com/silitics/sidex.git" }
 sidex-serde = { git = "https://github.com/silitics/sidex.git" }
 xscript = { version = "0.4.0", features = ["tokio"] }
-
-# Colocated but not Rugix-specific crates.
-anyver = "0.1.0"
-byte-calc = { path = "crates/libs/byte-calc", features = ["serde", "bytes"] }
-reportify = "0.2.1"
 
 # Rugix-specific crates.
 rugix-bundle = { path = "crates/libs/rugix-bundle" }

@@ -159,8 +159,18 @@ impl CasyncChunker {
     /// Check whether the input stream shall be broken at the current position.
     #[inline(always)]
     fn shall_break(&self) -> bool {
-        debug_assert!(self.chunk_size >= self.options.min_chunk_size.unwrap_usize());
-        self.chunk_size >= self.options.max_chunk_size.unwrap_usize()
+        debug_assert!(
+            self.chunk_size
+                >= self
+                    .options
+                    .min_chunk_size
+                    .expect_usize("chunk sizes are small config values, always fitting into usize")
+        );
+        self.chunk_size
+            >= self
+                .options
+                .max_chunk_size
+                .expect_usize("chunk sizes are small config values, always fitting into usize")
             || self.hash % self.discriminator == self.discriminator - 1
     }
 }
@@ -176,7 +186,11 @@ impl Chunker for CasyncChunker {
         let mut offset = 0;
         let mut remaining = bytes.len();
         // 1. Skip the first `chunk_size_min - WINDOW_SIZE` bytes.
-        let skip = self.options.min_chunk_size.unwrap_usize() - WINDOW_SIZE;
+        let skip = self
+            .options
+            .min_chunk_size
+            .expect_usize("chunk sizes are small config values, always fitting into usize")
+            - WINDOW_SIZE;
         if self.chunk_size < skip {
             let may_skip = skip - self.chunk_size;
             if may_skip > remaining {

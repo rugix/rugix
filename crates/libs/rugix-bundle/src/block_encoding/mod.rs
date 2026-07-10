@@ -68,8 +68,11 @@ pub fn encode_payload_file(
                                 if buffer.is_empty() {
                                     panic!("payload file has been truncated");
                                 };
-                                let chunk =
-                                    &buffer[..remaining.min(buffer.byte_len()).unwrap_usize()];
+                                let chunk = &buffer[..remaining
+                                    .min(buffer.byte_len())
+                                    .expect_usize(
+                                        "clamped to an in-memory buffer's own length, always fits into usize",
+                                    )];
                                 compressor.process(chunk, &mut block_data).unwrap();
                                 remaining -= chunk.byte_len();
                                 let consumed = chunk.len();

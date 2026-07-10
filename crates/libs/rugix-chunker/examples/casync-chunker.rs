@@ -35,7 +35,10 @@ pub fn main() {
             .or_else(|| if buffer.is_empty() { Some(0) } else { None });
         chunk_hasher.update(&buffer[..offset.unwrap_or(buffer.len())]);
         let consume = if let Some(offset) = offset {
-            chunk_size += NumBytes::from_usize(offset);
+            chunk_size += NumBytes::expect_from_usize(
+                offset,
+                "offset into an in-memory buffer always fits into u64",
+            );
             let chunk_digest = std::mem::replace(&mut chunk_hasher, args.algorithm.hasher())
                 .finalize::<Arc<[u8]>>();
             println!("Offset: {chunk_offset:#}, Size: {chunk_size:#}, Hash: {chunk_digest}");

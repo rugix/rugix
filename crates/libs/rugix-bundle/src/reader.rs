@@ -179,12 +179,16 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
     }
 
     fn read(&mut self, buf: &mut [u8]) -> BundleResult<usize> {
-        let max_chunk = buf.byte_len().min(self.remaining_data).unwrap_usize();
+        let max_chunk = buf
+            .byte_len()
+            .min(self.remaining_data)
+            .expect_usize("clamped to an in-memory buffer's own length, always fits into usize");
         if max_chunk == 0 {
             return Ok(0);
         }
         let read = self.reader.source.read(&mut buf[..max_chunk])?;
-        self.remaining_data -= NumBytes::from_usize(read);
+        self.remaining_data -=
+            NumBytes::expect_from_usize(read, "bytes actually read always fit into u64");
         Ok(read)
     }
 
@@ -258,7 +262,11 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
                             stored_block_size = stored_block.size.raw,
                             "using stored block from provider"
                         );
-                        buffer.resize(stored_block.size.unwrap_usize(), 0);
+                        buffer.resize(
+                            usize::try_from(stored_block.size)
+                                .whatever("stored block size does not fit into usize")?,
+                            0,
+                        );
                         let mut source_file = std::fs::File::open(&stored_block.file)
                             .whatever("unable to open file")?;
                         source_file
@@ -351,7 +359,8 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
                 }
                 target.write(&buffer[..read])?;
                 payload_hasher.update(&buffer[..read]);
-                bytes_written += NumBytes::from_usize(read);
+                bytes_written +=
+                    NumBytes::expect_from_usize(read, "bytes actually read always fit into u64");
                 progress(&self.reader.source);
             }
         }
@@ -407,7 +416,10 @@ impl PayloadTarget for File {
             .whatever("unable to get writing position")?;
         self.seek(std::io::SeekFrom::Start(offset.raw))
             .whatever("unable to seek")?;
-        buffer.resize(size.unwrap_usize(), 0);
+        buffer.resize(
+            usize::try_from(size).whatever("block size does not fit into usize")?,
+            0,
+        );
         self.read_exact(buffer).whatever("unable to read")?;
         self.seek(std::io::SeekFrom::Start(current_position))
             .whatever("unable to seek")?;
