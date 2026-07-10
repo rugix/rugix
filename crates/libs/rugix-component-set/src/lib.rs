@@ -27,9 +27,9 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::fmt;
 
-pub use rugix_versioning::ParseError as VersionParseError;
-pub use rugix_versioning::Version;
-pub use rugix_versioning::VersionReq;
+pub use anyver::ParseError as VersionParseError;
+pub use anyver::Version;
+pub use anyver::VersionReq;
 use serde::Deserialize;
 use serde::Serialize;
 

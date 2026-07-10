@@ -9,7 +9,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-rugix-versioning = { path = "../rugix-versioning" }
+anyver.workspace = true
 serde.workspace = true
 
 [lints]

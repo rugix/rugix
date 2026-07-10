@@ -101,6 +101,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
+name = "anyver"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa1914af47474b8866e3e00cc571c0a224ed05421286b8b70f7f15912bcc3f1a"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "ariadne"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1433,7 +1442,7 @@ dependencies = [
 name = "rugix-component-set"
 version = "0.1.0"
 dependencies = [
- "rugix-versioning",
+ "anyver",
  "serde",
 ]
 
@@ -1555,13 +1564,6 @@ dependencies = [
 [[package]]
 name = "rugix-version"
 version = "0.1.0"
-
-[[package]]
-name = "rugix-versioning"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "rustc-demangle"
