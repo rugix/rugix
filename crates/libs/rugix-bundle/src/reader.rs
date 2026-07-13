@@ -204,19 +204,33 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
         if let Some(block_encoding) = self.header.block_encoding {
             let mut block_index_raw = block_encoding.block_hashes.raw;
             if let Some(format) = block_encoding.compression {
-                block_index_raw = uncompress_bytes(format, &block_index_raw);
+                block_index_raw = uncompress_bytes(format, &block_index_raw)?;
             }
-            let block_sizes = block_encoding.block_sizes.map(|block_sizes| {
+            let block_sizes = if let Some(block_sizes) = block_encoding.block_sizes {
                 let mut block_sizes = block_sizes.raw;
                 if let Some(format) = block_encoding.compression {
-                    block_sizes = uncompress_bytes(format, &block_sizes);
+                    block_sizes = uncompress_bytes(format, &block_sizes)?;
                 }
+                validate_block_metadata_lengths(
+                    block_index_raw.len(),
+                    block_encoding.hash_algorithm.hash_size(),
+                    Some(block_sizes.len()),
+                )?;
                 let mut decoded_sizes = Vec::new();
                 for chunk in block_sizes.chunks_exact(4) {
-                    decoded_sizes.push(u32::from_be_bytes(chunk.try_into().unwrap()))
+                    decoded_sizes.push(u32::from_be_bytes(
+                        chunk.try_into().expect("validated four-byte chunk"),
+                    ))
                 }
-                decoded_sizes
-            });
+                Some(decoded_sizes)
+            } else {
+                validate_block_metadata_lengths(
+                    block_index_raw.len(),
+                    block_encoding.hash_algorithm.hash_size(),
+                    None,
+                )?;
+                None
+            };
             let fixed_block_size = match block_encoding.chunker {
                 rugix_chunker::ChunkerAlgorithm::Casync { .. } => None,
                 rugix_chunker::ChunkerAlgorithm::Fixed { block_size_kib } => {
@@ -245,12 +259,14 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
                 if is_fresh || !block_encoding.deduplicated {
                     // We need to read the block from the source.
                     // Determine the size of the block in the encoding.
-                    let block_size = (block_sizes
-                        .as_ref()
-                        .map(|sizes| sizes[next_size_idx])
-                        .or(fixed_block_size)
-                        .unwrap() as u64)
-                        .min(self.remaining_data.raw);
+                    let declared_block_size = if let Some(sizes) = &block_sizes {
+                        *sizes
+                            .get(next_size_idx)
+                            .ok_or_else(|| whatever!("block-size metadata has too few entries"))?
+                    } else {
+                        fixed_block_size.expect("fixed block size validated above")
+                    };
+                    let block_size = (declared_block_size as u64).min(self.remaining_data.raw);
                     next_size_idx += 1;
                     let mut block_available = false;
                     if let Some(stored_block) = provider.and_then(|p| p.query(block_hash)) {
@@ -292,12 +308,16 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
                         }
                     }
                     if !block_available {
-                        buffer.resize(block_size.try_into().unwrap(), 0);
+                        buffer.resize(
+                            usize::try_from(block_size)
+                                .whatever("encoded block size does not fit into usize")?,
+                            0,
+                        );
                         self.reader.source.hint_next_chunk(block_size.into());
                         self.reader.source.read_exact(&mut buffer)?;
                         self.remaining_data -= buffer.byte_len();
                         if let Some(format) = block_encoding.compression {
-                            buffer = uncompress_bytes(format, &buffer);
+                            buffer = uncompress_bytes(format, &buffer)?;
                         }
                         trace!(
                             block_idx = idx,
@@ -363,6 +383,12 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
                     NumBytes::expect_from_usize(read, "bytes actually read always fit into u64");
                 progress(&self.reader.source);
             }
+        }
+        if self.remaining_data != NumBytes::ZERO {
+            bail!(
+                "payload contains {} trailing encoded bytes",
+                self.remaining_data.raw
+            );
         }
         let payload_hash = payload_hasher.finalize();
         if payload_hash.raw() != self.reader.header.payload_index[self.idx].file_hash.raw {
@@ -545,14 +571,32 @@ pub fn expect_value(source: &mut dyn BundleSource, tag: Tag) -> BundleResult<Num
     }
 }
 
-fn uncompress_bytes(format: CompressionFormat, bytes: &[u8]) -> Vec<u8> {
+fn validate_block_metadata_lengths(
+    block_hash_bytes: usize,
+    hash_size: usize,
+    block_size_bytes: Option<usize>,
+) -> BundleResult<()> {
+    if block_hash_bytes % hash_size != 0 {
+        bail!("block-hash metadata length is not a multiple of the hash size");
+    }
+    if block_size_bytes.is_some_and(|length| length % 4 != 0) {
+        bail!("block-size metadata length is not a multiple of four");
+    }
+    Ok(())
+}
+
+fn uncompress_bytes(format: CompressionFormat, bytes: &[u8]) -> BundleResult<Vec<u8>> {
     match format {
         CompressionFormat::Xz => {
             let mut decoder = rugix_compression::XzDecoder::new();
             let mut output = Vec::new();
-            decoder.process(bytes, &mut output).unwrap();
-            decoder.finalize(&mut output).unwrap();
-            output
+            decoder
+                .process(bytes, &mut output)
+                .whatever("unable to decompress bundle metadata")?;
+            decoder
+                .finalize(&mut output)
+                .whatever("unable to finalize bundle metadata decompression")?;
+            Ok(output)
         }
     }
 }
@@ -570,6 +614,8 @@ mod tests {
     use crate::source::from_slice;
 
     use super::BundleReader;
+    use super::uncompress_bytes;
+    use super::validate_block_metadata_lengths;
 
     fn empty_header() -> format::BundleHeader {
         format::BundleHeader {
@@ -636,5 +682,17 @@ mod tests {
         };
 
         assert!(reader.next_payload().is_err());
+    }
+
+    #[test]
+    fn malformed_compressed_metadata_returns_an_error() {
+        assert!(uncompress_bytes(rugix_compression::CompressionFormat::Xz, b"not xz").is_err());
+    }
+
+    #[test]
+    fn block_metadata_lengths_must_be_exact() {
+        assert!(validate_block_metadata_lengths(64, 32, Some(8)).is_ok());
+        assert!(validate_block_metadata_lengths(63, 32, Some(8)).is_err());
+        assert!(validate_block_metadata_lengths(64, 32, Some(7)).is_err());
     }
 }
