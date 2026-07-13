@@ -407,20 +407,26 @@ fn main() -> BundleResult<()> {
             },
         },
         Cmd::Delta(cmd) => {
-            let old_dir = tempfile::TempDir::new().unwrap();
+            let old_dir =
+                tempfile::TempDir::new().whatever("unable to create old-bundle workspace")?;
             info!(directory = ?old_dir.path(), "unpacking old update bundle");
             unpack(&cmd.old, old_dir.path())?;
-            let new_dir = tempfile::TempDir::new().unwrap();
+            let new_dir =
+                tempfile::TempDir::new().whatever("unable to create new-bundle workspace")?;
             info!(directory = ?new_dir.path(), "unpacking new update bundle");
             unpack(&cmd.new, new_dir.path())?;
+            let old_manifest_path = old_dir.path().join("rugix-bundle.toml");
             let old_manifest = toml::from_str::<BundleManifest>(
-                &std::fs::read_to_string(old_dir.path().join("rugix-bundle.toml")).unwrap(),
+                &std::fs::read_to_string(&old_manifest_path)
+                    .whatever("unable to read old bundle manifest")?,
             )
-            .unwrap();
+            .whatever("unable to parse old bundle manifest")?;
+            let new_manifest_path = new_dir.path().join("rugix-bundle.toml");
             let mut new_manifest = toml::from_str::<BundleManifest>(
-                &std::fs::read_to_string(new_dir.path().join("rugix-bundle.toml")).unwrap(),
+                &std::fs::read_to_string(&new_manifest_path)
+                    .whatever("unable to read new bundle manifest")?,
             )
-            .unwrap();
+            .whatever("unable to parse new bundle manifest")?;
             let explicit_slots = !cmd.slots.is_empty();
             let slots = if explicit_slots {
                 cmd.slots.as_slice()
@@ -441,7 +447,7 @@ fn main() -> BundleResult<()> {
                         })
                 else {
                     if explicit_slots {
-                        panic!("unable to find slot {new_slot} in new bundle");
+                        bail!("unable to find slot {new_slot:?} in new bundle");
                     }
                     continue;
                 };
@@ -455,7 +461,7 @@ fn main() -> BundleResult<()> {
                         })
                 else {
                     if explicit_slots {
-                        panic!("unable to find slot {old_slot} in old bundle");
+                        bail!("unable to find slot {old_slot:?} in old bundle");
                     }
                     continue;
                 };
@@ -472,12 +478,12 @@ fn main() -> BundleResult<()> {
                 let hash_algorithm = new_manifest
                     .hash_algorithm
                     .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256);
-                let old_hash = hash_file(hash_algorithm, &old_path);
-                let new_hash = hash_file(hash_algorithm, &new_path);
+                let old_hash = hash_file(hash_algorithm, &old_path)?;
+                let new_hash = hash_file(hash_algorithm, &new_path)?;
                 let patch_path = new_dir.path().join("payloads").join(&new_filename_patched);
                 xdelta_compress(&old_path, &new_path, &patch_path)?;
-                std::fs::remove_file(&new_path).unwrap();
-                assert!(patch_path.exists());
+                std::fs::remove_file(&new_path)
+                    .whatever("unable to replace new payload with its delta")?;
                 let new_payload = &mut new_manifest.payloads[new_payload_idx];
                 new_payload.filename = new_filename_patched;
                 new_payload.block_encoding = Some(
@@ -530,12 +536,12 @@ fn main() -> BundleResult<()> {
                 let hash_algorithm = new_manifest
                     .hash_algorithm
                     .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256);
-                let old_hash = hash_file(hash_algorithm, &old_path);
-                let new_hash = hash_file(hash_algorithm, &new_path);
+                let old_hash = hash_file(hash_algorithm, &old_path)?;
+                let new_hash = hash_file(hash_algorithm, &new_path)?;
                 let patch_path = new_dir.path().join("payloads").join(&new_filename_patched);
                 xdelta_compress(&old_path, &new_path, &patch_path)?;
-                std::fs::remove_file(&new_path).unwrap();
-                assert!(patch_path.exists());
+                std::fs::remove_file(&new_path)
+                    .whatever("unable to replace new app payload with its delta")?;
                 let new_payload = &mut new_manifest.payloads[new_payload_idx];
                 new_payload.filename = new_filename_patched;
                 new_payload.block_encoding = Some(
@@ -557,10 +563,10 @@ fn main() -> BundleResult<()> {
                 ));
             }
             std::fs::write(
-                new_dir.path().join("rugix-bundle.toml"),
-                toml::to_string(&new_manifest).unwrap(),
+                new_manifest_path,
+                toml::to_string(&new_manifest).whatever("unable to serialize delta manifest")?,
             )
-            .unwrap();
+            .whatever("unable to write delta manifest")?;
             rugix_bundle::builder::pack(new_dir.path(), &cmd.out)?;
         }
         Cmd::Simulator(cmd) => {
@@ -813,17 +819,19 @@ mod tests {
 }
 
 #[tracing::instrument(level = Level::DEBUG)]
-pub fn hash_file(algorithm: HashAlgorithm, path: &Path) -> HashDigest {
-    let mut file = std::fs::File::open(&path).unwrap();
+pub fn hash_file(algorithm: HashAlgorithm, path: &Path) -> BundleResult<HashDigest> {
+    let mut file = std::fs::File::open(path).whatever("unable to open payload for hashing")?;
     let mut buffer = vec![0u8; 8096];
     let mut hasher = algorithm.hasher();
     loop {
-        let chunk_size = file.read(&mut buffer).unwrap();
+        let chunk_size = file
+            .read(&mut buffer)
+            .whatever("unable to read payload for hashing")?;
         if chunk_size > 0 {
             hasher.update(&buffer[..chunk_size]);
         } else {
             break;
         }
     }
-    hasher.finalize()
+    Ok(hasher.finalize())
 }
