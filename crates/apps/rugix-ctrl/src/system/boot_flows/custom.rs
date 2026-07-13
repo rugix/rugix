@@ -182,3 +182,135 @@ pub struct OutputGroup {
 /// Output type for operations that do not provide any output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputNone {}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    use indexmap::IndexMap;
+
+    use super::CustomBootFlow;
+    use crate::config::system::BootGroupConfig;
+    use crate::config::system::FileSlotConfig;
+    use crate::config::system::SlotConfig;
+    use crate::system::boot_groups::BootGroups;
+    use crate::system::slots::SystemSlots;
+    use crate::system::System;
+
+    fn test_system(active_name: &str, controller: &Path) -> System {
+        let slot_config = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                (
+                    format!("system-{name}"),
+                    SlotConfig::File(FileSlotConfig {
+                        path: format!("/tmp/system-{name}"),
+                        immutable: Some(true),
+                    }),
+                )
+            })
+            .collect::<IndexMap<_, _>>();
+        let slots = SystemSlots::from_config(None, Some(&slot_config)).unwrap();
+        let group_config = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    BootGroupConfig {
+                        slots: [("system".to_owned(), format!("system-{name}"))]
+                            .into_iter()
+                            .collect(),
+                    },
+                )
+            })
+            .collect::<IndexMap<_, _>>();
+        let groups = BootGroups::from_config(&slots, Some(&group_config)).unwrap();
+        let active = groups.find_by_name(active_name).unwrap().0;
+        System::for_boot_flow_test(
+            slots,
+            groups,
+            Some(active),
+            Box::new(CustomBootFlow {
+                controller: controller.to_owned(),
+            }),
+        )
+    }
+
+    #[test]
+    fn controller_protocol_covers_stable_trial_commit_rollback_and_invalid_states() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let state = tempdir.path().join("state");
+        let log = tempdir.path().join("operations");
+        let controller = tempdir.path().join("controller");
+        std::fs::write(&state, "a").unwrap();
+        std::fs::write(
+            &controller,
+            format!(
+                r#"#!/bin/sh
+set -eu
+operation="$1"
+shift
+printf '%s %s\n' "$operation" "$*" >> '{}'
+case "$operation" in
+  capabilities) printf '{{"userspaceFailureRecovery":true}}' ;;
+  get_default|get_active) printf '{{"group":"%s"}}' "$(cat '{}')" ;;
+  set_try_next|commit) printf '%s' "$1" > '{}'; printf '{{}}' ;;
+  pre_install|post_install|mark_good|mark_bad|reboot) printf '{{}}' ;;
+  *) exit 2 ;;
+esac
+"#,
+                log.display(),
+                state.display(),
+                state.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&controller, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let system_a = test_system("a", &controller);
+        let a = system_a.boot_entries().find_by_name("a").unwrap().0;
+        let b = system_a.boot_entries().find_by_name("b").unwrap().0;
+        assert_eq!(system_a.boot_flow().get_default(&system_a).unwrap(), a);
+        assert_eq!(
+            system_a
+                .boot_flow()
+                .capabilities()
+                .userspace_failure_recovery,
+            Some(true)
+        );
+
+        system_a.boot_flow().set_try_next(&system_a, b).unwrap();
+        assert_eq!(system_a.boot_flow().get_default(&system_a).unwrap(), b);
+        system_a.boot_flow().commit(&system_a).unwrap();
+        assert_eq!(system_a.boot_flow().get_default(&system_a).unwrap(), a);
+
+        let system_b = test_system("b", &controller);
+        let b = system_b.boot_entries().find_by_name("b").unwrap().0;
+        system_b.boot_flow().set_try_next(&system_b, b).unwrap();
+        system_b.boot_flow().commit(&system_b).unwrap();
+        assert_eq!(system_b.boot_flow().get_default(&system_b).unwrap(), b);
+        system_b.boot_flow().pre_install(&system_b, b).unwrap();
+        system_b.boot_flow().post_install(&system_b, b).unwrap();
+        system_b.boot_flow().mark_good(&system_b, b).unwrap();
+        let a = system_b.boot_entries().find_by_name("a").unwrap().0;
+        system_b.boot_flow().mark_bad(&system_b, a).unwrap();
+        system_b.boot_flow().reboot(&system_b).unwrap();
+
+        std::fs::write(&state, "missing").unwrap();
+        assert!(system_b.boot_flow().get_default(&system_b).is_err());
+        let operations = std::fs::read_to_string(log).unwrap();
+        for operation in [
+            "set_try_next b",
+            "commit a",
+            "commit b",
+            "pre_install b",
+            "post_install b",
+            "mark_good b",
+            "mark_bad a",
+            "reboot ",
+        ] {
+            assert!(operations.contains(operation), "missing {operation:?}");
+        }
+    }
+}

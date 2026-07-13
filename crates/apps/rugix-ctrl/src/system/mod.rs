@@ -189,6 +189,25 @@ impl System {
             .reboot(self)
             .whatever("unable to reboot system")
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_boot_flow_test(
+        slots: SystemSlots,
+        boot_entries: BootGroups,
+        active_boot_entry: Option<BootGroupIdx>,
+        boot_flow: Box<dyn BootFlow>,
+    ) -> Self {
+        Self {
+            config: SystemConfig::default(),
+            device: None,
+            root: None,
+            slots,
+            boot_entries,
+            active_boot_entry,
+            boot_flow,
+            config_partition: None,
+        }
+    }
 }
 
 fn require_active_boot_entry(active: Option<BootGroupIdx>) -> SystemResult<BootGroupIdx> {
