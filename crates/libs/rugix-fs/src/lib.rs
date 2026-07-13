@@ -39,6 +39,10 @@ pub type FsResult<T> = Result<T, Report<FsError>>;
 /// Slice of zeros.
 static ZEROS: &[u8] = &[0; 4096];
 
+#[cfg(all(test, target_os = "linux"))]
+static FORCE_USERSPACE_COPY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// File opened in a blocking context.
 #[derive(Debug)]
 pub struct File {
@@ -452,6 +456,10 @@ impl Copier {
             lseek64(dst_raw_fd, dst_offset, Whence::SeekSet)
                 .whatever_with(|_| format!("unable to seek to {dst_offset}"))?;
             let mut remaining = i64::try_from(size.raw).expect("size must not overflow `i64`");
+            #[cfg(test)]
+            let mut use_copy_file_range =
+                !FORCE_USERSPACE_COPY.load(std::sync::atomic::Ordering::Relaxed);
+            #[cfg(not(test))]
             let mut use_copy_file_range = true;
             while remaining > 0 {
                 // If there is no hole, then `next_hole` points to the end of the file as
@@ -603,6 +611,7 @@ impl Drop for TempDir {
 mod tests {
     use byte_calc::NumBytes;
 
+    use super::Copier;
     use super::File;
 
     #[test]
@@ -623,5 +632,38 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn userspace_copy_fallback_preserves_exact_source_and_destination_ranges() {
+        struct ResetFallback;
+        impl Drop for ResetFallback {
+            fn drop(&mut self) {
+                super::FORCE_USERSPACE_COPY.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let source_path = tempdir.path().join("source");
+        let destination_path = tempdir.path().join("destination");
+        std::fs::write(&source_path, b"0123456789").unwrap();
+        std::fs::write(&destination_path, b"abcdefghij").unwrap();
+        let mut source = File::open_read(&source_path).unwrap();
+        let mut destination = File::open_write(&destination_path).unwrap();
+
+        super::FORCE_USERSPACE_COPY.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _reset = ResetFallback;
+        Copier::new()
+            .copy_file_range(
+                &mut source,
+                NumBytes::new(2),
+                &mut destination,
+                NumBytes::new(3),
+                NumBytes::new(4),
+            )
+            .unwrap();
+
+        assert_eq!(std::fs::read(destination_path).unwrap(), b"abc2345hij");
     }
 }
