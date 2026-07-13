@@ -2043,7 +2043,7 @@ impl<W: Write> Write for HashWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let written = self.writer.write(buf)?;
         self.hasher.update(&buf[..written]);
-        self.size += buf.len() as u64;
+        self.size += written as u64;
         Ok(written)
     }
 
@@ -2545,6 +2545,7 @@ mod tests {
 
     use super::clear_target_overlay_with;
     use super::preflight_system_deliveries;
+    use super::HashWriter;
     use super::PayloadDelivery;
     use super::SystemPayloadDestination;
 
@@ -2695,5 +2696,25 @@ mod tests {
             Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
         })
         .is_err());
+    }
+
+    #[test]
+    fn hash_writer_accounts_only_for_bytes_actually_written() {
+        struct ShortWriter;
+
+        impl std::io::Write for ShortWriter {
+            fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+                Ok(buffer.len().min(2))
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut writer = HashWriter::new(si_crypto_hashes::HashAlgorithm::Sha256, ShortWriter);
+        assert_eq!(std::io::Write::write(&mut writer, b"four").unwrap(), 2);
+        let (_, size) = writer.finalize();
+        assert_eq!(size, 2);
     }
 }
