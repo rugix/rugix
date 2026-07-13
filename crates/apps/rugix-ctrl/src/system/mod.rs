@@ -195,17 +195,6 @@ fn require_active_boot_entry(active: Option<BootGroupIdx>) -> SystemResult<BootG
     active.ok_or_else(|| Report::whatever("unable to determine the active boot group"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::require_active_boot_entry;
-
-    #[test]
-    fn requiring_an_unknown_active_boot_group_returns_an_error() {
-        let error = require_active_boot_entry(None).unwrap_err();
-        assert!(format!("{error:?}").contains("unable to determine the active boot group"));
-    }
-}
-
 /// Read `rugix.boot_group=<name>` from the kernel cmdline and resolve
 /// it to a boot group index.
 fn get_active_from_cmdline(boot_entries: &BootGroups) -> Option<BootGroupIdx> {
@@ -228,4 +217,15 @@ fn get_active_from_cmdline(boot_entries: &BootGroups) -> Option<BootGroupIdx> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_active_boot_entry;
+
+    #[test]
+    fn requiring_an_unknown_active_boot_group_returns_an_error() {
+        let error = require_active_boot_entry(None).unwrap_err();
+        assert!(format!("{error:?}").contains("unable to determine the active boot group"));
+    }
 }

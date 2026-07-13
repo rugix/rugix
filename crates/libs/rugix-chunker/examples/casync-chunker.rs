@@ -32,7 +32,7 @@ pub fn main() {
         let buffer = reader.fill_buf().unwrap();
         let offset = chunker
             .scan(buffer)
-            .or_else(|| if buffer.is_empty() { Some(0) } else { None });
+            .or(if buffer.is_empty() { Some(0) } else { None });
         chunk_hasher.update(&buffer[..offset.unwrap_or(buffer.len())]);
         let consume = if let Some(offset) = offset {
             chunk_size += NumBytes::expect_from_usize(

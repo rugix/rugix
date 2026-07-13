@@ -2312,6 +2312,10 @@ fn install_update_bundle<R: BundleSource>(
             continue;
         }
     }
+    #[allow(
+        clippy::drop_non_drop,
+        reason = "release the mutable borrow of emit_progress"
+    )]
     drop(progress);
     emit_progress(100.0);
 

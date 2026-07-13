@@ -24,8 +24,7 @@ jobs:
 
       - name: Clippy
         # Clippy is currently generating an ICE.
-        continue-on-error: true
-        run: cargo +nightly clippy --all-targets --all-features
+        run: cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Test
         run: cargo +nightly test --all-features

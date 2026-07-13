@@ -882,6 +882,13 @@ impl AppManager {
     }
 }
 
+/// Load an app manifest.
+fn load_manifest(gen_dir: &Path) -> AppsResult<AppManifest> {
+    let manifest_path = gen_dir.join("app.toml");
+    let content = fs::read_to_string(&manifest_path).whatever("unable to read app.toml")?;
+    toml::from_str(&content).whatever("unable to parse app.toml")
+}
+
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
@@ -990,11 +997,4 @@ mod tests {
             AppState::Error(_)
         ));
     }
-}
-
-/// Load an app manifest.
-fn load_manifest(gen_dir: &Path) -> AppsResult<AppManifest> {
-    let manifest_path = gen_dir.join("app.toml");
-    let content = fs::read_to_string(&manifest_path).whatever("unable to read app.toml")?;
-    toml::from_str(&content).whatever("unable to parse app.toml")
 }
