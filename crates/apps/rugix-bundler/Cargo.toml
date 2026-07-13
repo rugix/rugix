@@ -13,6 +13,7 @@ clap.workspace = true
 hex.workspace = true
 reportify.workspace = true
 rugix-bundle.workspace = true
+rugix-common.workspace = true
 si-crypto-hashes.workspace = true
 rugix-cli.workspace = true
 rugix-version.workspace = true

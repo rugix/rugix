@@ -38,6 +38,7 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
             .whatever("unable to read bundle manifest")?,
     )
     .whatever("unable to parse bundle manifest")?;
+    manifest::validate_manifest_paths(&manifest)?;
     let hash_algorithm = manifest
         .hash_algorithm
         .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256);

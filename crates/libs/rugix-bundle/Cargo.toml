@@ -24,6 +24,7 @@ hashbrown.workspace = true
 toml.workspace = true
 rugix-chunker.workspace = true
 rugix-compression.workspace = true
+rugix-common.workspace = true
 serde_json.workspace = true
 flume.workspace = true
 
