@@ -1671,11 +1671,7 @@ fn check_system_update_compatibility<S: BundleSource>(
     bundle_reader: &BundleReader<S>,
 ) -> SystemResult<()> {
     let Some(bundle_components) = bundle_reader.header().components.as_ref() else {
-        if requires_bundle_components(config) {
-            bail!(
-                "update bundle does not declare required component metadata; use --skip-compatibility-check to bypass the configured policy"
-            );
-        }
+        enforce_bundle_component_policy(config, false, "update")?;
         report_compatibility_skip(
             "system",
             "bundle component metadata is absent and not required by policy",
@@ -1702,11 +1698,7 @@ fn check_app_bundle_compatibility<S: BundleSource>(
     touched_apps: &[String],
 ) -> SystemResult<()> {
     let bundle_components = bundle_reader.header().components.as_ref();
-    if bundle_components.is_none() && requires_bundle_components(config) {
-        bail!(
-            "app bundle does not declare required component metadata; use --skip-compatibility-check to bypass the configured policy"
-        );
-    }
+    enforce_bundle_component_policy(config, bundle_components.is_some(), "app")?;
     if touched_apps.is_empty() {
         report_compatibility_skip("app", "bundle contains no app payloads");
         return Ok(());
@@ -1728,6 +1720,19 @@ fn requires_bundle_components(config: &Config) -> bool {
         .as_ref()
         .and_then(|config| config.require_bundle_components)
         .unwrap_or(false)
+}
+
+fn enforce_bundle_component_policy(
+    config: &Config,
+    components_present: bool,
+    bundle_kind: &str,
+) -> SystemResult<()> {
+    if !components_present && requires_bundle_components(config) {
+        bail!(
+            "{bundle_kind} bundle does not declare required component metadata; use --skip-compatibility-check to bypass the configured policy"
+        );
+    }
+    Ok(())
 }
 
 fn report_compatibility_skip(scope: &str, reason: &str) {
@@ -2959,6 +2964,7 @@ mod tests {
 
     use super::app_activation_outcome;
     use super::clear_target_overlay_with;
+    use super::enforce_bundle_component_policy;
     use super::preflight_system_deliveries;
     use super::prepare_system_update;
     use super::requires_bundle_components;
@@ -3361,6 +3367,10 @@ mod tests {
         let required: crate::config::config::Config =
             toml::from_str("[compatibility]\nrequireBundleComponents = true\n").unwrap();
         assert!(requires_bundle_components(&required));
+        assert!(enforce_bundle_component_policy(&default, false, "system").is_ok());
+        assert!(enforce_bundle_component_policy(&required, true, "system").is_ok());
+        assert!(enforce_bundle_component_policy(&required, false, "system").is_err());
+        assert!(enforce_bundle_component_policy(&required, false, "app").is_err());
 
         let event = crate::config::events::Event::CompatibilityCheckSkipped(
             crate::config::events::CompatibilityCheckSkippedEvent {
