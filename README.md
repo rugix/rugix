@@ -28,6 +28,7 @@ This repository contains Rugix Ctrl, a state-of-the-art update and state managem
 - **A/B Updates**: Atomic system updates with automatic rollback on failure.
 - **Delta Updates**: [Highly-efficient delta updates](https://rugix.org/blog/efficient-delta-updates) minimizing bandwidth.
 - **Signature Verification**: Cryptographic verification _before_ installing anything anywhere.
+- **Compatibility Checks**: Verifies system and application updates are compatible before installation.
 - **State Management**: Flexible state management inspired by container-based architectures.
 - **Application Updates**: Atomic deployment and rollback of [application workloads](https://rugix.org/docs/ctrl/application-updates/).
 - **Vendor-Agnostic**: Compatible with [various fleet management solutions](https://rugix.org/docs/ctrl/advanced/fleet-management) (avoids lock-in).
