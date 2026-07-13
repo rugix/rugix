@@ -1,6 +1,7 @@
 //! Definition of the command line interface (CLI).
 
 use std::collections::BTreeSet;
+use std::collections::HashSet;
 use std::fs::File;
 use std::fs::{self};
 use std::io::Read;
@@ -51,7 +52,9 @@ use crate::config::events::UpdateProgressEvent;
 use crate::config::load_ctrl_config;
 use crate::system::boot_groups::BootGroup;
 use crate::system::boot_groups::BootGroupIdx;
+use crate::system::slots::SlotIdx;
 use crate::system::slots::SlotKind;
+use crate::system::slots::SystemSlots;
 use crate::system::System;
 use crate::system::SystemResult;
 use clap::Parser;
@@ -1494,6 +1497,124 @@ fn app_bundle_components_owner(header: &format::BundleHeader) -> SystemResult<St
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SystemPayloadDestination {
+    Slot(SlotIdx),
+    Execute,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PayloadDelivery<'a> {
+    slot: Option<&'a str>,
+    execute: bool,
+    app_file: bool,
+    app_archive: bool,
+}
+
+fn preflight_system_payloads(
+    header: &format::BundleHeader,
+    slots: &SystemSlots,
+    boot_group: Option<&BootGroup>,
+) -> SystemResult<Vec<SystemPayloadDestination>> {
+    let deliveries = header
+        .payload_index
+        .iter()
+        .map(|entry| PayloadDelivery {
+            slot: entry
+                .type_slot
+                .as_ref()
+                .map(|delivery| delivery.slot.as_str()),
+            execute: entry.type_execute.is_some(),
+            app_file: entry.type_app_file.is_some(),
+            app_archive: entry.type_app_archive.is_some(),
+        })
+        .collect::<Vec<_>>();
+    preflight_system_deliveries(header.is_incremental, &deliveries, slots, boot_group)
+}
+
+fn preflight_system_deliveries(
+    is_incremental: bool,
+    deliveries: &[PayloadDelivery<'_>],
+    slots: &SystemSlots,
+    boot_group: Option<&BootGroup>,
+) -> SystemResult<Vec<SystemPayloadDestination>> {
+    if !is_incremental && boot_group.is_none() {
+        bail!("full system updates require the specification of a boot group");
+    }
+
+    let mut destinations = Vec::with_capacity(deliveries.len());
+    let mut targeted_slots = HashSet::new();
+    let mut system_payloads = 0usize;
+
+    for (payload_idx, delivery) in deliveries.iter().enumerate() {
+        let delivery_type_count = [
+            delivery.slot.is_some(),
+            delivery.execute,
+            delivery.app_file,
+            delivery.app_archive,
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        if delivery_type_count != 1 {
+            bail!(
+                "bundle payload {payload_idx} must declare exactly one delivery type, found {delivery_type_count}"
+            );
+        }
+
+        if delivery.app_file || delivery.app_archive {
+            bail!(
+                "bundle payload {payload_idx} is an app payload and cannot be installed as a system update"
+            );
+        }
+
+        if let Some(slot_name) = delivery.slot {
+            let slot_idx = boot_group
+                .and_then(|group| group.get_slot(slot_name))
+                .or_else(|| slots.find_by_name(slot_name).map(|(idx, _)| idx))
+                .ok_or_else(|| {
+                    whatever!(
+                        "unknown destination slot {:?} for bundle payload {payload_idx}",
+                        slot_name
+                    )
+                })?;
+            let slot = &slots[slot_idx];
+            if !slot.is_available() {
+                bail!(
+                    "destination slot {:?} for bundle payload {payload_idx} is unavailable",
+                    slot.name()
+                );
+            }
+            if slot.active() {
+                bail!(
+                    "refusing to install bundle payload {payload_idx} to active slot {:?}",
+                    slot.name()
+                );
+            }
+            if !targeted_slots.insert(slot_idx) {
+                bail!(
+                    "multiple bundle payloads resolve to destination slot {:?}",
+                    slot.name()
+                );
+            }
+            system_payloads += 1;
+            destinations.push(SystemPayloadDestination::Slot(slot_idx));
+        } else if delivery.execute {
+            destinations.push(SystemPayloadDestination::Execute);
+        } else {
+            unreachable!("delivery type was validated above");
+        }
+    }
+
+    if destinations.is_empty() {
+        bail!("bundle does not contain any payloads applicable to a system update");
+    }
+    if !is_incremental && system_payloads == 0 {
+        bail!("full system update does not contain a system-slot payload");
+    }
+    Ok(destinations)
+}
+
 fn install_update_bundle<R: BundleSource>(
     system: &System,
     config: &Config,
@@ -1530,6 +1651,12 @@ fn install_update_bundle<R: BundleSource>(
         warn!("skipping system update compatibility check");
     }
 
+    let payload_destinations = preflight_system_payloads(
+        bundle_reader.header(),
+        system.slots(),
+        boot_group.map(|(_, group)| *group),
+    )?;
+
     let update_hooks = HooksLoader::default()
         .load_hooks("update-install")
         .whatever("unable to load `update-install` hooks")?;
@@ -1548,9 +1675,7 @@ fn install_update_bundle<R: BundleSource>(
     }
 
     if !bundle_reader.header().is_incremental {
-        let Some((entry_idx, _)) = boot_group else {
-            bail!("full system updates require the specification of a boot group");
-        };
+        let (entry_idx, _) = boot_group.expect("boot group validated during preflight");
         system
             .boot_flow()
             .pre_install(system, *entry_idx)
@@ -1616,248 +1741,242 @@ fn install_update_bundle<R: BundleSource>(
         .whatever("unable to read payload")?
     {
         let payload_entry = payload.entry();
-        if let Some(slot_type) = &payload_entry.type_slot {
-            let slot = boot_group
-                .and_then(|(_, entry)| entry.get_slot(&slot_type.slot))
-                .or_else(|| system.slots().find_by_name(&slot_type.slot).map(|e| e.0));
-            if let Some(slot) = slot {
-                let slot = &system.slots()[slot];
-                info!(
-                    "installing bundle payload {} to slot {}",
-                    payload.idx(),
-                    slot.name()
+        let destination = payload_destinations
+            .get(payload.idx())
+            .copied()
+            .ok_or_else(|| {
+                whatever!("payload {} is missing from the bundle index", payload.idx())
+            })?;
+        if let SystemPayloadDestination::Slot(slot) = destination {
+            let slot = &system.slots()[slot];
+            info!(
+                "installing bundle payload {} to slot {}",
+                payload.idx(),
+                slot.name()
+            );
+            payload_db::erase(slot.name())?;
+            let block_provider = if !options.insecure_allow_missing_block_index {
+                let block_encoding = payload.header().block_encoding.as_ref().ok_or_else(|| {
+                    whatever!(
+                        "payload {} does not have a block index, refusing to install",
+                        payload.idx()
+                    )
+                })?;
+                let mut provider = BlockProvider::new(
+                    block_encoding.chunker.clone(),
+                    block_encoding.hash_algorithm,
                 );
-                payload_db::erase(slot.name())?;
-                let block_provider = if !options.insecure_allow_missing_block_index {
-                    let block_encoding =
-                        payload.header().block_encoding.as_ref().ok_or_else(|| {
-                            whatever!(
-                                "payload {} does not have a block index, refusing to install",
-                                payload.idx()
-                            )
-                        })?;
-                    let mut provider = BlockProvider::new(
-                        block_encoding.chunker.clone(),
-                        block_encoding.hash_algorithm,
-                    );
-                    // Since we erased all the indices of the target slot, it
-                    // is fine to also add the target slot here.
-                    for (_, slot) in system.slots().iter() {
-                        match slot.kind() {
-                            SlotKind::Block(block_slot) => {
-                                let Some(device) = block_slot.device() else {
-                                    continue;
-                                };
-                                provider.add_slot(slot.name(), device.path().to_path_buf())?;
-                            }
-                            SlotKind::File { path } => {
-                                provider.add_slot(slot.name(), path.to_path_buf())?;
-                            }
-                            SlotKind::Custom { .. } => { /* nothing to do */ }
-                        }
-                    }
-                    Some(provider)
-                } else {
-                    None
-                };
-                // If the target is a file on the config partition, ensure
-                // it is writable for the duration of the payload write.
-                let _write_guard = if let SlotKind::File { path } = slot.kind() {
-                    system
-                        .config_partition()
-                        .filter(|cp| path.starts_with(cp.path()))
-                        .map(|cp| cp.acquire_write_guard())
-                        .transpose()
-                        .whatever("unable to make config partition writable")?
-                } else {
-                    None
-                };
-                let decoded_payload_info = if let Some(delta_encoding) =
-                    &payload_entry.delta_encoding
-                {
-                    let delta_encoding = delta_encoding.clone();
-                    if delta_encoding.inputs.len() != 1 {
-                        bail!("unsupported number of delta encoding inputs");
-                    }
-                    let input = &delta_encoding.inputs[0];
-                    let mut source = None;
-                    'slots: for (_, delta_slot) in system.slots().iter() {
-                        let Ok(Some(slot_state)) = payload_db::get_stored_state(delta_slot.name())
-                        else {
-                            continue;
-                        };
-                        for input_hash in &input.hashes {
-                            let Some(slot_hash) = slot_state.hashes.get(&input_hash.algorithm())
-                            else {
-                                trace!(slot_name = delta_slot.name(), algorithm = ?input_hash.algorithm(), "no hash found");
+                // Since we erased all the indices of the target slot, it
+                // is fine to also add the target slot here.
+                for (_, slot) in system.slots().iter() {
+                    match slot.kind() {
+                        SlotKind::Block(block_slot) => {
+                            let Some(device) = block_slot.device() else {
                                 continue;
                             };
-                            if slot_hash == input_hash {
-                                // We found the slot to use as a source.
-                                source = Some(delta_slot);
-                                trace!(slot_name = delta_slot.name(), "delta source found");
-                                break 'slots;
-                            } else {
-                                trace!(slot_name = delta_slot.name(), %slot_hash, %input_hash, "hash does not match");
-                            }
+                            provider.add_slot(slot.name(), device.path().to_path_buf())?;
+                        }
+                        SlotKind::File { path } => {
+                            provider.add_slot(slot.name(), path.to_path_buf())?;
+                        }
+                        SlotKind::Custom { .. } => { /* nothing to do */ }
+                    }
+                }
+                Some(provider)
+            } else {
+                None
+            };
+            // If the target is a file on the config partition, ensure
+            // it is writable for the duration of the payload write.
+            let _write_guard = if let SlotKind::File { path } = slot.kind() {
+                system
+                    .config_partition()
+                    .filter(|cp| path.starts_with(cp.path()))
+                    .map(|cp| cp.acquire_write_guard())
+                    .transpose()
+                    .whatever("unable to make config partition writable")?
+            } else {
+                None
+            };
+            let decoded_payload_info = if let Some(delta_encoding) = &payload_entry.delta_encoding {
+                let delta_encoding = delta_encoding.clone();
+                if delta_encoding.inputs.len() != 1 {
+                    bail!("unsupported number of delta encoding inputs");
+                }
+                let input = &delta_encoding.inputs[0];
+                let mut source = None;
+                'slots: for (_, delta_slot) in system.slots().iter() {
+                    let Ok(Some(slot_state)) = payload_db::get_stored_state(delta_slot.name())
+                    else {
+                        continue;
+                    };
+                    for input_hash in &input.hashes {
+                        let Some(slot_hash) = slot_state.hashes.get(&input_hash.algorithm()) else {
+                            trace!(slot_name = delta_slot.name(), algorithm = ?input_hash.algorithm(), "no hash found");
+                            continue;
+                        };
+                        if slot_hash == input_hash {
+                            // We found the slot to use as a source.
+                            source = Some(delta_slot);
+                            trace!(slot_name = delta_slot.name(), "delta source found");
+                            break 'slots;
+                        } else {
+                            trace!(slot_name = delta_slot.name(), %slot_hash, %input_hash, "hash does not match");
                         }
                     }
-                    let Some(source) = source else {
-                        bail!("no slot suitable delta source found");
-                    };
-                    // This is here so that we get an error when introducing additional formats.
-                    match delta_encoding.format {
-                        rugix_bundle::manifest::DeltaEncodingFormat::Xdelta => { /* do nothing */ }
+                }
+                let Some(source) = source else {
+                    bail!("no slot suitable delta source found");
+                };
+                // This is here so that we get an error when introducing additional formats.
+                match delta_encoding.format {
+                    rugix_bundle::manifest::DeltaEncodingFormat::Xdelta => { /* do nothing */ }
+                }
+                let source = match source.kind() {
+                    SlotKind::Block(_) => source.require_available_block()?.path().to_owned(),
+                    SlotKind::File { path } => path.to_owned(),
+                    SlotKind::Custom { .. } => {
+                        bail!("source slot must not be a custom slot");
                     }
-                    let source = match source.kind() {
-                        SlotKind::Block(_) => source.require_available_block()?.path().to_owned(),
-                        SlotKind::File { path } => path.to_owned(),
-                        SlotKind::Custom { .. } => {
-                            bail!("source slot must not be a custom slot");
-                        }
-                    };
-                    let target = match slot.kind() {
-                        SlotKind::Block(_) => {
-                            let device = slot.require_available_block()?;
-                            std::fs::OpenOptions::new()
-                                .read(true)
-                                .write(true)
-                                .open(device)
-                                .whatever("unable to open payload target")?
-                        }
-                        SlotKind::File { path } => std::fs::OpenOptions::new()
+                };
+                let target = match slot.kind() {
+                    SlotKind::Block(_) => {
+                        let device = slot.require_available_block()?;
+                        std::fs::OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .open(device)
+                            .whatever("unable to open payload target")?
+                    }
+                    SlotKind::File { path } => std::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .open(path)
+                        .whatever("unable to open payload target")?,
+                    SlotKind::Custom { .. } => {
+                        bail!("custom slots do not support delta updates yet")
+                    }
+                };
+                let mut target_writer =
+                    HashWriter::new(delta_encoding.original_hash.algorithm(), target);
+                let (mut patch_reader, patch_writer) = buffered_pipe(8192);
+
+                let (decode_result, xdelta_result) = std::thread::scope(|scope| {
+                    let target_writer = &mut target_writer;
+                    // We must move the `patch_reader` here as we need it to be dropped when
+                    // the decompression fails. Otherwise, we get a deadlock when waiting for
+                    // the payload decoding in the following.
+                    let handle = scope.spawn(move || {
+                        trace!("starting xdelta");
+                        let result = xdelta_decompress(&source, &mut patch_reader, target_writer);
+                        trace!(?result, "xdelta terminated");
+                        result
+                    });
+                    let decode_result = payload.decode_into(
+                        BufferedPipeTarget {
+                            writer: patch_writer,
+                        },
+                        block_provider
+                            .as_ref()
+                            .map(|p| p as &dyn StoredBlockProvider),
+                        &mut progress,
+                    );
+                    trace!("finished decoding payload into pipe");
+                    (decode_result, handle.join().unwrap())
+                });
+                decode_result.whatever("unable to decode payload")?;
+                xdelta_result.whatever("unable to decode delta update")?;
+                let (target_hash, target_size) = target_writer.finalize();
+                if target_hash != delta_encoding.original_hash {
+                    bail!("decoded slot data does not match hash");
+                }
+                DecodedPayloadInfo {
+                    hash: target_hash,
+                    size: target_size.into(),
+                }
+            } else {
+                match slot.kind() {
+                    SlotKind::Block(_) => {
+                        let device = slot.require_available_block()?;
+                        let target = std::fs::OpenOptions::new()
+                            .read(true)
+                            .write(true)
+                            .open(device)
+                            .whatever("unable to open payload target")?;
+                        payload
+                            .decode_into(
+                                target,
+                                block_provider
+                                    .as_ref()
+                                    .map(|p| p as &dyn StoredBlockProvider),
+                                &mut progress,
+                            )
+                            .whatever("unable to decode payload")?
+                    }
+                    SlotKind::File { path } => {
+                        let target = std::fs::OpenOptions::new()
                             .read(true)
                             .write(true)
                             .create(true)
                             .truncate(true)
                             .open(path)
-                            .whatever("unable to open payload target")?,
-                        SlotKind::Custom { .. } => {
-                            bail!("custom slots do not support delta updates yet")
-                        }
-                    };
-                    let mut target_writer =
-                        HashWriter::new(delta_encoding.original_hash.algorithm(), target);
-                    let (mut patch_reader, patch_writer) = buffered_pipe(8192);
-
-                    let (decode_result, xdelta_result) = std::thread::scope(|scope| {
-                        let target_writer = &mut target_writer;
-                        // We must move the `patch_reader` here as we need it to be dropped when
-                        // the decompression fails. Otherwise, we get a deadlock when waiting for
-                        // the payload decoding in the following.
-                        let handle = scope.spawn(move || {
-                            trace!("starting xdelta");
-                            let result =
-                                xdelta_decompress(&source, &mut patch_reader, target_writer);
-                            trace!(?result, "xdelta terminated");
-                            result
-                        });
-                        let decode_result = payload.decode_into(
-                            BufferedPipeTarget {
-                                writer: patch_writer,
-                            },
-                            block_provider
-                                .as_ref()
-                                .map(|p| p as &dyn StoredBlockProvider),
-                            &mut progress,
-                        );
-                        trace!("finished decoding payload into pipe");
-                        (decode_result, handle.join().unwrap())
-                    });
-                    decode_result.whatever("unable to decode payload")?;
-                    xdelta_result.whatever("unable to decode delta update")?;
-                    let (target_hash, target_size) = target_writer.finalize();
-                    if target_hash != delta_encoding.original_hash {
-                        bail!("decoded slot data does not match hash");
+                            .whatever("unable to open payload target")?;
+                        payload
+                            .decode_into(
+                                target,
+                                block_provider
+                                    .as_ref()
+                                    .map(|p| p as &dyn StoredBlockProvider),
+                                &mut progress,
+                            )
+                            .whatever("unable to decode payload")?
                     }
-                    DecodedPayloadInfo {
-                        hash: target_hash,
-                        size: target_size.into(),
+                    SlotKind::Custom { handler } => {
+                        let target = CustomTarget::new(handler.iter().map(|arg| arg.as_str()))?;
+                        payload
+                            .decode_into(
+                                target,
+                                block_provider
+                                    .as_ref()
+                                    .map(|p| p as &dyn StoredBlockProvider),
+                                &mut progress,
+                            )
+                            .whatever("unable to decode payload")?
                     }
-                } else {
-                    match slot.kind() {
-                        SlotKind::Block(_) => {
-                            let device = slot.require_available_block()?;
-                            let target = std::fs::OpenOptions::new()
-                                .read(true)
-                                .write(true)
-                                .open(device)
-                                .whatever("unable to open payload target")?;
-                            payload
-                                .decode_into(
-                                    target,
-                                    block_provider
-                                        .as_ref()
-                                        .map(|p| p as &dyn StoredBlockProvider),
-                                    &mut progress,
-                                )
-                                .whatever("unable to decode payload")?
-                        }
-                        SlotKind::File { path } => {
-                            let target = std::fs::OpenOptions::new()
-                                .read(true)
-                                .write(true)
-                                .create(true)
-                                .truncate(true)
-                                .open(path)
-                                .whatever("unable to open payload target")?;
-                            payload
-                                .decode_into(
-                                    target,
-                                    block_provider
-                                        .as_ref()
-                                        .map(|p| p as &dyn StoredBlockProvider),
-                                    &mut progress,
-                                )
-                                .whatever("unable to decode payload")?
-                        }
-                        SlotKind::Custom { handler } => {
-                            let target = CustomTarget::new(handler.iter().map(|arg| arg.as_str()))?;
-                            payload
-                                .decode_into(
-                                    target,
-                                    block_provider
-                                        .as_ref()
-                                        .map(|p| p as &dyn StoredBlockProvider),
-                                    &mut progress,
-                                )
-                                .whatever("unable to decode payload")?
-                        }
-                    }
-                };
-                if let Err(error) = payload_db::save_slot_state(
-                    slot.name(),
-                    // Only save the hashes and size if the slot is immutable.
-                    &SlotState {
-                        hashes: if slot.is_immutable() {
-                            [(
-                                decoded_payload_info.hash.algorithm(),
-                                decoded_payload_info.hash,
-                            )]
-                            .into_iter()
-                            .collect()
-                        } else {
-                            Default::default()
-                        },
-                        size: if slot.is_immutable() {
-                            Some(decoded_payload_info.size)
-                        } else {
-                            None
-                        },
-                        updated_at: Some(jiff::Timestamp::now()),
-                    },
-                ) {
-                    error!("unable to save slot state: {error:?}");
                 }
-                continue;
-            } else {
-                error!(
-                    "slot {:?} for bundle payload {} not found",
-                    slot_type.slot,
-                    payload.idx()
-                );
+            };
+            if let Err(error) = payload_db::save_slot_state(
+                slot.name(),
+                // Only save the hashes and size if the slot is immutable.
+                &SlotState {
+                    hashes: if slot.is_immutable() {
+                        [(
+                            decoded_payload_info.hash.algorithm(),
+                            decoded_payload_info.hash,
+                        )]
+                        .into_iter()
+                        .collect()
+                    } else {
+                        Default::default()
+                    },
+                    size: if slot.is_immutable() {
+                        Some(decoded_payload_info.size)
+                    } else {
+                        None
+                    },
+                    updated_at: Some(jiff::Timestamp::now()),
+                },
+            ) {
+                error!("unable to save slot state: {error:?}");
             }
-        } else if let Some(type_execute) = &payload_entry.type_execute {
+            continue;
+        } else if let SystemPayloadDestination::Execute = destination {
+            let type_execute = payload_entry
+                .type_execute
+                .as_ref()
+                .expect("execute delivery validated during preflight");
             eprintln!("executing update payload {}", payload.idx(),);
             let target = CustomTarget::new(type_execute.handler.iter().map(|arg| arg.as_str()))?;
             payload
@@ -1865,7 +1984,6 @@ fn install_update_bundle<R: BundleSource>(
                 .whatever("unable to decode payload")?;
             continue;
         }
-        payload.skip().whatever("unable to skip payload")?;
     }
 
     let reboot_type = if !bundle_reader.header().is_incremental {
@@ -2395,4 +2513,156 @@ fn run_data_wipe(yes: bool, no_reboot: bool) -> SystemResult<()> {
         reboot()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use indexmap::IndexMap;
+
+    use crate::config::system::BlockSlotConfig;
+    use crate::config::system::BootGroupConfig;
+    use crate::config::system::FileSlotConfig;
+    use crate::config::system::SlotConfig;
+    use crate::system::boot_groups::BootGroups;
+    use crate::system::slots::SystemSlots;
+
+    use super::preflight_system_deliveries;
+    use super::PayloadDelivery;
+    use super::SystemPayloadDestination;
+
+    fn no_delivery() -> PayloadDelivery<'static> {
+        PayloadDelivery {
+            slot: None,
+            execute: false,
+            app_file: false,
+            app_archive: false,
+        }
+    }
+
+    fn slot_delivery(slot: &'static str) -> PayloadDelivery<'static> {
+        PayloadDelivery {
+            slot: Some(slot),
+            ..no_delivery()
+        }
+    }
+
+    fn execute_delivery() -> PayloadDelivery<'static> {
+        PayloadDelivery {
+            execute: true,
+            ..no_delivery()
+        }
+    }
+
+    fn file_slots(names: &[&str]) -> SystemSlots {
+        let config = names
+            .iter()
+            .map(|name| {
+                (
+                    (*name).to_owned(),
+                    SlotConfig::File(FileSlotConfig {
+                        path: format!("/tmp/{name}"),
+                        immutable: Some(true),
+                    }),
+                )
+            })
+            .collect::<IndexMap<_, _>>();
+        SystemSlots::from_config(None, Some(&config)).unwrap()
+    }
+
+    #[test]
+    fn preflight_resolves_group_aliases_before_installation() {
+        let slots = file_slots(&["system-a", "system-b"]);
+        let mut aliases = IndexMap::new();
+        aliases.insert("system".to_owned(), "system-b".to_owned());
+        let groups_config = [("b".to_owned(), BootGroupConfig { slots: aliases })]
+            .into_iter()
+            .collect::<IndexMap<_, _>>();
+        let groups = BootGroups::from_config(&slots, Some(&groups_config)).unwrap();
+        let (_, group) = groups.iter().next().unwrap();
+        let target_idx = slots.find_by_name("system-b").unwrap().0;
+
+        assert_eq!(
+            preflight_system_deliveries(false, &[slot_delivery("system")], &slots, Some(group))
+                .unwrap(),
+            vec![SystemPayloadDestination::Slot(target_idx)]
+        );
+    }
+
+    #[test]
+    fn preflight_rejects_unknown_active_and_duplicate_destinations() {
+        let slots = file_slots(&["target"]);
+        assert!(
+            preflight_system_deliveries(true, &[slot_delivery("missing")], &slots, None).is_err()
+        );
+
+        let (_, active) = slots.find_by_name("target").unwrap();
+        active.mark_active();
+        assert!(
+            preflight_system_deliveries(true, &[slot_delivery("target")], &slots, None).is_err()
+        );
+
+        let slots = file_slots(&["target"]);
+        assert!(preflight_system_deliveries(
+            true,
+            &[slot_delivery("target"), slot_delivery("target")],
+            &slots,
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn preflight_requires_one_supported_delivery_type() {
+        let slots = file_slots(&["target"]);
+        assert!(preflight_system_deliveries(true, &[no_delivery()], &slots, None).is_err());
+
+        let mut ambiguous = slot_delivery("target");
+        ambiguous.execute = true;
+        assert!(preflight_system_deliveries(true, &[ambiguous], &slots, None).is_err());
+    }
+
+    #[test]
+    fn preflight_rejects_unavailable_optional_block_slots() {
+        let config = [(
+            "optional".to_owned(),
+            SlotConfig::Block(BlockSlotConfig {
+                device: Some("/dev/rugix-test-device-does-not-exist".to_owned()),
+                partition: None,
+                immutable: Some(true),
+                optional: Some(true),
+            }),
+        )]
+        .into_iter()
+        .collect::<IndexMap<_, _>>();
+        let slots = SystemSlots::from_config(None, Some(&config)).unwrap();
+
+        assert!(
+            preflight_system_deliveries(true, &[slot_delivery("optional")], &slots, None).is_err()
+        );
+    }
+
+    #[test]
+    fn preflight_rejects_app_only_empty_and_inapplicable_full_bundles() {
+        let slots = file_slots(&["target"]);
+        let app_delivery = PayloadDelivery {
+            app_archive: true,
+            ..no_delivery()
+        };
+        assert!(preflight_system_deliveries(true, &[app_delivery], &slots, None).is_err());
+        assert!(preflight_system_deliveries(true, &[], &slots, None).is_err());
+
+        let groups_config = [(
+            "target".to_owned(),
+            BootGroupConfig {
+                slots: IndexMap::new(),
+            },
+        )]
+        .into_iter()
+        .collect::<IndexMap<_, _>>();
+        let groups = BootGroups::from_config(&slots, Some(&groups_config)).unwrap();
+        let (_, group) = groups.iter().next().unwrap();
+        assert!(
+            preflight_system_deliveries(false, &[execute_delivery()], &slots, Some(group)).is_err()
+        );
+    }
 }
