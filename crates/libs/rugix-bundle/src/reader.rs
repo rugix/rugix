@@ -271,7 +271,9 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
             {
                 let block_id = BlockId { raw: idx };
                 let is_fresh = table.insert_raw(&raw_index, block_id);
-                let first_idx = table.get_raw(&raw_index, block_hash).unwrap();
+                let first_idx = table
+                    .get_raw(&raw_index, block_hash)
+                    .ok_or_else(|| whatever!("block table lost a newly inserted block"))?;
                 // Get the data, afterwards buffer should contain the uncompressed block.
                 if is_fresh || !block_encoding.deduplicated {
                     // We need to read the block from the source.
@@ -281,7 +283,9 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
                             .get(next_size_idx)
                             .ok_or_else(|| whatever!("block-size metadata has too few entries"))?
                     } else {
-                        fixed_block_size.expect("fixed block size validated above")
+                        fixed_block_size.ok_or_else(|| {
+                            whatever!("variable-size block index is missing block sizes")
+                        })?
                     };
                     let block_size = (declared_block_size as u64).min(self.remaining_data.raw);
                     next_size_idx += 1;
@@ -500,13 +504,18 @@ fn read_into_vec_at_depth(
     if depth > MAX_NESTING_DEPTH {
         bail!("STLV nesting depth exceeds {MAX_NESTING_DEPTH}");
     }
-    write_atom_head(output, head).unwrap();
+    write_atom_head(output, head).whatever("unable to buffer STLV atom")?;
     match head {
         AtomHead::Value { length, .. } => {
             if output.byte_len() + length < limit {
                 source.hint_next_chunk(length);
                 let offset = output.len();
-                output.resize(offset + length.raw as usize, 0);
+                let length = usize::try_from(length.raw)
+                    .whatever("STLV value length does not fit into memory")?;
+                let end = offset
+                    .checked_add(length)
+                    .ok_or_else(|| whatever!("STLV value length overflows memory size"))?;
+                output.resize(end, 0);
                 source
                     .read_exact(&mut output[offset..])
                     .whatever("unable to read value")?;
@@ -518,7 +527,7 @@ fn read_into_vec_at_depth(
             let inner = expect_atom_head(source)?;
             match inner {
                 atom @ AtomHead::End { tag } if tag == start_tag => {
-                    write_atom_head(output, atom).unwrap();
+                    write_atom_head(output, atom).whatever("unable to buffer STLV atom")?;
                     break;
                 }
                 atom => {
