@@ -100,8 +100,8 @@ impl BlockProvider {
             let first_block_idx = self.hashes.len() / self.hash_algorithm.hash_size();
             self.hashes.extend_from_slice(&index.block_hashes.raw);
             let mut current_offset = NumBytes::ZERO;
-            for (block, size) in (first_block_idx..).zip(index.block_sizes.raw.chunks_exact(4)) {
-                let size = NumBytes::new(u32::from_be_bytes(size.try_into().unwrap()).into());
+            for (block, size) in (first_block_idx..).zip(index.block_sizes.raw.as_chunks::<4>().0) {
+                let size = NumBytes::new(u32::from_be_bytes(*size).into());
                 self.dimensions.push((current_offset, size));
                 current_offset += size;
                 let table_hash = self.table_hasher.hash_one(self.get_hash(block));

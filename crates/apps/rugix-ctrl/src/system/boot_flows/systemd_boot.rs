@@ -74,8 +74,10 @@ fn read_loader_efi_var(name: &str) -> Option<String> {
     }
     // Skip 4 bytes of EFI variable attributes, decode UTF-16LE.
     let utf16: Vec<u16> = data[4..]
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
         .collect();
     Some(
         String::from_utf16_lossy(&utf16)

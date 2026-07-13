@@ -18,7 +18,7 @@ pub fn main() {
     spawn_blocking(|| {
         spawn(async {
             // Let's race the indefinite blocking work against an asynchronous timeout.
-            let blocking_task = spawn_blocking(|| work_indefinitely());
+            let blocking_task = spawn_blocking(work_indefinitely);
             tokio::select! {
                 _ = blocking_task.join() => {
                     // This will never happen, because the work takes forever.

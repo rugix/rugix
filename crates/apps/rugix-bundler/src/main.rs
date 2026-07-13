@@ -750,6 +750,24 @@ pub fn unpack(src: &Path, dst: &Path) -> BundleResult<()> {
     Ok(())
 }
 
+#[tracing::instrument(level = Level::DEBUG)]
+pub fn hash_file(algorithm: HashAlgorithm, path: &Path) -> BundleResult<HashDigest> {
+    let mut file = std::fs::File::open(path).whatever("unable to open payload for hashing")?;
+    let mut buffer = vec![0u8; 8096];
+    let mut hasher = algorithm.hasher();
+    loop {
+        let chunk_size = file
+            .read(&mut buffer)
+            .whatever("unable to read payload for hashing")?;
+        if chunk_size > 0 {
+            hasher.update(&buffer[..chunk_size]);
+        } else {
+            break;
+        }
+    }
+    Ok(hasher.finalize())
+}
+
 #[cfg(test)]
 mod tests {
     use rugix_bundle::manifest::BundleManifest;
@@ -816,22 +834,4 @@ mod tests {
         assert!(unpack(&bundle, &output).is_err());
         assert!(!outside.join("system.img").exists());
     }
-}
-
-#[tracing::instrument(level = Level::DEBUG)]
-pub fn hash_file(algorithm: HashAlgorithm, path: &Path) -> BundleResult<HashDigest> {
-    let mut file = std::fs::File::open(path).whatever("unable to open payload for hashing")?;
-    let mut buffer = vec![0u8; 8096];
-    let mut hasher = algorithm.hasher();
-    loop {
-        let chunk_size = file
-            .read(&mut buffer)
-            .whatever("unable to read payload for hashing")?;
-        if chunk_size > 0 {
-            hasher.update(&buffer[..chunk_size]);
-        } else {
-            break;
-        }
-    }
-    Ok(hasher.finalize())
 }

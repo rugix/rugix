@@ -129,6 +129,6 @@ mod tests {
         assert_eq!(parse_ascii_hex_digit(b'0', 0, None).unwrap(), 0x0);
         assert_eq!(parse_ascii_hex_digit(b'a', 0, None).unwrap(), 0xa);
         assert_eq!(parse_ascii_hex_digit(b'F', 0, None).unwrap(), 0xF);
-        assert_eq!(parse_ascii_hex_byte([b'a', b'2'], 0, None).unwrap(), 0xa2);
+        assert_eq!(parse_ascii_hex_byte(*b"a2", 0, None).unwrap(), 0xa2);
     }
 }

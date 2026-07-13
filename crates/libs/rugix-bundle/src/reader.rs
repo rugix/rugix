@@ -236,10 +236,8 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
                     Some(block_sizes.len()),
                 )?;
                 let mut decoded_sizes = Vec::new();
-                for chunk in block_sizes.chunks_exact(4) {
-                    decoded_sizes.push(u32::from_be_bytes(
-                        chunk.try_into().expect("validated four-byte chunk"),
-                    ))
+                for chunk in block_sizes.as_chunks::<4>().0 {
+                    decoded_sizes.push(u32::from_be_bytes(*chunk))
                 }
                 Some(decoded_sizes)
             } else {
@@ -618,10 +616,10 @@ fn validate_block_metadata_lengths(
     hash_size: usize,
     block_size_bytes: Option<usize>,
 ) -> BundleResult<()> {
-    if block_hash_bytes % hash_size != 0 {
+    if !block_hash_bytes.is_multiple_of(hash_size) {
         bail!("block-hash metadata length is not a multiple of the hash size");
     }
-    if block_size_bytes.is_some_and(|length| length % 4 != 0) {
+    if block_size_bytes.is_some_and(|length| !length.is_multiple_of(4)) {
         bail!("block-size metadata length is not a multiple of four");
     }
     Ok(())
