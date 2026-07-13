@@ -129,7 +129,13 @@ pub(crate) fn atomic_output<T>(
         .tempfile_in(parent)
         .whatever("unable to create temporary bundle file")?;
     let result = {
-        let mut writer = BufWriter::new(temporary.as_file_mut());
+        #[cfg(test)]
+        let mut fault_writer = FaultWriter::new(temporary.as_file_mut());
+        #[cfg(test)]
+        let output: &mut dyn Write = &mut fault_writer;
+        #[cfg(not(test))]
+        let output: &mut dyn Write = temporary.as_file_mut();
+        let mut writer = BufWriter::new(output);
         let result = write(&mut writer)?;
         writer.flush().whatever("unable to flush bundle output")?;
         result
@@ -147,6 +153,45 @@ pub(crate) fn atomic_output<T>(
         .sync_all()
         .whatever("unable to synchronize bundle output directory")?;
     Ok(result)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static OUTPUT_FAIL_AFTER: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+#[cfg(test)]
+struct FaultWriter<'a> {
+    inner: &'a mut std::fs::File,
+    remaining: usize,
+}
+
+#[cfg(test)]
+impl<'a> FaultWriter<'a> {
+    fn new(inner: &'a mut std::fs::File) -> Self {
+        let remaining = OUTPUT_FAIL_AFTER.get();
+        Self { inner, remaining }
+    }
+}
+
+#[cfg(test)]
+impl Write for FaultWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                "injected disk-full failure",
+            ));
+        }
+        let length = bytes.len().min(self.remaining);
+        let written = self.inner.write(&bytes[..length])?;
+        self.remaining -= written;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 pub(crate) fn paths_refer_to_same_file(input: &Path, output: &Path) -> BundleResult<bool> {
@@ -180,5 +225,14 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(std::fs::read(&output).unwrap(), b"existing");
         assert!(paths_refer_to_same_file(&output, &output).unwrap());
+
+        super::OUTPUT_FAIL_AFTER.set(3);
+        let result = atomic_output(&output, |writer| -> BundleResult<()> {
+            writer.write_all(b"more than three bytes").unwrap();
+            Ok(())
+        });
+        super::OUTPUT_FAIL_AFTER.set(usize::MAX);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"existing");
     }
 }
