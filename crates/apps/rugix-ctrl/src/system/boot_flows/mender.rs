@@ -52,6 +52,12 @@ struct MenderBootFlow {
     entry_b: BootGroupIdx,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenderGroup {
+    A,
+    B,
+}
+
 impl MenderBootFlow {
     pub fn boot_root(&self) -> &Path {
         self.config
@@ -81,11 +87,64 @@ fn mender_boot_flow(
     let Some((entry_b_idx, _)) = entries.next() else {
         bail!("invalid number of entries");
     };
+    if entries.next().is_some() {
+        bail!("Mender boot flows require exactly two boot groups");
+    }
+    validate_mender_layout(
+        2,
+        config.boot_part_a.unwrap_or(2),
+        config.boot_part_b.unwrap_or(3),
+    )?;
     Ok(MenderBootFlow {
         config: config.clone(),
         entry_a: entry_a_idx,
         entry_b: entry_b_idx,
     })
+}
+
+fn validate_mender_layout(
+    boot_group_count: usize,
+    boot_part_a: u32,
+    boot_part_b: u32,
+) -> BootFlowResult<()> {
+    if boot_group_count != 2 {
+        bail!("Mender boot flows require exactly two boot groups");
+    }
+    if boot_part_a == boot_part_b {
+        bail!("Mender boot partitions A and B must be different");
+    }
+    Ok(())
+}
+
+fn mender_default_group(
+    mender_boot_part: u32,
+    upgrade_available: bool,
+    boot_part_a: u32,
+    boot_part_b: u32,
+) -> BootFlowResult<MenderGroup> {
+    let selected = if mender_boot_part == boot_part_a {
+        MenderGroup::A
+    } else if mender_boot_part == boot_part_b {
+        MenderGroup::B
+    } else {
+        bail!("unknown Mender boot partition {mender_boot_part}");
+    };
+
+    if upgrade_available {
+        Ok(match selected {
+            MenderGroup::A => MenderGroup::B,
+            MenderGroup::B => MenderGroup::A,
+        })
+    } else {
+        Ok(selected)
+    }
+}
+
+fn mender_group_idx(inner: &MenderBootFlow, group: MenderGroup) -> BootGroupIdx {
+    match group {
+        MenderGroup::A => inner.entry_a,
+        MenderGroup::B => inner.entry_b,
+    }
 }
 
 const MENDER_GRUB_ENV1: &str = "grub-mender-grubenv/mender_grubenv1/env";
@@ -235,20 +294,13 @@ impl BootFlow for MenderGrub {
         let Some(upgrade_available) = boot_env.get("upgrade_available").map(|v| v.trim()) else {
             bail!("Update available flag is not set");
         };
-        // Invert active `mender_boot_part` if an update is available.
-        Ok(if upgrade_available == "1" {
-            if mender_boot_part == self.inner.boot_part_a() {
-                self.inner.entry_b
-            } else {
-                self.inner.entry_a
-            }
-        } else {
-            if mender_boot_part == self.inner.boot_part_a() {
-                self.inner.entry_a
-            } else {
-                self.inner.entry_b
-            }
-        })
+        let group = mender_default_group(
+            mender_boot_part,
+            upgrade_available == "1",
+            self.inner.boot_part_a(),
+            self.inner.boot_part_b(),
+        )?;
+        Ok(mender_group_idx(&self.inner, group))
     }
 
     fn commit(&self, system: &crate::system::System) -> super::BootFlowResult<()> {
@@ -342,23 +394,16 @@ impl BootFlow for MenderUboot {
         else {
             bail!("Mender boot partition is not set");
         };
-        let Some(update_avaliable) = boot_env.get("upgrade_available").map(|v| v.trim()) else {
+        let Some(upgrade_available) = boot_env.get("upgrade_available").map(|v| v.trim()) else {
             bail!("Update available flag is not set");
         };
-        // Invert active `mender_boot_part` if an update is available.
-        Ok(if update_avaliable == "1" {
-            if mender_boot_part == self.inner.boot_part_a() {
-                self.inner.entry_b
-            } else {
-                self.inner.entry_a
-            }
-        } else {
-            if mender_boot_part == self.inner.boot_part_b() {
-                self.inner.entry_a
-            } else {
-                self.inner.entry_b
-            }
-        })
+        let group = mender_default_group(
+            mender_boot_part,
+            upgrade_available == "1",
+            self.inner.boot_part_a(),
+            self.inner.boot_part_b(),
+        )?;
+        Ok(mender_group_idx(&self.inner, group))
     }
 
     fn commit(&self, system: &crate::system::System) -> super::BootFlowResult<()> {
@@ -386,5 +431,48 @@ impl BootFlow for MenderUboot {
         };
         set_vars(&boot_env)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mender_default_group;
+    use super::validate_mender_layout;
+    use super::MenderGroup;
+
+    #[test]
+    fn default_group_covers_stable_trial_commit_and_rollback_states() {
+        let cases = [
+            // Stable systems and the state after committing a trial.
+            (2, false, MenderGroup::A),
+            (3, false, MenderGroup::B),
+            // During a trial, the pre-update group remains the default.
+            (3, true, MenderGroup::A),
+            (2, true, MenderGroup::B),
+            // After an exhausted trial, Mender restores the old partition and clears the flag.
+            (2, false, MenderGroup::A),
+            (3, false, MenderGroup::B),
+        ];
+
+        for (mender_boot_part, upgrade_available, expected) in cases {
+            assert_eq!(
+                mender_default_group(mender_boot_part, upgrade_available, 2, 3).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_boot_partitions_are_rejected() {
+        assert!(mender_default_group(4, false, 2, 3).is_err());
+        assert!(mender_default_group(4, true, 2, 3).is_err());
+    }
+
+    #[test]
+    fn layout_requires_two_groups_and_distinct_partitions() {
+        assert!(validate_mender_layout(2, 2, 3).is_ok());
+        assert!(validate_mender_layout(1, 2, 3).is_err());
+        assert!(validate_mender_layout(3, 2, 3).is_err());
+        assert!(validate_mender_layout(2, 2, 2).is_err());
     }
 }
