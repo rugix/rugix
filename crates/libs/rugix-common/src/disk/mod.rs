@@ -1,5 +1,6 @@
 //! Utilities for working with disks, disk images, and disk streams.
 
+#[cfg(target_os = "linux")]
 use std::path::Path;
 
 use rand::RngExt;
@@ -18,13 +19,16 @@ use crate::utils::units::NumBytes;
 use crate::utils::units::Quantity;
 use crate::utils::units::Unit;
 
+#[cfg(target_os = "linux")]
 pub mod blkdev;
+#[cfg(target_os = "linux")]
 pub mod blkpg;
 pub mod gpt;
 pub mod mbr;
 pub mod repart;
 pub mod stream;
 
+#[cfg(target_os = "linux")]
 mod sfdisk;
 
 /// Default size of blocks.
@@ -93,6 +97,7 @@ impl PartitionTable {
     }
 
     /// Read the partition table from a device or image.
+    #[cfg(target_os = "linux")]
     pub fn read(dev: impl AsRef<Path>) -> Result<Self, Report<DiskError>> {
         sfdisk::sfdisk_read(dev.as_ref())
     }
@@ -167,6 +172,7 @@ impl PartitionTable {
     }
 
     /// Write the partition table to a device or image.
+    #[cfg(target_os = "linux")]
     pub fn write(&self, dev: impl AsRef<Path>) -> Result<(), Report<DiskError>> {
         // Make sure that we never write an invalid partition table.
         self.validate()?;

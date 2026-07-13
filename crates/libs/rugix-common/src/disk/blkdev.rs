@@ -14,9 +14,6 @@ use std::path::PathBuf;
 
 use nix::libc::dev_t;
 
-#[cfg(not(target_os = "linux"))]
-compile_error!("module `block_device` is only works on Linux");
-
 /// Block device.
 #[derive(Debug, Clone)]
 pub struct BlockDevice {
