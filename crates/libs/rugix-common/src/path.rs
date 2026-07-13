@@ -27,6 +27,11 @@ impl ValidatedRelativePath {
     pub fn as_path(&self) -> &Path {
         Path::new(&self.0)
     }
+
+    /// Return whether the path consists of exactly one normal component.
+    pub fn is_single_component(&self) -> bool {
+        self.as_path().components().count() == 1
+    }
 }
 
 impl AsRef<Path> for ValidatedRelativePath {
