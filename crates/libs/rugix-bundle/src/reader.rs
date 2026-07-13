@@ -47,7 +47,7 @@ pub struct BundleReader<S> {
 
 impl<S: BundleSource> BundleReader<S> {
     pub fn start(mut source: S, header_hash: Option<HashDigest>) -> BundleResult<Self> {
-        let _ = expect_start(&mut source, tags::BUNDLE);
+        let _ = expect_start(&mut source, tags::BUNDLE)?;
         let mut bundle_header = Vec::new();
         let header_head = skip_until_start(&mut source, tags::BUNDLE_HEADER)?;
         read_into_vec(
@@ -96,7 +96,7 @@ impl<S: BundleSource> BundleReader<S> {
         let this_payload = self.next_payload;
         self.next_payload += 1;
         let entry = &self.header.payload_index[this_payload];
-        let _ = expect_start(&mut self.source, tags::PAYLOAD);
+        let _ = expect_start(&mut self.source, tags::PAYLOAD)?;
         let header_atom = skip_until_start(&mut self.source, tags::PAYLOAD_HEADER)?;
         let mut header_bytes = Vec::new();
         read_into_vec(
@@ -554,5 +554,87 @@ fn uncompress_bytes(format: CompressionFormat, bytes: &[u8]) -> Vec<u8> {
             decoder.finalize(&mut output).unwrap();
             output
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use byte_calc::NumBytes;
+    use si_crypto_hashes::HashAlgorithm;
+
+    use crate::format;
+    use crate::format::stlv::AtomHead;
+    use crate::format::stlv::write_atom_head;
+    use crate::format::stlv::write_segment_start;
+    use crate::format::tags;
+    use crate::source::from_slice;
+
+    use super::BundleReader;
+
+    fn empty_header() -> format::BundleHeader {
+        format::BundleHeader {
+            manifest: None,
+            is_incremental: false,
+            hash_algorithm: HashAlgorithm::Sha256,
+            components: None,
+            payload_index: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn bundle_reader_requires_the_bundle_root_segment() {
+        let mut bytes = Vec::new();
+        write_segment_start(&mut bytes, tags::BUNDLE_HEADER).unwrap();
+        bytes.extend(format::encode::to_vec(&empty_header(), tags::BUNDLE_HEADER));
+        write_segment_start(&mut bytes, tags::PAYLOADS).unwrap();
+
+        assert!(BundleReader::start(from_slice(&bytes), None).is_err());
+    }
+
+    #[test]
+    fn bundle_reader_requires_each_payload_segment() {
+        let payload_header = format::PayloadHeader {
+            block_encoding: None,
+        };
+        let header_bytes = format::encode::to_vec(&payload_header, tags::PAYLOAD_HEADER);
+        let hash_algorithm = HashAlgorithm::Sha256;
+        let entry = format::PayloadEntry {
+            type_slot: None,
+            type_execute: None,
+            type_app_file: None,
+            type_app_archive: None,
+            header_hash: format::Bytes {
+                raw: hash_algorithm
+                    .hash::<Box<[u8]>>(&header_bytes)
+                    .raw()
+                    .to_vec(),
+            },
+            file_hash: format::Bytes {
+                raw: hash_algorithm.hash::<Box<[u8]>>(&[]).raw().to_vec(),
+            },
+            delta_encoding: None,
+        };
+        let mut bytes = Vec::new();
+        write_segment_start(&mut bytes, tags::PAYLOAD_HEADER).unwrap();
+        bytes.extend(header_bytes);
+        write_atom_head(
+            &mut bytes,
+            AtomHead::Value {
+                tag: tags::PAYLOAD_DATA,
+                length: NumBytes::ZERO,
+            },
+        )
+        .unwrap();
+        let mut header = empty_header();
+        header.payload_index.push(entry);
+        let mut reader = BundleReader {
+            source: from_slice(&bytes),
+            header,
+            header_raw: Vec::new(),
+            signatures: None,
+            next_payload: 0,
+        };
+
+        assert!(reader.next_payload().is_err());
     }
 }
