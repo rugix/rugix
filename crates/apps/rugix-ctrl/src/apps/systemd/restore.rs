@@ -62,6 +62,7 @@ fn restore_app_units(
     };
     let units_dir = manager
         .generation_dir(app_name, generation)
+        .whatever("invalid app name")?
         .join(".rugix/systemd/units");
     if !units_dir.is_dir() {
         debug!(app = app_name, "app has no persisted systemd units");

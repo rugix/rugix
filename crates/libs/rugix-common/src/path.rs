@@ -34,6 +34,12 @@ impl AsRef<Path> for ValidatedRelativePath {
     }
 }
 
+impl std::fmt::Display for ValidatedRelativePath {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// Error returned for an unsafe or non-portable relative path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("invalid relative path {path:?}: {reason}")]
