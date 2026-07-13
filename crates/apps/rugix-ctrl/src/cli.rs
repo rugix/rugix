@@ -32,6 +32,7 @@ use rugix_cli::StatusSegment;
 use rugix_common::disk::blkdev::find_block_device;
 use rugix_common::disk::blkdev::BlockDevice;
 use rugix_common::mount::is_mount_point;
+use rugix_common::path::ValidatedRelativePath;
 use rugix_common::pipe::buffered_pipe;
 use rugix_common::pipe::PipeWriter;
 use rugix_common::slots::SlotState;
@@ -934,6 +935,8 @@ fn install_app_bundle<S: BundleSource>(
         bail!("bundle verification failed, refusing to install app bundle");
     }
 
+    validate_app_bundle_header(bundle_reader.header())?;
+
     let bundle_components = bundle_reader.header().components.clone();
     if let Some(components) = &bundle_components {
         crate::components::validate_bundle_components(components)?;
@@ -1257,6 +1260,70 @@ fn install_app_bundle<S: BundleSource>(
             .whatever("unable to activate app generation")?;
     }
 
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AppPayloadDelivery<'a> {
+    app_file: Option<(&'a str, &'a str)>,
+    app_archive: Option<&'a str>,
+    slot: bool,
+    execute: bool,
+}
+
+fn validate_app_bundle_header(header: &format::BundleHeader) -> SystemResult<()> {
+    let deliveries = header
+        .payload_index
+        .iter()
+        .map(|entry| AppPayloadDelivery {
+            app_file: entry
+                .type_app_file
+                .as_ref()
+                .map(|delivery| (delivery.app.as_str(), delivery.path.as_str())),
+            app_archive: entry
+                .type_app_archive
+                .as_ref()
+                .map(|delivery| delivery.app.as_str()),
+            slot: entry.type_slot.is_some(),
+            execute: entry.type_execute.is_some(),
+        })
+        .collect::<Vec<_>>();
+    validate_app_deliveries(&deliveries)
+}
+
+fn validate_app_deliveries(deliveries: &[AppPayloadDelivery<'_>]) -> SystemResult<()> {
+    if deliveries.is_empty() {
+        bail!("app bundle does not contain any payloads");
+    }
+    for (payload_idx, delivery) in deliveries.iter().enumerate() {
+        let delivery_count = [
+            delivery.app_file.is_some(),
+            delivery.app_archive.is_some(),
+            delivery.slot,
+            delivery.execute,
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        if delivery_count != 1 {
+            bail!(
+                "app bundle payload {payload_idx} must declare exactly one delivery type, found {delivery_count}"
+            );
+        }
+        if delivery.slot || delivery.execute {
+            bail!("app bundle payload {payload_idx} is not an app payload");
+        }
+        let (app, path) = match (delivery.app_file, delivery.app_archive) {
+            (Some((app, path)), None) => (app, Some(path)),
+            (None, Some(app)) => (app, None),
+            _ => unreachable!("delivery count validated above"),
+        };
+        rugix_bundle::manifest::validate_app_name(app)
+            .whatever("invalid app name in bundle payload")?;
+        if let Some(path) = path {
+            ValidatedRelativePath::new(path).whatever("invalid app-file path in bundle payload")?;
+        }
+    }
     Ok(())
 }
 
@@ -2582,6 +2649,8 @@ mod tests {
 
     use super::clear_target_overlay_with;
     use super::preflight_system_deliveries;
+    use super::validate_app_deliveries;
+    use super::AppPayloadDelivery;
     use super::HashWriter;
     use super::PayloadDelivery;
     use super::ProgressCursors;
@@ -2782,5 +2851,51 @@ mod tests {
         cursors.mark_json_emitted(100.0);
         assert!(!cursors.should_emit_hook(100.0));
         assert!(!cursors.should_emit_json(100.0));
+    }
+
+    #[test]
+    fn app_bundle_paths_are_validated_before_installation() {
+        let valid = [
+            AppPayloadDelivery {
+                app_file: Some(("example_app", "config/settings.json")),
+                app_archive: None,
+                slot: false,
+                execute: false,
+            },
+            AppPayloadDelivery {
+                app_file: None,
+                app_archive: Some("other-app"),
+                slot: false,
+                execute: false,
+            },
+        ];
+        assert!(validate_app_deliveries(&valid).is_ok());
+
+        for (app, path) in [
+            ("../escape", "file"),
+            ("example", "/absolute"),
+            ("example", "../escape"),
+            ("example", "directory/./file"),
+            ("example", ""),
+        ] {
+            let delivery = [AppPayloadDelivery {
+                app_file: Some((app, path)),
+                app_archive: None,
+                slot: false,
+                execute: false,
+            }];
+            assert!(
+                validate_app_deliveries(&delivery).is_err(),
+                "{app:?} {path:?}"
+            );
+        }
+
+        let system_delivery = [AppPayloadDelivery {
+            app_file: None,
+            app_archive: None,
+            slot: true,
+            execute: false,
+        }];
+        assert!(validate_app_deliveries(&system_delivery).is_err());
     }
 }
