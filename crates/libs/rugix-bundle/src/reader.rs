@@ -827,4 +827,33 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn malformed_and_truncated_bundle_corpus_returns_errors() {
+        fn read_all(bytes: &[u8]) -> crate::BundleResult<()> {
+            let mut reader = BundleReader::start(from_slice(&bytes), None)?;
+            while let Some(payload) = reader.next_payload()? {
+                payload.skip()?;
+            }
+            Ok(())
+        }
+
+        let mut root_only = Vec::new();
+        write_segment_start(&mut root_only, tags::BUNDLE).unwrap();
+
+        let mut missing_closing_segments = Vec::new();
+        write_segment_start(&mut missing_closing_segments, tags::BUNDLE).unwrap();
+        missing_closing_segments
+            .extend(format::encode::to_vec(&empty_header(), tags::BUNDLE_HEADER));
+        write_segment_start(&mut missing_closing_segments, tags::PAYLOADS).unwrap();
+
+        for malformed in [
+            Vec::new(),
+            vec![0x01, 0x02],
+            root_only,
+            missing_closing_segments,
+        ] {
+            assert!(read_all(&malformed).is_err(), "accepted {malformed:02x?}");
+        }
+    }
 }
