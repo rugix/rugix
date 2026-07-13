@@ -254,7 +254,8 @@ pub fn main() -> SystemResult<()> {
 
                     match reboot_type {
                         UpdateRebootType::Yes => {
-                            let (entry_idx, boot_group) = boot_group.unwrap();
+                            let (entry_idx, boot_group) =
+                                require_update_target(boot_group, "reboot")?;
                             info!(
                                 "instructing boot flow to try booting into {:?}",
                                 boot_group.name()
@@ -268,7 +269,8 @@ pub fn main() -> SystemResult<()> {
                         }
                         UpdateRebootType::No => { /* nothing to do */ }
                         UpdateRebootType::Set => {
-                            let (entry_idx, boot_group) = boot_group.unwrap();
+                            let (entry_idx, boot_group) =
+                                require_update_target(boot_group, "boot selection")?;
                             info!(
                                 "instructing boot flow to try booting into {:?}",
                                 boot_group.name()
@@ -279,9 +281,7 @@ pub fn main() -> SystemResult<()> {
                                 .whatever("unable to set next boot group")?;
                         }
                         UpdateRebootType::Deferred => {
-                            let (_, target) = boot_group.ok_or_else(|| {
-                                whatever!("deferred reboot requires a target boot group")
-                            })?;
+                            let (_, target) = require_update_target(boot_group, "deferred reboot")?;
                             set_deferred_reboot_target(target.name())?;
                         }
                     }
@@ -528,7 +528,12 @@ pub fn main() -> SystemResult<()> {
                 let disk = if let Some(disk) = disk {
                     BlockDevice::new(disk).whatever("unable to open disk")?
                 } else {
-                    system.root().as_ref().unwrap().device.clone()
+                    system
+                        .root()
+                        .as_ref()
+                        .ok_or_else(|| whatever!("unable to determine the system root device"))?
+                        .device
+                        .clone()
                 };
                 let Some(device) = disk
                     .get_partition(*partition)
@@ -863,6 +868,10 @@ fn resolve_mark_good_group(
     active.ok_or_else(|| whatever!("unable to determine the active boot group"))
 }
 
+fn require_update_target<T: Copy>(target: Option<T>, operation: &str) -> SystemResult<T> {
+    target.ok_or_else(|| whatever!("{operation} requires a target boot group"))
+}
+
 fn run_components_check() -> SystemResult<bool> {
     let components = crate::components::InstalledComponents::load()?;
     let output = components.check_output();
@@ -1007,7 +1016,7 @@ fn install_app_bundle<S: BundleSource>(
             if !app_generations.contains_key(&app_name) {
                 let lock = app_locks
                     .get(&app_name)
-                    .expect("app payload must be listed in bundle header");
+                    .ok_or_else(|| whatever!("app payload is missing its preflight lock"))?;
                 let gen = app_manager
                     .create_generation(lock, &app_name)
                     .whatever("unable to create app generation")?;
@@ -1127,9 +1136,11 @@ fn install_app_bundle<S: BundleSource>(
                             .map(|p| p as &dyn StoredBlockProvider),
                         &mut progress,
                     );
-                    (decode_result, handle.join().unwrap())
+                    (decode_result, handle.join())
                 });
                 decode_result.whatever("unable to decode delta app payload")?;
+                let xdelta_result = xdelta_result
+                    .map_err(|_| whatever!("delta app payload worker terminated unexpectedly"))?;
                 xdelta_result.whatever("unable to decompress delta app payload")?;
                 let (target_hash, target_size) = target_writer
                     .finalize_synced()
@@ -1195,7 +1206,7 @@ fn install_app_bundle<S: BundleSource>(
             if !app_generations.contains_key(&type_app_archive.app) {
                 let lock = app_locks
                     .get(&type_app_archive.app)
-                    .expect("app payload must be listed in bundle header");
+                    .ok_or_else(|| whatever!("app payload is missing its preflight lock"))?;
                 let gen = app_manager
                     .create_generation(lock, &type_app_archive.app)
                     .whatever("unable to create app generation")?;
@@ -1271,7 +1282,7 @@ fn install_app_bundle<S: BundleSource>(
         if bundle_components_app.as_ref() == Some(app_name) {
             let bundle_components = bundle_components
                 .as_ref()
-                .expect("bundle components owner requires bundle components");
+                .ok_or_else(|| whatever!("app component metadata disappeared after preflight"))?;
             crate::components::write_bundle_components(
                 bundle_components,
                 &gen_dir.join(".rugix/components"),
@@ -1577,7 +1588,10 @@ impl ProgressCursors {
 
 impl StatusSegment for UpdateStatus {
     fn draw(&self, ctx: &mut rugix_cli::DrawCtx) {
-        let state = self.state.lock().unwrap();
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.bytes_total > 0 {
             ProgressBar::new(state.bytes_read, state.bytes_total).draw(ctx);
         } else {
@@ -2088,7 +2102,8 @@ fn install_update_bundle<R: BundleSource>(
         },
         || {
             if !bundle_reader.header().is_incremental {
-                let (entry_idx, _) = boot_group.expect("boot group validated during preflight");
+                let (entry_idx, _) = boot_group
+                    .ok_or_else(|| whatever!("full update requires a target boot group"))?;
                 system
                     .boot_flow()
                     .pre_install(system, *entry_idx)
@@ -2155,7 +2170,10 @@ fn install_update_bundle<R: BundleSource>(
             let current_progress =
                 ((bytes_read.raw as f64) / (bytes_total.raw as f64) * 100.0).min(100.0);
             {
-                let mut update_state = update_status.state.lock().unwrap();
+                let mut update_state = update_status
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 update_state.bytes_read = bytes_read.raw;
                 update_state.bytes_total = bytes_total.raw;
             }
@@ -2322,9 +2340,12 @@ fn install_update_bundle<R: BundleSource>(
                                 &mut progress,
                             );
                             trace!("finished decoding payload into pipe");
-                            (decode_result, handle.join().unwrap())
+                            (decode_result, handle.join())
                         });
                         decode_result.whatever("unable to decode payload")?;
+                        let xdelta_result = xdelta_result.map_err(|_| {
+                            whatever!("delta payload worker terminated unexpectedly")
+                        })?;
                         xdelta_result.whatever("unable to decode delta update")?;
                         let (target_hash, target_size) = target_writer
                             .finalize_synced()
@@ -2421,7 +2442,7 @@ fn install_update_bundle<R: BundleSource>(
             let type_execute = payload_entry
                 .type_execute
                 .as_ref()
-                .expect("execute delivery validated during preflight");
+                .ok_or_else(|| whatever!("execute delivery disappeared after preflight"))?;
             eprintln!("executing update payload {}", payload.idx(),);
             let target = CustomTarget::new(type_execute.handler.iter().map(|arg| arg.as_str()))?;
             payload
@@ -2438,9 +2459,11 @@ fn install_update_bundle<R: BundleSource>(
     emit_progress(100.0);
 
     let reboot_type = if !bundle_reader.header().is_incremental {
+        let (target, _) =
+            boot_group.ok_or_else(|| whatever!("full update requires a target boot group"))?;
         system
             .boot_flow()
-            .post_install(system, boot_group.unwrap().0)
+            .post_install(system, *target)
             .whatever("error executing post-install step")?;
         UpdateRebootType::Yes
     } else {
@@ -2533,7 +2556,7 @@ impl PayloadTarget for CustomTarget {
         self.child
             .stdin
             .as_mut()
-            .unwrap()
+            .ok_or_else(|| whatever!("custom update handler stdin is already closed"))?
             .write_all(bytes)
             .whatever("unable to write payload to custom handler")
     }
@@ -2541,7 +2564,12 @@ impl PayloadTarget for CustomTarget {
     fn finalize(mut self) -> rugix_bundle::BundleResult<()> {
         info!("waiting on custom update handler to finalize");
         // Flush all bytes and close stdin.
-        drop(self.child.stdin.take().unwrap());
+        let stdin = self
+            .child
+            .stdin
+            .take()
+            .ok_or_else(|| whatever!("custom update handler stdin is already closed"))?;
+        drop(stdin);
         let status = self
             .child
             .wait()
@@ -2993,6 +3021,7 @@ mod tests {
     use super::finalize_payload_and_record;
     use super::preflight_system_deliveries;
     use super::prepare_system_update;
+    use super::require_update_target;
     use super::requires_bundle_components;
     use super::resolve_mark_good_group;
     use super::run_app_activation_transaction;
@@ -3079,6 +3108,12 @@ mod tests {
         let error = resolve_mark_good_group(&groups, None, None).unwrap_err();
         assert!(format!("{error:?}").contains("unable to determine the active boot group"));
         assert!(resolve_mark_good_group(&groups, None, Some("missing")).is_err());
+    }
+
+    #[test]
+    fn reboot_modes_without_a_target_return_command_errors() {
+        assert!(require_update_target::<usize>(None, "reboot").is_err());
+        assert_eq!(require_update_target(Some(1usize), "reboot").unwrap(), 1);
     }
 
     #[test]
