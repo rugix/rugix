@@ -235,4 +235,20 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(std::fs::read(&output).unwrap(), b"existing");
     }
+
+    #[test]
+    fn failed_atomic_output_rename_preserves_existing_destination() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("existing-directory");
+        std::fs::create_dir(&output).unwrap();
+
+        let result = atomic_output(&output, |writer| -> BundleResult<()> {
+            writer.write_all(b"complete bundle bytes").unwrap();
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert!(output.is_dir());
+        assert_eq!(std::fs::read_dir(tempdir.path()).unwrap().count(), 1);
+    }
 }
