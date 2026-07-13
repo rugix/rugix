@@ -78,7 +78,9 @@ use crate::payload_db::{self};
 use crate::system_state;
 use crate::utils::clear_flag;
 use crate::utils::reboot;
+use crate::utils::set_deferred_reboot_target;
 use crate::utils::set_flag;
+use crate::utils::set_flag_data;
 use crate::utils::DEFERRED_SPARE_REBOOT_FLAG;
 
 fn create_rugix_state_directory() -> SystemResult<()> {
@@ -105,9 +107,9 @@ fn lock_update() -> SystemResult<nix::fcntl::Flock<File>> {
 }
 
 fn set_rugix_state_flag(name: &str, value: Option<&str>) -> SystemResult<()> {
-    fs::write(
+    set_flag_data(
         Path::new("/run/rugix/state/.rugix").join(name),
-        value.unwrap_or_default(),
+        value.unwrap_or_default().as_bytes(),
     )
     .whatever("unable to write state flag")
     .field("name", name.to_owned())
@@ -115,16 +117,9 @@ fn set_rugix_state_flag(name: &str, value: Option<&str>) -> SystemResult<()> {
 
 fn clear_rugix_state_flag(name: &str) -> SystemResult<()> {
     let path = Path::new("/run/rugix/state/.rugix").join(name);
-    fs::remove_file(&path).or_else(|error| match error.kind() {
-        io::ErrorKind::NotFound => Ok(()),
-        _ => Err(error
-            .whatever("unable to clear state flag")
-            .field("name", name.to_owned())),
-    })?;
-    if path.exists() {
-        return Err(whatever!("unable to clear state flag").field("name", name.to_owned()));
-    }
-    Ok(())
+    clear_flag(&path)
+        .whatever("unable to clear state flag")
+        .field("name", name.to_owned())
 }
 
 pub fn main() -> SystemResult<()> {
@@ -281,7 +276,10 @@ pub fn main() -> SystemResult<()> {
                                 .whatever("unable to set next boot group")?;
                         }
                         UpdateRebootType::Deferred => {
-                            set_flag(DEFERRED_SPARE_REBOOT_FLAG)?;
+                            let (_, target) = boot_group.ok_or_else(|| {
+                                whatever!("deferred reboot requires a target boot group")
+                            })?;
+                            set_deferred_reboot_target(target.name())?;
                         }
                     }
                 }
@@ -2460,19 +2458,21 @@ pub enum UpdateCommand {
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum UpdateRebootType {
-    /// Reboot into the newly installed system.
+    /// Durably select the new system and reboot after synchronizing all payload data.
     Yes,
-    /// Do nothing.
+    /// Leave boot selection unchanged after synchronizing all payload data.
     No,
-    /// Just set the flags without rebooting.
+    /// Durably select the new system without rebooting.
     ///
     /// This will tell the bootloader integration to boot into the new system next without
     /// actually triggering a reboot.
     Set,
-    /// Set the deferred spare reboot marker.
+    /// Durably record the selected new system without changing boot selection yet.
     ///
     /// Rugix will itself remember that an update has been installed. On the next boot,
-    /// it will remove the marker and reboot into the new system. This allows the system
+    /// it will select the recorded group, remove the marker, and reboot into the new
+    /// system. The marker remains in place if boot selection fails, so initialization
+    /// can retry. This allows the system
     /// to be shutoff after installing the update. On the next boot, Rugix will then try
     /// to boot into the new version.
     Deferred,
