@@ -249,25 +249,25 @@ fn setup_state_and_exec_init(
         data_partition.path().to_path_buf(),
         Path::new(MOUNT_POINT_DATA).to_path_buf(),
     );
-    if let Err(error) = data_driver.mount(&driver_ctx) {
-        warn!(
-            error = ?error,
-            policy = if data_partition_config.fail_closed_on_mount_error.unwrap_or(false) {
-                "fail-closed"
-            } else {
-                "ephemeral-fallback"
-            },
-            "DATA PARTITION MOUNT FAILED; PERSISTENT STATE IS UNAVAILABLE"
-        );
-        write_data_mount_diagnostic(system, &format!("{error:?}"));
-        if data_partition_config
-            .fail_closed_on_mount_error
-            .unwrap_or(false)
-        {
+    let fail_closed = data_partition_config
+        .fail_closed_on_mount_error
+        .unwrap_or(false);
+    let mount_error = match data_mount_error_policy(data_driver.mount(&driver_ctx), fail_closed) {
+        Ok(error) => error,
+        Err(error) => {
+            write_data_mount_diagnostic(system, &format!("{error:?}"));
             return Err(error).whatever(
                 "mounting the data partition failed and fail-closed policy is configured",
             );
         }
+    };
+    if let Some(error) = mount_error {
+        warn!(
+            error = ?error,
+            policy = "ephemeral-fallback",
+            "DATA PARTITION MOUNT FAILED; PERSISTENT STATE IS UNAVAILABLE"
+        );
+        write_data_mount_diagnostic(system, &format!("{error:?}"));
         log_ignored_error(
             fs::create_dir_all(Path::new(MOUNT_POINT_DATA).join(".rugix")),
             "unable to create data error log directory",
@@ -363,6 +363,14 @@ fn setup_state_and_exec_init(
     exec_chroot_init(&root_dir, requires_commit)?;
 
     Ok(())
+}
+
+fn data_mount_error_policy<E>(mount: Result<(), E>, fail_closed: bool) -> Result<Option<E>, E> {
+    match mount {
+        Ok(()) => Ok(None),
+        Err(error) if fail_closed => Err(error),
+        Err(error) => Ok(Some(error)),
+    }
 }
 
 fn write_data_mount_diagnostic(system: &System, diagnostic: &str) {
@@ -1138,6 +1146,7 @@ mod tests {
     use crate::system::data_partition::DriverContext;
     use crate::system::SystemResult;
 
+    use super::data_mount_error_policy;
     use super::data_partition_is_new;
     use super::format_data_partition_if_new;
     use super::validated_profile_name;
@@ -1262,5 +1271,18 @@ mod tests {
         for name in ["", "../outside", "nested/name", "/absolute"] {
             assert!(validated_profile_name(name).is_err());
         }
+    }
+
+    #[test]
+    fn data_mount_policy_covers_normal_fail_closed_and_ephemeral_modes() {
+        assert_eq!(data_mount_error_policy::<&str>(Ok(()), false), Ok(None));
+        assert_eq!(
+            data_mount_error_policy(Err("mount failed"), false),
+            Ok(Some("mount failed"))
+        );
+        assert_eq!(
+            data_mount_error_policy(Err("mount failed"), true),
+            Err("mount failed")
+        );
     }
 }
