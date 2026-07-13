@@ -128,7 +128,6 @@ pub(crate) fn sfdisk_read(dev: &Path) -> Result<PartitionTable, Report<DiskError
         disk_size: size,
         block_size: NumBytes::from_raw(json_table.sector_size),
         gpt_first_usable: json_table.first_lba.map(NumBlocks::from_raw),
-        gpt_last_usable: json_table.last_lba.map(NumBlocks::from_raw),
         gpt_table_length,
         partitions,
     })
@@ -157,9 +156,9 @@ fn sfdisk_script(table: &PartitionTable) -> String {
         if let Some(first_usable) = table.gpt_first_usable {
             writeln!(&mut script, "first-lba: {}", first_usable.into_raw()).unwrap();
         }
-        if let Some(last_usable) = table.gpt_last_usable {
-            writeln!(&mut script, "last-lba: {}", last_usable.into_raw()).unwrap();
-        }
+        // Do not copy `last-lba` from `sfdisk --dump`. It still describes the
+        // original image after the backing device has been enlarged. Omitting
+        // it lets `sfdisk` relocate the backup GPT to the current end.
         if let Some(table_length) = table.gpt_table_length {
             writeln!(&mut script, "table-length: {table_length}").unwrap();
         }
@@ -226,8 +225,7 @@ struct SfdiskJsonTable {
     sector_size: u64,
     #[serde(rename = "firstlba")]
     first_lba: Option<u64>,
-    #[serde(rename = "lastlba")]
-    last_lba: Option<u64>,
+    // `lastlba` is intentionally not retained; see `sfdisk_script`.
     #[serde(rename = "table-length")]
     table_length: Option<String>,
     // This field is missing if there are no partitions.
@@ -306,7 +304,6 @@ mod tests {
 
         let table = json.partition_table;
         assert_eq!(table.first_lba, Some(64));
-        assert_eq!(table.last_lba, Some(8127));
         assert_eq!(table.table_length.as_deref(), Some("256"));
         assert_eq!(table.sector_size, 4096);
     }
@@ -319,7 +316,6 @@ mod tests {
         );
         table.block_size = NumBytes::from_raw(4096);
         table.gpt_first_usable = Some(NumBlocks::from_raw(64));
-        table.gpt_last_usable = Some(NumBlocks::from_raw(8127));
         table.gpt_table_length = Some(256);
         table.partitions.push(Partition {
             number: 1,
@@ -336,7 +332,7 @@ mod tests {
         assert!(script.contains("unit: sectors\n"));
         assert!(script.contains("sector-size: 4096\n"));
         assert!(script.contains("first-lba: 64\n"));
-        assert!(script.contains("last-lba: 8127\n"));
+        assert!(!script.contains("last-lba:"));
         assert!(script.contains("table-length: 256\n"));
         assert!(script.contains(r#",name="boot A \x60\x24\x60 \xc3\xa9",attrs="GUID:63",bootable"#));
     }

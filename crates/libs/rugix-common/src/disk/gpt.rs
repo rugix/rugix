@@ -14,6 +14,12 @@ use crate::utils::const_helpers::const_for;
 /// Number of blocks used by a GPT partition table.
 pub const GPT_TABLE_BLOCKS: NumBlocks = NumBlocks::from_raw(33);
 
+/// Default number of entries in a GPT partition-entry array.
+pub const GPT_DEFAULT_TABLE_LENGTH: u64 = 128;
+
+/// Size of a standard GPT partition entry in bytes.
+pub const GPT_PARTITION_ENTRY_SIZE: u64 = 128;
+
 /// Length of the GUID string encoding.
 pub const GUID_STRING_LENGTH: usize = 36;
 

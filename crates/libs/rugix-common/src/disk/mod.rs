@@ -10,7 +10,6 @@ use serde::Serialize;
 use thiserror::Error;
 
 use self::gpt::Guid;
-use self::gpt::GPT_TABLE_BLOCKS;
 use self::gpt::GUID_STRING_LENGTH;
 use crate::partitions::DiskError;
 use crate::utils::ascii_numbers::parse_ascii_decimal_digit;
@@ -74,8 +73,6 @@ pub struct PartitionTable {
     pub block_size: NumBytes,
     /// First usable block recorded in a GPT header.
     pub gpt_first_usable: Option<NumBlocks>,
-    /// Last usable block recorded in a GPT header.
-    pub gpt_last_usable: Option<NumBlocks>,
     /// Number of entries in a non-default GPT partition-entry array.
     pub gpt_table_length: Option<u64>,
     /// Partitions of the disk.
@@ -90,7 +87,6 @@ impl PartitionTable {
             disk_size: size,
             block_size: NumBytes::from_raw(DEFAULT_BLOCK_SIZE),
             gpt_first_usable: None,
-            gpt_last_usable: None,
             gpt_table_length: None,
             partitions: Vec::new(),
         }
@@ -137,23 +133,37 @@ impl PartitionTable {
     /// The first usable block.
     pub fn first_usable_block(&self) -> NumBlocks {
         match self.disk_id {
-            DiskId::Mbr(_) => GPT_TABLE_BLOCKS + NumBlocks::ONE,
+            DiskId::Mbr(_) => gpt::GPT_TABLE_BLOCKS + NumBlocks::ONE,
             DiskId::Gpt(_) => self
                 .gpt_first_usable
-                .unwrap_or(GPT_TABLE_BLOCKS + NumBlocks::ONE),
+                .unwrap_or(self.gpt_table_blocks() + NumBlocks::ONE),
         }
     }
 
     /// The last usable block.
+    ///
+    /// For GPT disks, this is derived from the current device size rather than
+    /// the header's recorded end, which may be stale after an image is enlarged.
     pub fn last_usable_block(&self) -> NumBlocks {
         match self.disk_id {
             DiskId::Mbr(_) => {
                 (self.disk_size - NumBlocks::ONE).min(NumBlocks::from_raw(u32::MAX.into()))
             }
-            DiskId::Gpt(_) => self
-                .gpt_last_usable
-                .unwrap_or(self.disk_size - GPT_TABLE_BLOCKS - NumBlocks::ONE),
+            DiskId::Gpt(_) => self.disk_size - self.gpt_table_blocks() - NumBlocks::ONE,
         }
+    }
+
+    /// Number of blocks occupied by one GPT header and its partition-entry array.
+    fn gpt_table_blocks(&self) -> NumBlocks {
+        let table_length = self
+            .gpt_table_length
+            .unwrap_or(gpt::GPT_DEFAULT_TABLE_LENGTH);
+        let table_bytes = table_length.saturating_mul(gpt::GPT_PARTITION_ENTRY_SIZE);
+        let block_size = self.block_size.into_raw();
+        if block_size == 0 {
+            return gpt::GPT_TABLE_BLOCKS;
+        }
+        NumBlocks::from_raw(table_bytes.div_ceil(block_size).saturating_add(1))
     }
 
     /// Write the partition table to a device or image.
@@ -484,5 +494,20 @@ mod tests {
             NumBlocks::from_raw(2049).floor_align_to(NumBlocks::from_raw(2048)),
             NumBlocks::from_raw(2048)
         )
+    }
+
+    #[test]
+    fn gpt_last_usable_tracks_disk_size() {
+        let mut table = PartitionTable::new(
+            DiskId::Gpt(Guid::from_random_bytes([0; 16])),
+            NumBlocks::from_raw(8192),
+        );
+        table.block_size = NumBytes::from_raw(4096);
+        table.gpt_table_length = Some(256);
+
+        assert_eq!(table.last_usable_block(), NumBlocks::from_raw(8182));
+
+        table.disk_size = NumBlocks::from_raw(16384);
+        assert_eq!(table.last_usable_block(), NumBlocks::from_raw(16374));
     }
 }
