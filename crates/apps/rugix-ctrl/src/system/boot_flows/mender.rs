@@ -308,7 +308,11 @@ impl BootFlow for MenderGrub {
             .whatever("unable to load Grub environment")?;
         boot_env.insert("bootcount".to_owned(), "0".to_owned());
         boot_env.insert("upgrade_available".to_owned(), "0".to_owned());
-        if system.active_boot_entry().unwrap() == self.inner.entry_a {
+        if system
+            .require_active_boot_entry()
+            .whatever("unable to commit Mender GRUB boot flow")?
+            == self.inner.entry_a
+        {
             boot_env.insert(
                 "mender_boot_part".to_owned(),
                 self.inner.boot_part_a().to_string(),
@@ -410,7 +414,11 @@ impl BootFlow for MenderUboot {
         let mut boot_env = HashMap::new();
         boot_env.insert("bootcount".to_owned(), "0".to_owned());
         boot_env.insert("upgrade_available".to_owned(), "0".to_owned());
-        if system.active_boot_entry().unwrap() == self.inner.entry_a {
+        if system
+            .require_active_boot_entry()
+            .whatever("unable to commit Mender U-Boot flow")?
+            == self.inner.entry_a
+        {
             boot_env.insert(
                 "mender_boot_part".to_owned(),
                 self.inner.boot_part_a().to_string(),

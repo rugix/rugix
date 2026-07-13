@@ -242,6 +242,9 @@ impl BootFlow for RpiTryboot {
     }
 
     fn commit(&self, system: &System) -> BootFlowResult<()> {
+        let active = system
+            .require_active_boot_entry()
+            .whatever("unable to commit Raspberry Pi tryboot flow")?;
         let config_partition = system
             .require_config_partition()
             .whatever("unable to get config partition")?;
@@ -252,12 +255,12 @@ impl BootFlow for RpiTryboot {
                     .whatever("unable to create new autoboot file")?;
                 autoboot_new
                     .write_all(
-                        if system.active_boot_entry() == Some(self.inner.entry_a) {
+                        if active == self.inner.entry_a {
                             AUTOBOOT_A
-                        } else if system.active_boot_entry() == Some(self.inner.entry_b) {
+                        } else if active == self.inner.entry_b {
                             AUTOBOOT_B
                         } else {
-                            panic!("should never happen");
+                            bail!("active boot group does not belong to the tryboot flow");
                         }
                         .as_bytes(),
                     )
@@ -330,18 +333,21 @@ impl BootFlow for RpiUboot {
     }
 
     fn commit(&self, system: &System) -> BootFlowResult<()> {
+        let active = system
+            .require_active_boot_entry()
+            .whatever("unable to commit Raspberry Pi U-Boot flow")?;
         let config_partition = system
             .require_config_partition()
             .whatever("unable to get config partition")?;
         config_partition
             .ensure_writable(|| {
                 let mut bootpart_env = UBootEnv::new();
-                if system.active_boot_entry() == Some(self.inner.entry_a) {
+                if active == self.inner.entry_a {
                     bootpart_env.set("bootpart", "2")
-                } else if system.active_boot_entry() == Some(self.inner.entry_b) {
+                } else if active == self.inner.entry_b {
                     bootpart_env.set("bootpart", "3");
                 } else {
-                    panic!("should never happen");
+                    bail!("active boot group does not belong to the Raspberry Pi U-Boot flow");
                 };
                 let new_path = config_partition.path().join("bootpart.default.env.new");
                 bootpart_env
@@ -413,18 +419,21 @@ impl BootFlow for Uboot {
     }
 
     fn commit(&self, system: &System) -> BootFlowResult<()> {
+        let active = system
+            .require_active_boot_entry()
+            .whatever("unable to commit U-Boot flow")?;
         let config_partition = system
             .require_config_partition()
             .whatever("unable to get config partition")?;
         config_partition
             .ensure_writable(|| {
                 let mut boot_env = hashbrown::HashMap::new();
-                if system.active_boot_entry() == Some(self.inner.entry_a) {
+                if active == self.inner.entry_a {
                     boot_env.insert("rugix_bootpart".to_owned(), "2".to_owned());
-                } else if system.active_boot_entry() == Some(self.inner.entry_b) {
+                } else if active == self.inner.entry_b {
                     boot_env.insert("rugix_bootpart".to_owned(), "3".to_owned());
                 } else {
-                    panic!("should never happen");
+                    bail!("active boot group does not belong to the U-Boot flow");
                 };
                 set_vars(&boot_env)?;
                 Ok(())
@@ -540,13 +549,16 @@ impl BootFlow for GrubEfi {
     }
 
     fn commit(&self, system: &System) -> BootFlowResult<()> {
+        let active = system
+            .require_active_boot_entry()
+            .whatever("unable to commit GRUB flow")?;
         let mut envblk = HashMap::new();
-        if system.active_boot_entry() == Some(self.inner.entry_a) {
+        if active == self.inner.entry_a {
             envblk.insert(RUGIX_BOOTPART.to_owned(), "2".to_owned());
-        } else if system.active_boot_entry() == Some(self.inner.entry_b) {
+        } else if active == self.inner.entry_b {
             envblk.insert(RUGIX_BOOTPART.to_owned(), "3".to_owned());
         } else {
-            panic!("should never happen");
+            bail!("active boot group does not belong to the GRUB flow");
         };
         let config_partition = system
             .require_config_partition()

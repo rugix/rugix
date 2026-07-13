@@ -141,6 +141,11 @@ impl System {
         self.active_boot_entry
     }
 
+    /// Return the active boot group or an error when it could not be detected.
+    pub fn require_active_boot_entry(&self) -> SystemResult<BootGroupIdx> {
+        require_active_boot_entry(self.active_boot_entry)
+    }
+
     /// First entry that is not the default.
     pub fn spare_entry(&self) -> SystemResult<Option<(BootGroupIdx, &BootGroup)>> {
         let default = self
@@ -183,6 +188,21 @@ impl System {
         self.boot_flow
             .reboot(self)
             .whatever("unable to reboot system")
+    }
+}
+
+fn require_active_boot_entry(active: Option<BootGroupIdx>) -> SystemResult<BootGroupIdx> {
+    active.ok_or_else(|| Report::whatever("unable to determine the active boot group"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::require_active_boot_entry;
+
+    #[test]
+    fn requiring_an_unknown_active_boot_group_returns_an_error() {
+        let error = require_active_boot_entry(None).unwrap_err();
+        assert!(format!("{error:?}").contains("unable to determine the active boot group"));
     }
 }
 
