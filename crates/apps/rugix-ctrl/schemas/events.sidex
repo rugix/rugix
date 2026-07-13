@@ -3,10 +3,20 @@
 variant Event {
     /// Emitted when the update progress changes.
     UpdateProgress: UpdateProgressEvent,
+    /// Emitted when a component compatibility check is skipped.
+    CompatibilityCheckSkipped: CompatibilityCheckSkippedEvent,
 }
 
 /// Event emitted when the update progress changes.
 record UpdateProgressEvent {
     /// The update progress.
     progress: f64,
+}
+
+/// Reason a component compatibility check was skipped.
+record CompatibilityCheckSkippedEvent {
+    /// Update scope, such as `system` or `app`.
+    scope: string,
+    /// Human-readable skip reason.
+    reason: string,
 }
