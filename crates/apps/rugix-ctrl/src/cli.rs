@@ -48,6 +48,7 @@ use tracing::trace;
 use tracing::warn;
 
 use crate::config::config::Config;
+use crate::config::events::CompatibilityCheckSkippedEvent;
 use crate::config::events::Event;
 use crate::config::events::UpdateProgressEvent;
 use crate::config::load_ctrl_config;
@@ -963,10 +964,7 @@ fn install_app_bundle<S: BundleSource>(
     if !options.skip_compatibility_check {
         check_app_bundle_compatibility(config, &bundle_reader, &touched_apps)?;
     } else {
-        warn!(
-            reason = "explicit --skip-compatibility-check option",
-            "skipping app bundle compatibility check"
-        );
+        report_compatibility_skip("app", "explicit --skip-compatibility-check option");
     }
 
     let mut app_generations: std::collections::HashMap<String, (u64, PathBuf)> =
@@ -1665,9 +1663,9 @@ fn check_system_update_compatibility<S: BundleSource>(
                 "update bundle does not declare required component metadata; use --skip-compatibility-check to bypass the configured policy"
             );
         }
-        warn!(
-            reason = "bundle component metadata is absent and not required by policy",
-            "skipping update compatibility check"
+        report_compatibility_skip(
+            "system",
+            "bundle component metadata is absent and not required by policy",
         );
         return Ok(());
     };
@@ -1697,10 +1695,7 @@ fn check_app_bundle_compatibility<S: BundleSource>(
         );
     }
     if touched_apps.is_empty() {
-        warn!(
-            reason = "bundle contains no app payloads",
-            "skipping app compatibility check"
-        );
+        report_compatibility_skip("app", "bundle contains no app payloads");
         return Ok(());
     }
     if bundle_components.is_none() {
@@ -1720,6 +1715,26 @@ fn requires_bundle_components(config: &Config) -> bool {
         .as_ref()
         .and_then(|config| config.require_bundle_components)
         .unwrap_or(false)
+}
+
+fn report_compatibility_skip(scope: &str, reason: &str) {
+    warn!(scope, reason, "skipping component compatibility check");
+    if !rugix_cli::stdout_is_piped() {
+        return;
+    }
+    let event = Event::CompatibilityCheckSkipped(CompatibilityCheckSkippedEvent {
+        scope: scope.to_owned(),
+        reason: reason.to_owned(),
+    });
+    let result = serde_json::to_vec(&event)
+        .map_err(io::Error::other)
+        .and_then(|mut bytes| {
+            bytes.push(b'\n');
+            std::io::stdout().write_all(&bytes)
+        });
+    if let Err(error) = result {
+        warn!(%error, "unable to emit compatibility-skip JSON event");
+    }
 }
 
 fn check_app_generation_compatibility(
@@ -1973,10 +1988,7 @@ fn install_update_bundle<R: BundleSource>(
     if !options.skip_compatibility_check {
         check_system_update_compatibility(config, &bundle_reader)?;
     } else {
-        warn!(
-            reason = "explicit --skip-compatibility-check option",
-            "skipping system update compatibility check"
-        );
+        report_compatibility_skip("system", "explicit --skip-compatibility-check option");
     }
 
     let update_hooks = HooksLoader::default()
@@ -3274,6 +3286,17 @@ mod tests {
         let required: crate::config::config::Config =
             toml::from_str("[compatibility]\nrequireBundleComponents = true\n").unwrap();
         assert!(requires_bundle_components(&required));
+
+        let event = crate::config::events::Event::CompatibilityCheckSkipped(
+            crate::config::events::CompatibilityCheckSkippedEvent {
+                scope: "system".to_owned(),
+                reason: "explicit bypass".to_owned(),
+            },
+        );
+        let json = serde_json::to_value(event).unwrap();
+        assert_eq!(json["event"], "CompatibilityCheckSkipped");
+        assert_eq!(json["scope"], "system");
+        assert_eq!(json["reason"], "explicit bypass");
     }
 
     #[test]
