@@ -961,9 +961,12 @@ fn install_app_bundle<S: BundleSource>(
     }
 
     if !options.skip_compatibility_check {
-        check_app_bundle_compatibility(&bundle_reader, &touched_apps)?;
+        check_app_bundle_compatibility(config, &bundle_reader, &touched_apps)?;
     } else {
-        warn!("skipping app bundle compatibility check");
+        warn!(
+            reason = "explicit --skip-compatibility-check option",
+            "skipping app bundle compatibility check"
+        );
     }
 
     let mut app_generations: std::collections::HashMap<String, (u64, PathBuf)> =
@@ -1581,10 +1584,19 @@ fn verify_bundle_signature<S: BundleSource>(
 }
 
 fn check_system_update_compatibility<S: BundleSource>(
+    config: &Config,
     bundle_reader: &BundleReader<S>,
 ) -> SystemResult<()> {
     let Some(bundle_components) = bundle_reader.header().components.as_ref() else {
-        warn!("update bundle does not declare components, skipping compatibility check");
+        if requires_bundle_components(config) {
+            bail!(
+                "update bundle does not declare required component metadata; use --skip-compatibility-check to bypass the configured policy"
+            );
+        }
+        warn!(
+            reason = "bundle component metadata is absent and not required by policy",
+            "skipping update compatibility check"
+        );
         return Ok(());
     };
     let installed = crate::components::InstalledComponents::load()
@@ -1602,12 +1614,21 @@ fn check_system_update_compatibility<S: BundleSource>(
 }
 
 fn check_app_bundle_compatibility<S: BundleSource>(
+    config: &Config,
     bundle_reader: &BundleReader<S>,
     touched_apps: &[String],
 ) -> SystemResult<()> {
     let bundle_components = bundle_reader.header().components.as_ref();
+    if bundle_components.is_none() && requires_bundle_components(config) {
+        bail!(
+            "app bundle does not declare required component metadata; use --skip-compatibility-check to bypass the configured policy"
+        );
+    }
     if touched_apps.is_empty() {
-        warn!("app bundle does not contain app payloads, skipping compatibility check");
+        warn!(
+            reason = "bundle contains no app payloads",
+            "skipping app compatibility check"
+        );
         return Ok(());
     }
     if bundle_components.is_none() {
@@ -1619,6 +1640,14 @@ fn check_app_bundle_compatibility<S: BundleSource>(
         .check_app_update(touched_apps, bundle_components)
         .whatever("unable to check app bundle compatibility")?;
     require_compatible_components(output)
+}
+
+fn requires_bundle_components(config: &Config) -> bool {
+    config
+        .compatibility
+        .as_ref()
+        .and_then(|config| config.require_bundle_components)
+        .unwrap_or(false)
 }
 
 fn check_app_generation_compatibility(
@@ -1857,9 +1886,12 @@ fn install_update_bundle<R: BundleSource>(
     }
 
     if !options.skip_compatibility_check {
-        check_system_update_compatibility(&bundle_reader)?;
+        check_system_update_compatibility(config, &bundle_reader)?;
     } else {
-        warn!("skipping system update compatibility check");
+        warn!(
+            reason = "explicit --skip-compatibility-check option",
+            "skipping system update compatibility check"
+        );
     }
 
     let payload_destinations = preflight_system_payloads(
@@ -2763,6 +2795,7 @@ mod tests {
 
     use super::clear_target_overlay_with;
     use super::preflight_system_deliveries;
+    use super::requires_bundle_components;
     use super::validate_app_archive;
     use super::validate_app_deliveries;
     use super::AppPayloadDelivery;
@@ -3072,5 +3105,15 @@ mod tests {
         assert!(
             validate_app_archive(std::fs::File::open(redirected_write.path()).unwrap()).is_err()
         );
+    }
+
+    #[test]
+    fn component_metadata_policy_is_explicit_and_defaults_to_compatible() {
+        let default = crate::config::config::Config::default();
+        assert!(!requires_bundle_components(&default));
+
+        let required: crate::config::config::Config =
+            toml::from_str("[compatibility]\nrequireBundleComponents = true\n").unwrap();
+        assert!(requires_bundle_components(&required));
     }
 }
