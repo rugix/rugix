@@ -696,29 +696,48 @@ fn delta_payload_filenames(
 }
 
 pub fn unpack(src: &Path, dst: &Path) -> BundleResult<()> {
-    std::fs::create_dir_all(dst).unwrap();
-    let source = FileSource::from_unbuffered(File::open(&src).unwrap());
+    if std::fs::symlink_metadata(dst)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        bail!("bundle output directory must not be a symbolic link");
+    }
+    std::fs::create_dir_all(dst).whatever("unable to create bundle output directory")?;
+    let source = FileSource::from_unbuffered(
+        File::open(src).whatever("unable to open bundle for unpacking")?,
+    );
     let mut reader = BundleReader::start(source, None)?;
     let Some(manifest) = &reader.header().manifest else {
-        panic!("unpacking requires a manifest");
+        bail!("unpacking requires a manifest");
     };
-    let manifest = serde_json::from_str::<BundleManifest>(manifest).unwrap();
+    let manifest = serde_json::from_str::<BundleManifest>(manifest)
+        .whatever("unable to parse embedded bundle manifest")?;
+    rugix_bundle::manifest::validate_manifest_paths(&manifest)?;
     std::fs::write(
         dst.join("rugix-bundle.toml"),
-        toml::to_string_pretty(&manifest).unwrap(),
+        toml::to_string_pretty(&manifest).whatever("unable to serialize bundle manifest")?,
     )
-    .unwrap();
+    .whatever("unable to write unpacked bundle manifest")?;
     let payload_dir = dst.join("payloads");
-    std::fs::create_dir_all(&payload_dir).unwrap();
+    std::fs::create_dir_all(&payload_dir).whatever("unable to create payload output directory")?;
     while let Some(payload_reader) = reader.next_payload()? {
         let filename = &manifest.payloads[payload_reader.idx()].filename;
         info!(%filename, "unpacking bundle payload");
+        let relative = rugix_common::path::ValidatedRelativePath::new(filename.clone())
+            .whatever("invalid payload filename")?;
+        rugix_common::path::ensure_no_symlink_components(&payload_dir, &relative)
+            .whatever("payload output path contains a symbolic link")?;
+        let target_path = payload_dir.join(&relative);
+        if let Some(parent) = target_path.parent() {
+            std::fs::create_dir_all(parent)
+                .whatever("unable to create payload output parent directory")?;
+        }
         let target = std::fs::OpenOptions::new()
             .create(true)
             .truncate(true)
             .read(true)
             .write(true)
-            .open(payload_dir.join(filename))
+            .open(target_path)
             .whatever("unable to open payload target")?;
         payload_reader.decode_into(target, None, &mut |_| {})?;
     }
@@ -734,6 +753,7 @@ mod tests {
     use rugix_bundle::manifest::UpdateType;
 
     use super::delta_payload_filenames;
+    use super::unpack;
 
     fn payload(slot: &str, filename: &str) -> Payload {
         Payload::new(
@@ -758,6 +778,37 @@ mod tests {
             ("old-a.img".to_owned(), "renamed-a.img".to_owned())
         );
         assert!(delta_payload_filenames(&old, &new, 0, 2).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unpack_rejects_symlinked_payload_output_components() {
+        use std::os::unix::fs::symlink;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let source_dir = tempdir.path().join("source");
+        std::fs::create_dir_all(source_dir.join("payloads/redirect")).unwrap();
+        let manifest = BundleManifest::new(
+            UpdateType::Full,
+            vec![payload("system", "redirect/system.img")],
+        );
+        std::fs::write(
+            source_dir.join("rugix-bundle.toml"),
+            toml::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(source_dir.join("payloads/redirect/system.img"), b"payload").unwrap();
+        let bundle = tempdir.path().join("bundle.rugixb");
+        rugix_bundle::builder::pack(&source_dir, &bundle).unwrap();
+
+        let output = tempdir.path().join("output");
+        let outside = tempdir.path().join("outside");
+        std::fs::create_dir_all(output.join("payloads")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, output.join("payloads/redirect")).unwrap();
+
+        assert!(unpack(&bundle, &output).is_err());
+        assert!(!outside.join("system.img").exists());
     }
 }
 
