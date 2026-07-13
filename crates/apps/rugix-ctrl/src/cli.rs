@@ -1934,6 +1934,19 @@ where
     }
 }
 
+fn prepare_system_update<T>(
+    preflight: impl FnOnce() -> SystemResult<T>,
+    pre_update_hook: impl FnOnce() -> SystemResult<()>,
+    overlay_cleanup: impl FnOnce() -> SystemResult<()>,
+    pre_install: impl FnOnce() -> SystemResult<()>,
+) -> SystemResult<T> {
+    let preflight = preflight()?;
+    pre_update_hook()?;
+    overlay_cleanup()?;
+    pre_install()?;
+    Ok(preflight)
+}
+
 fn install_update_bundle<R: BundleSource>(
     system: &System,
     config: &Config,
@@ -1966,36 +1979,44 @@ fn install_update_bundle<R: BundleSource>(
         );
     }
 
-    let payload_destinations = preflight_system_payloads(
-        bundle_reader.header(),
-        system.slots(),
-        boot_group.map(|(_, group)| *group),
-    )?;
-
     let update_hooks = HooksLoader::default()
         .load_hooks("update-install")
         .whatever("unable to load `update-install` hooks")?;
     let hook_vars = vars! {
         RUGIX_BOOT_GROUP = boot_group.map(|g| g.1.name()).unwrap_or(""),
     };
-    update_hooks
-        .run_hooks("pre-update", hook_vars.clone(), &Default::default())
-        .whatever("error running `pre-update` hooks")?;
-
-    if !keep_overlay {
-        if let Some(boot_group) = &boot_group {
-            let spare_overlay_dir = overlay_dir(boot_group.1);
-            clear_target_overlay(&spare_overlay_dir)?;
-        }
-    }
-
-    if !bundle_reader.header().is_incremental {
-        let (entry_idx, _) = boot_group.expect("boot group validated during preflight");
-        system
-            .boot_flow()
-            .pre_install(system, *entry_idx)
-            .whatever("error executing pre-install step")?;
-    }
+    let payload_destinations = prepare_system_update(
+        || {
+            preflight_system_payloads(
+                bundle_reader.header(),
+                system.slots(),
+                boot_group.map(|(_, group)| *group),
+            )
+        },
+        || {
+            update_hooks
+                .run_hooks("pre-update", hook_vars.clone(), &Default::default())
+                .whatever("error running `pre-update` hooks")
+        },
+        || {
+            if !keep_overlay {
+                if let Some(boot_group) = &boot_group {
+                    clear_target_overlay(&overlay_dir(boot_group.1))?;
+                }
+            }
+            Ok(())
+        },
+        || {
+            if !bundle_reader.header().is_incremental {
+                let (entry_idx, _) = boot_group.expect("boot group validated during preflight");
+                system
+                    .boot_flow()
+                    .pre_install(system, *entry_idx)
+                    .whatever("error executing pre-install step")?;
+            }
+            Ok(())
+        },
+    )?;
 
     let update_status = rugix_cli::add_status(UpdateStatus {
         state: Mutex::new(UpdateState {
@@ -2871,6 +2892,7 @@ mod tests {
 
     use super::clear_target_overlay_with;
     use super::preflight_system_deliveries;
+    use super::prepare_system_update;
     use super::requires_bundle_components;
     use super::run_app_activation_transaction;
     use super::validate_app_archive;
@@ -3029,6 +3051,65 @@ mod tests {
             Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
         })
         .is_err());
+    }
+
+    #[test]
+    fn failed_preflight_runs_no_mutating_update_stage() {
+        use std::cell::Cell;
+
+        let hook = Cell::new(false);
+        let overlay = Cell::new(false);
+        let bootloader = Cell::new(false);
+        let target = Cell::new(false);
+        let payload_database = Cell::new(false);
+        let result = prepare_system_update(
+            || -> crate::system::SystemResult<()> { reportify::bail!("invalid destination") },
+            || {
+                hook.set(true);
+                Ok(())
+            },
+            || {
+                overlay.set(true);
+                Ok(())
+            },
+            || {
+                bootloader.set(true);
+                Ok(())
+            },
+        );
+        if result.is_ok() {
+            target.set(true);
+            payload_database.set(true);
+        }
+        assert!(result.is_err());
+        assert!(!hook.get());
+        assert!(!overlay.get());
+        assert!(!bootloader.get());
+        assert!(!target.get());
+        assert!(!payload_database.get());
+    }
+
+    #[test]
+    fn failed_overlay_cleanup_stops_before_bootloader_or_payload_stages() {
+        use std::cell::Cell;
+
+        let pre_install = Cell::new(false);
+        let payload_written = Cell::new(false);
+        let prepared = prepare_system_update(
+            || Ok(()),
+            || Ok(()),
+            || -> crate::system::SystemResult<()> { reportify::bail!("injected overlay failure") },
+            || {
+                pre_install.set(true);
+                Ok(())
+            },
+        );
+        if prepared.is_ok() {
+            payload_written.set(true);
+        }
+        assert!(prepared.is_err());
+        assert!(!pre_install.get());
+        assert!(!payload_written.get());
     }
 
     #[test]
