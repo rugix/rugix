@@ -198,6 +198,9 @@ fn rugix_boot_flow(boot_entries: &BootGroups) -> BootFlowResult<RugixBootFlow> {
     let Some((entry_b_idx, entry_b)) = entries.next() else {
         bail!("invalid number of entries");
     };
+    if entries.next().is_some() {
+        bail!("Rugix boot flows require exactly two boot groups");
+    }
     let boot_a = entry_a.get_slot("boot");
     let boot_b = entry_b.get_slot("boot");
     let Some(system_a) = entry_a.get_slot("system") else {
@@ -226,6 +229,73 @@ struct RugixBootFlow {
     system_b: SlotIdx,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RugixGroup {
+    A,
+    B,
+}
+
+fn rugix_group(inner: &RugixBootFlow, entry: BootGroupIdx) -> BootFlowResult<RugixGroup> {
+    if entry == inner.entry_a {
+        Ok(RugixGroup::A)
+    } else if entry == inner.entry_b {
+        Ok(RugixGroup::B)
+    } else {
+        bail!("boot group does not belong to the Rugix boot flow")
+    }
+}
+
+fn rugix_group_from_boot_partition(
+    inner: &RugixBootFlow,
+    boot_partition: &str,
+) -> BootFlowResult<BootGroupIdx> {
+    match boot_partition {
+        "2" => Ok(inner.entry_a),
+        "3" => Ok(inner.entry_b),
+        _ => bail!("invalid default boot partition {boot_partition:?}"),
+    }
+}
+
+fn rugix_boot_partition(
+    inner: &RugixBootFlow,
+    entry: BootGroupIdx,
+) -> BootFlowResult<&'static str> {
+    match rugix_group(inner, entry)? {
+        RugixGroup::A => Ok("2"),
+        RugixGroup::B => Ok("3"),
+    }
+}
+
+fn rugix_should_set_spare(
+    inner: &RugixBootFlow,
+    default: BootGroupIdx,
+    requested: BootGroupIdx,
+) -> BootFlowResult<bool> {
+    let _ = rugix_group(inner, default)?;
+    let _ = rugix_group(inner, requested)?;
+    Ok(requested != default)
+}
+
+fn require_gpt_partition_uuid(
+    table: &PartitionTable,
+    partition_index: usize,
+) -> BootFlowResult<String> {
+    let partition = table.partitions.get(partition_index).ok_or_else(|| {
+        Report::whatever(format!(
+            "partition table does not contain partition index {partition_index}"
+        ))
+    })?;
+    let partition_id = partition.gpt_id.ok_or_else(|| {
+        Report::whatever(format!(
+            "partition {} does not have a GPT identifier",
+            partition.number
+        ))
+    })?;
+    Ok(partition_id
+        .to_hex_str(ascii_numbers::Case::Lower)
+        .to_string())
+}
+
 #[derive(Debug)]
 struct RpiTryboot {
     inner: RugixBootFlow,
@@ -233,7 +303,7 @@ struct RpiTryboot {
 
 impl BootFlow for RpiTryboot {
     fn set_try_next(&self, system: &System, entry: BootGroupIdx) -> BootFlowResult<()> {
-        if entry != self.get_default(system)? {
+        if rugix_should_set_spare(&self.inner, self.get_default(system)?, entry)? {
             tryboot::set_spare_flag().whatever("unable to set tryboot flag")?;
         } else {
             tryboot::clear_spare_flag().whatever("unable to clear tryboot flag")?;
@@ -255,12 +325,9 @@ impl BootFlow for RpiTryboot {
                     .whatever("unable to create new autoboot file")?;
                 autoboot_new
                     .write_all(
-                        if active == self.inner.entry_a {
-                            AUTOBOOT_A
-                        } else if active == self.inner.entry_b {
-                            AUTOBOOT_B
-                        } else {
-                            bail!("active boot group does not belong to the tryboot flow");
+                        match rugix_group(&self.inner, active)? {
+                            RugixGroup::A => AUTOBOOT_A,
+                            RugixGroup::B => AUTOBOOT_B,
                         }
                         .as_bytes(),
                     )
@@ -300,9 +367,9 @@ impl BootFlow for RpiTryboot {
             } else if line.starts_with('[') {
                 section = AutobootSection::Unknown;
             } else if line.starts_with("boot_partition=2") && section == AutobootSection::All {
-                return Ok(self.inner.entry_a);
+                return rugix_group_from_boot_partition(&self.inner, "2");
             } else if line.starts_with("boot_partition=3") && section == AutobootSection::All {
-                return Ok(self.inner.entry_b);
+                return rugix_group_from_boot_partition(&self.inner, "3");
             }
         }
         bail!("unable to determine partition set from `autoboot.txt`");
@@ -324,7 +391,7 @@ struct RpiUboot {
 
 impl BootFlow for RpiUboot {
     fn set_try_next(&self, system: &System, entry: BootGroupIdx) -> BootFlowResult<()> {
-        if entry != self.get_default(system)? {
+        if rugix_should_set_spare(&self.inner, self.get_default(system)?, entry)? {
             crate::boot::uboot::set_spare_flag(system)?;
         } else {
             crate::boot::uboot::clear_spare_flag(system)?;
@@ -342,13 +409,7 @@ impl BootFlow for RpiUboot {
         config_partition
             .ensure_writable(|| {
                 let mut bootpart_env = UBootEnv::new();
-                if active == self.inner.entry_a {
-                    bootpart_env.set("bootpart", "2")
-                } else if active == self.inner.entry_b {
-                    bootpart_env.set("bootpart", "3");
-                } else {
-                    bail!("active boot group does not belong to the Raspberry Pi U-Boot flow");
-                };
+                bootpart_env.set("bootpart", rugix_boot_partition(&self.inner, active)?);
                 let new_path = config_partition.path().join("bootpart.default.env.new");
                 bootpart_env
                     .save(&new_path)
@@ -376,13 +437,7 @@ impl BootFlow for RpiUboot {
         let Some(bootpart) = bootpart_env.get("bootpart") else {
             bail!("Invalid bootpart environment.");
         };
-        if bootpart == "2" {
-            Ok(self.inner.entry_a)
-        } else if bootpart == "3" {
-            Ok(self.inner.entry_b)
-        } else {
-            bail!("Invalid default `bootpart`.");
-        }
+        rugix_group_from_boot_partition(&self.inner, bootpart)
     }
 
     fn post_install(&self, system: &System, entry: BootGroupIdx) -> BootFlowResult<()> {
@@ -407,7 +462,7 @@ impl BootFlow for Uboot {
         config_partition
             .ensure_writable(|| {
                 let mut boot_env = hashbrown::HashMap::new();
-                if entry != self.get_default(system)? {
+                if rugix_should_set_spare(&self.inner, self.get_default(system)?, entry)? {
                     boot_env.insert("rugix_boot_spare".to_owned(), "1".to_owned());
                 } else {
                     boot_env.insert("rugix_boot_spare".to_owned(), "0".to_owned());
@@ -428,13 +483,10 @@ impl BootFlow for Uboot {
         config_partition
             .ensure_writable(|| {
                 let mut boot_env = hashbrown::HashMap::new();
-                if active == self.inner.entry_a {
-                    boot_env.insert("rugix_bootpart".to_owned(), "2".to_owned());
-                } else if active == self.inner.entry_b {
-                    boot_env.insert("rugix_bootpart".to_owned(), "3".to_owned());
-                } else {
-                    bail!("active boot group does not belong to the U-Boot flow");
-                };
+                boot_env.insert(
+                    "rugix_bootpart".to_owned(),
+                    rugix_boot_partition(&self.inner, active)?.to_owned(),
+                );
                 set_vars(&boot_env)?;
                 Ok(())
             })
@@ -446,13 +498,7 @@ impl BootFlow for Uboot {
         let Some(bootpart) = boot_env.get("rugix_bootpart").map(|v| v.trim()) else {
             bail!("Rugix boot partition is not set.");
         };
-        if bootpart == "2" {
-            Ok(self.inner.entry_a)
-        } else if bootpart == "3" {
-            Ok(self.inner.entry_b)
-        } else {
-            bail!("Invalid default `bootpart`.");
-        }
+        rugix_group_from_boot_partition(&self.inner, bootpart)
     }
 
     fn name(&self) -> &str {
@@ -467,12 +513,10 @@ fn tryboot_uboot_post_install(
 ) -> BootFlowResult<()> {
     let temp_dir_spare = tempdir().whatever("unable to create temporary directory")?;
     let temp_dir_spare = temp_dir_spare.path();
-    let (Some(boot_slot), system_slot) = (if entry == inner.entry_a {
-        (inner.boot_a, inner.system_a)
-    } else if entry == inner.entry_b {
-        (inner.boot_b, inner.system_b)
-    } else {
-        bail!("unknown entry");
+    let group = rugix_group(inner, entry)?;
+    let (Some(boot_slot), system_slot) = (match group {
+        RugixGroup::A => (inner.boot_a, inner.system_a),
+        RugixGroup::B => (inner.boot_b, inner.system_b),
     }) else {
         // Boot slot is not defined; nothing to do.
         return Ok(());
@@ -495,20 +539,19 @@ fn tryboot_uboot_post_install(
     };
     let root = if table.is_mbr() {
         let disk_id = get_disk_id(&root.device).whatever("unable to get root device disk id")?;
-        if entry == inner.entry_a {
-            format!("PARTUUID={disk_id}-05")
-        } else {
-            format!("PARTUUID={disk_id}-06")
+        match group {
+            RugixGroup::A => format!("PARTUUID={disk_id}-05"),
+            RugixGroup::B => format!("PARTUUID={disk_id}-06"),
         }
     } else {
         let table =
             PartitionTable::read(&root.device).whatever("unable to read partition table")?;
         // Use partitions 4 (index 3) and 5 (index 4).
-        let partition = &table.partitions[if entry == inner.entry_a { 3 } else { 4 }];
-        let part_uuid = partition
-            .gpt_id
-            .unwrap()
-            .to_hex_str(ascii_numbers::Case::Lower);
+        let partition_index = match group {
+            RugixGroup::A => 3,
+            RugixGroup::B => 4,
+        };
+        let part_uuid = require_gpt_partition_uuid(&table, partition_index)?;
         format!("PARTUUID={}", part_uuid)
     };
     rpi_patch_boot(temp_dir_spare, root).whatever("unable to patch boot partition")?;
@@ -522,7 +565,7 @@ struct GrubEfi {
 
 impl BootFlow for GrubEfi {
     fn set_try_next(&self, system: &System, entry: BootGroupIdx) -> BootFlowResult<()> {
-        if entry != self.get_default(system)? {
+        if rugix_should_set_spare(&self.inner, self.get_default(system)?, entry)? {
             crate::boot::grub::set_spare_flag(system).whatever("unable to set spare flag")?;
         } else {
             crate::boot::grub::clear_spare_flag(system).whatever("unable to clear spare flag")?;
@@ -539,13 +582,7 @@ impl BootFlow for GrubEfi {
         let Some(bootpart) = bootpart_env.get(RUGIX_BOOTPART) else {
             bail!("Invalid bootpart environment.");
         };
-        if bootpart == "2" {
-            Ok(self.inner.entry_a)
-        } else if bootpart == "3" {
-            Ok(self.inner.entry_b)
-        } else {
-            bail!("Invalid default `bootpart`.");
-        }
+        rugix_group_from_boot_partition(&self.inner, bootpart)
     }
 
     fn commit(&self, system: &System) -> BootFlowResult<()> {
@@ -553,13 +590,10 @@ impl BootFlow for GrubEfi {
             .require_active_boot_entry()
             .whatever("unable to commit GRUB flow")?;
         let mut envblk = HashMap::new();
-        if active == self.inner.entry_a {
-            envblk.insert(RUGIX_BOOTPART.to_owned(), "2".to_owned());
-        } else if active == self.inner.entry_b {
-            envblk.insert(RUGIX_BOOTPART.to_owned(), "3".to_owned());
-        } else {
-            bail!("active boot group does not belong to the GRUB flow");
-        };
+        envblk.insert(
+            RUGIX_BOOTPART.to_owned(),
+            rugix_boot_partition(&self.inner, active)?.to_owned(),
+        );
         let config_partition = system
             .require_config_partition()
             .whatever("unable to get config partition")?;
@@ -585,12 +619,10 @@ impl BootFlow for GrubEfi {
     fn post_install(&self, system: &System, entry: BootGroupIdx) -> BootFlowResult<()> {
         let temp_dir_spare = tempdir().whatever("unable to create temporary directory")?;
         let temp_dir_spare = temp_dir_spare.path();
-        let (Some(boot_slot), system_slot) = (if entry == self.inner.entry_a {
-            (self.inner.boot_a, self.inner.system_a)
-        } else if entry == self.inner.entry_b {
-            (self.inner.boot_b, self.inner.system_b)
-        } else {
-            bail!("unknown entry");
+        let group = rugix_group(&self.inner, entry)?;
+        let (Some(boot_slot), system_slot) = (match group {
+            RugixGroup::A => (self.inner.boot_a, self.inner.system_a),
+            RugixGroup::B => (self.inner.boot_b, self.inner.system_b),
         }) else {
             // Boot slot is not defined; nothing to do.
             return Ok(());
@@ -608,22 +640,121 @@ impl BootFlow for GrubEfi {
         let Some(table) = system.root.as_ref().and_then(|root| root.table.as_ref()) else {
             bail!("no partition table");
         };
-        let root_part = if entry == self.inner.entry_a {
-            &table.partitions[3]
-        } else if entry == self.inner.entry_b {
-            &table.partitions[4]
-        } else {
-            panic!("should not happen");
+        let partition_index = match group {
+            RugixGroup::A => 3,
+            RugixGroup::B => 4,
         };
-        let part_uuid = root_part
-            .gpt_id
-            .unwrap()
-            .to_hex_str(ascii_numbers::Case::Lower);
+        let part_uuid = require_gpt_partition_uuid(table, partition_index)?;
         grub_patch_env(temp_dir_spare, part_uuid).whatever("unable to path Grub environment")?;
         Ok(())
     }
 
     fn name(&self) -> &str {
         "grub"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use indexmap::IndexMap;
+    use rugix_common::disk::gpt::Guid;
+    use rugix_common::disk::DiskId;
+    use rugix_common::disk::NumBlocks;
+    use rugix_common::disk::Partition;
+    use rugix_common::disk::PartitionTable;
+    use rugix_common::disk::PartitionType;
+
+    use super::require_gpt_partition_uuid;
+    use super::rugix_boot_flow;
+    use super::rugix_boot_partition;
+    use super::rugix_group_from_boot_partition;
+    use super::rugix_should_set_spare;
+    use crate::config::system::BootGroupConfig;
+    use crate::config::system::FileSlotConfig;
+    use crate::config::system::SlotConfig;
+    use crate::system::boot_groups::BootGroups;
+    use crate::system::slots::SystemSlots;
+
+    fn test_groups(count: usize) -> (SystemSlots, BootGroups) {
+        let slot_config = (0..count)
+            .map(|index| {
+                (
+                    format!("system-{index}"),
+                    SlotConfig::File(FileSlotConfig {
+                        path: format!("/tmp/system-{index}"),
+                        immutable: Some(true),
+                    }),
+                )
+            })
+            .collect::<IndexMap<_, _>>();
+        let slots = SystemSlots::from_config(None, Some(&slot_config)).unwrap();
+        let group_config = (0..count)
+            .map(|index| {
+                (
+                    format!("group-{index}"),
+                    BootGroupConfig {
+                        slots: [("system".to_owned(), format!("system-{index}"))]
+                            .into_iter()
+                            .collect(),
+                    },
+                )
+            })
+            .collect::<IndexMap<_, _>>();
+        let groups = BootGroups::from_config(&slots, Some(&group_config)).unwrap();
+        (slots, groups)
+    }
+
+    #[test]
+    fn rugix_flows_require_exactly_two_groups() {
+        let (_, one) = test_groups(1);
+        let (_, two) = test_groups(2);
+        let (_, three) = test_groups(3);
+        assert!(rugix_boot_flow(&one).is_err());
+        assert!(rugix_boot_flow(&two).is_ok());
+        assert!(rugix_boot_flow(&three).is_err());
+    }
+
+    #[test]
+    fn rugix_state_mapping_covers_stable_trial_commit_rollback_and_invalid_states() {
+        let (_, groups) = test_groups(2);
+        let inner = rugix_boot_flow(&groups).unwrap();
+        let mut entries = groups.iter();
+        let a = entries.next().unwrap().0;
+        let b = entries.next().unwrap().0;
+
+        assert!(!rugix_should_set_spare(&inner, a, a).unwrap());
+        assert!(rugix_should_set_spare(&inner, a, b).unwrap());
+        assert!(!rugix_should_set_spare(&inner, b, b).unwrap());
+        assert!(rugix_should_set_spare(&inner, b, a).unwrap());
+        assert_eq!(rugix_group_from_boot_partition(&inner, "2").unwrap(), a);
+        assert_eq!(rugix_group_from_boot_partition(&inner, "3").unwrap(), b);
+        assert_eq!(rugix_boot_partition(&inner, a).unwrap(), "2");
+        assert_eq!(rugix_boot_partition(&inner, b).unwrap(), "3");
+        assert!(rugix_group_from_boot_partition(&inner, "4").is_err());
+
+        let (_, three_groups) = test_groups(3);
+        let invalid = three_groups.iter().nth(2).unwrap().0;
+        assert!(rugix_should_set_spare(&inner, a, invalid).is_err());
+        assert!(rugix_boot_partition(&inner, invalid).is_err());
+    }
+
+    #[test]
+    fn missing_gpt_root_partition_metadata_returns_errors() {
+        let mut table = PartitionTable::new(
+            DiskId::Gpt(Guid::from_bytes([0; 16])),
+            NumBlocks::from_raw(1024),
+        );
+        assert!(require_gpt_partition_uuid(&table, 3).is_err());
+        table.partitions.push(Partition {
+            number: 1,
+            start: NumBlocks::from_raw(1),
+            size: NumBlocks::from_raw(1),
+            ty: PartitionType::Gpt(Guid::from_bytes([0; 16])),
+            name: None,
+            gpt_id: None,
+            gpt_attrs: None,
+            bootable: false,
+        });
+        assert!(require_gpt_partition_uuid(&table, 0).is_err());
     }
 }
