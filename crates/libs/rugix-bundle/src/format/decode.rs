@@ -66,7 +66,7 @@ impl<S: BundleSource> Decoder<S> {
     /// Read the next atom head.
     pub fn next_atom_head(&mut self) -> BundleResult<AtomHead> {
         if self.value_length.is_some() {
-            panic!("need to read value before next atom");
+            bail!("need to read or skip the current value before reading the next atom");
         }
         let Some(head) = read_atom_head(&mut self.source)? else {
             bail!("unexpected end of bundle");
@@ -92,16 +92,27 @@ impl<S: BundleSource> Decoder<S> {
 
     /// Read the current value.
     pub fn read_value(&mut self) -> BundleResult<Vec<u8>> {
-        let length = self.value_length.take().expect("no current value");
+        let length = self
+            .value_length
+            .take()
+            .ok_or_else(|| reportify::whatever!("no current value to read"))?;
         self.check_and_subtract_size(length)?;
-        let mut buffer = vec![0; length.raw as usize];
+        let mut buffer = vec![
+            0;
+            usize::try_from(length.raw).map_err(|_| reportify::whatever!(
+                "value length does not fit into memory"
+            ))?
+        ];
         self.source.read_exact(&mut buffer)?;
         Ok(buffer)
     }
 
     /// Read the current value into an array.
     pub fn read_value_array<const N: usize>(&mut self) -> BundleResult<[u8; N]> {
-        let length = self.value_length.take().expect("no current value");
+        let length = self
+            .value_length
+            .take()
+            .ok_or_else(|| reportify::whatever!("no current value to read"))?;
         self.check_and_subtract_size(length)?;
         if N as u64 != length.raw {
             bail!("invalid value length, expected {N}");
@@ -122,7 +133,10 @@ impl<S: BundleSource> Decoder<S> {
 
     /// Skip the current value.
     pub fn skip_value(&mut self) -> BundleResult<()> {
-        let length = self.value_length.take().expect("no current value");
+        let length = self
+            .value_length
+            .take()
+            .ok_or_else(|| reportify::whatever!("no current value to skip"))?;
         self.source.skip(length)
     }
 
@@ -260,5 +274,31 @@ impl<T: Decode> Decode for Vec<T> {
 
     fn initial_value() -> Option<Self> {
         Some(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use byte_calc::NumBytes;
+
+    use super::Decoder;
+    use crate::format::stlv::Tag;
+    use crate::format::stlv::write_value;
+    use crate::source::from_slice;
+
+    #[test]
+    fn invalid_decoder_call_order_returns_errors() {
+        let empty = Vec::<u8>::new();
+        let mut decoder = Decoder::new(from_slice(&empty), 4, NumBytes::new(1024));
+        assert!(decoder.read_value().is_err());
+        assert!(decoder.read_value_array::<1>().is_err());
+        assert!(decoder.skip_value().is_err());
+
+        let mut encoded = Vec::new();
+        write_value(&mut encoded, Tag::from_bytes(*b"TEST"), b"value").unwrap();
+        let mut decoder = Decoder::new(from_slice(&encoded), 4, NumBytes::new(1024));
+        let _ = decoder.next_atom_head().unwrap();
+        assert!(decoder.next_atom_head().is_err());
+        assert_eq!(decoder.read_value().unwrap(), b"value");
     }
 }

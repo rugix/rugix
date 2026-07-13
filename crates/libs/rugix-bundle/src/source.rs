@@ -203,15 +203,15 @@ pub struct SkipSeek(());
 
 impl<R: Seek> Skip<R> for SkipSeek {
     fn bytes_total(reader: &mut R) -> Option<NumBytes> {
-        let current_position = reader.stream_position().unwrap();
-        reader.seek(SeekFrom::End(0)).unwrap();
-        let end_position = reader.stream_position().unwrap();
-        reader.seek(SeekFrom::Start(current_position)).unwrap();
+        let current_position = reader.stream_position().ok()?;
+        let end_position = reader.seek(SeekFrom::End(0)).ok()?;
+        reader.seek(SeekFrom::Start(current_position)).ok()?;
         Some(NumBytes::from(end_position - current_position))
     }
 
     fn skip(reader: &mut R, skip: NumBytes) -> io::Result<()> {
-        let skip = i64::try_from(skip.raw).expect("should fit");
+        let skip = i64::try_from(skip.raw)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "skip is too large"))?;
         reader.seek_relative(skip)
     }
 }
