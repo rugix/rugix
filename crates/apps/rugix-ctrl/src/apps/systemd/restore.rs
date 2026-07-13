@@ -20,9 +20,11 @@ pub fn restore_units(manager: &AppManager) -> AppsResult<()> {
         return Ok(());
     }
     let mut restored_units = Vec::new();
+    let mut failures = Vec::new();
     for app_name in &apps {
         if let Err(err) = restore_app_units(manager, app_name, &mut restored_units) {
             error!(app = app_name, error = ?err, "failed to restore units");
+            failures.push(format!("app {app_name:?}: {err:?}"));
         }
     }
     if !restored_units.is_empty() {
@@ -38,13 +40,24 @@ pub fn restore_units(manager: &AppManager) -> AppsResult<()> {
         //
         // Note that `enable` alone doesn't actually queue and start the unit.
         for unit in &restored_units {
-            super::enable_runtime(unit);
+            if let Err(err) = super::enable_runtime(unit) {
+                error!(unit, error = ?err, "failed to enable restored app unit");
+                failures.push(format!("unit {unit:?} enable: {err:?}"));
+                continue;
+            }
             if let Err(err) = super::start_no_block(unit) {
                 error!(unit, error = ?err, "failed to queue start for restored app unit");
+                failures.push(format!("unit {unit:?} start: {err:?}"));
             } else {
                 info!(unit, "queued start for restored app unit");
             }
         }
+    }
+    if !failures.is_empty() {
+        reportify::bail!(
+            "one or more app units could not be restored:\n{}",
+            failures.join("\n")
+        );
     }
     Ok(())
 }
