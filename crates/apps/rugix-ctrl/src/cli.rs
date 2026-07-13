@@ -281,7 +281,7 @@ pub fn main() -> SystemResult<()> {
         Command::System(sys_cmd) => match sys_cmd {
             SystemCommand::Info { json } => {
                 let system = System::initialize()?;
-                let output = system_state::state_from_system(&system);
+                let output = system_state::state_from_system(&system)?;
                 rugix_cli::json::print_json(&output, *json)
                     .whatever("unable to write system info to stdout")?;
             }
@@ -467,7 +467,7 @@ pub fn main() -> SystemResult<()> {
                         };
                         group
                     }
-                    None => system.active_boot_entry().unwrap(),
+                    None => system.require_active_boot_entry()?,
                 };
                 info!(
                     "marking boot group {} as good",

@@ -73,7 +73,10 @@ impl BootFlow for CustomBootFlow {
     }
 
     fn commit(&self, system: &crate::system::System) -> super::BootFlowResult<()> {
-        let name = system.boot_entries()[system.active_boot_entry().unwrap()].name();
+        let active = system
+            .require_active_boot_entry()
+            .whatever("unable to commit custom boot flow")?;
+        let name = system.boot_entries()[active].name();
         let output = read_str!([&self.controller, "commit", name])
             .whatever("error running `commit` on custom boot flow")?;
         serde_json::from_str::<OutputNone>(&output)

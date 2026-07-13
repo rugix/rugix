@@ -2,6 +2,7 @@
 
 use hashbrown::HashMap;
 use reportify::bail;
+use reportify::ResultExt;
 
 use crate::boot::fwenv::load_vars;
 use crate::boot::fwenv::set_vars;
@@ -170,7 +171,9 @@ impl BootFlow for RaucUboot {
 
     fn commit(&self, system: &crate::system::System) -> super::BootFlowResult<()> {
         let boot_env = load_vars()?;
-        let group = system.active_boot_entry().unwrap();
+        let group = system
+            .require_active_boot_entry()
+            .whatever("unable to commit RAUC U-Boot flow")?;
         let Some(rauc_group) = self.inner.groups.get(&group) else {
             bail!("invalid boot group");
         };
@@ -193,7 +196,9 @@ impl BootFlow for RaucUboot {
 
     fn mark_good(&self, _: &crate::system::System, group: BootGroupIdx) -> BootFlowResult<()> {
         let mut env = HashMap::new();
-        let rauc_group = self.inner.groups.get(&group).unwrap();
+        let Some(rauc_group) = self.inner.groups.get(&group) else {
+            bail!("invalid boot group");
+        };
         env.insert(format!("BOOT_{}_LEFT", rauc_group.name), "3".to_owned());
         set_vars(&env)?;
         Ok(())
@@ -201,10 +206,16 @@ impl BootFlow for RaucUboot {
 
     fn mark_bad(&self, system: &crate::system::System, group: BootGroupIdx) -> BootFlowResult<()> {
         let mut env = HashMap::new();
-        if group == system.active_boot_entry().unwrap() {
+        if group
+            == system
+                .require_active_boot_entry()
+                .whatever("unable to mark RAUC U-Boot group as bad")?
+        {
             bail!("cannot mark the active boot group as bad");
         }
-        let rauc_group = self.inner.groups.get(&group).unwrap();
+        let Some(rauc_group) = self.inner.groups.get(&group) else {
+            bail!("invalid boot group");
+        };
         env.insert(format!("BOOT_{}_LEFT", rauc_group.name), "0".to_owned());
         set_vars(&env)?;
         Ok(())
@@ -291,7 +302,9 @@ impl BootFlow for RaucGrub {
 
     fn commit(&self, system: &crate::system::System) -> super::BootFlowResult<()> {
         let boot_env = load_vars()?;
-        let group = system.active_boot_entry().unwrap();
+        let group = system
+            .require_active_boot_entry()
+            .whatever("unable to commit RAUC GRUB flow")?;
         let Some(rauc_group) = self.inner.groups.get(&group) else {
             bail!("invalid boot group");
         };
@@ -315,7 +328,9 @@ impl BootFlow for RaucGrub {
 
     fn mark_good(&self, _: &crate::system::System, group: BootGroupIdx) -> BootFlowResult<()> {
         let mut env = HashMap::new();
-        let rauc_group = self.inner.groups.get(&group).unwrap();
+        let Some(rauc_group) = self.inner.groups.get(&group) else {
+            bail!("invalid boot group");
+        };
         env.insert(format!("{}_OK", rauc_group.name), "1".to_owned());
         env.insert(format!("{}_TRY", rauc_group.name), "0".to_owned());
         set_vars(&env)?;
@@ -324,10 +339,16 @@ impl BootFlow for RaucGrub {
 
     fn mark_bad(&self, system: &crate::system::System, group: BootGroupIdx) -> BootFlowResult<()> {
         let mut env = HashMap::new();
-        if group == system.active_boot_entry().unwrap() {
+        if group
+            == system
+                .require_active_boot_entry()
+                .whatever("unable to mark RAUC GRUB group as bad")?
+        {
             bail!("cannot mark the active boot group as bad");
         }
-        let rauc_group = self.inner.groups.get(&group).unwrap();
+        let Some(rauc_group) = self.inner.groups.get(&group) else {
+            bail!("invalid boot group");
+        };
         env.insert(format!("{}_OK", rauc_group.name), "0".to_owned());
         env.insert(format!("{}_TRY", rauc_group.name), "0".to_owned());
         set_vars(&env)?;

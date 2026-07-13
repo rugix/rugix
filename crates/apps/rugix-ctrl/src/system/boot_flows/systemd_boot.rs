@@ -111,9 +111,9 @@ impl BootFlow for SystemdBootFlow {
     }
 
     fn commit(&self, system: &System) -> BootFlowResult<()> {
-        let Some(active) = system.active_boot_entry() else {
-            bail!("no active boot group to commit");
-        };
+        let active = system
+            .require_active_boot_entry()
+            .whatever("unable to commit systemd-boot flow")?;
         let entry_id = self.entry_id_for_group(active)?;
         read_str!(["bootctl", "set-default", entry_id])
             .whatever("error running `bootctl set-default`")?;

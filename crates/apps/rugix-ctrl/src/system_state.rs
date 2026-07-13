@@ -1,11 +1,13 @@
 use std::path::Path;
 
+use reportify::ResultExt;
 use rugix_common::disk::blkdev::find_block_device;
 use tracing::error;
 
 use crate::payload_db;
 use crate::system::paths::MOUNT_POINT_DATA;
 use crate::system::System;
+use crate::system::SystemResult;
 
 use crate::config::output::BootGroupInfoOutput;
 use crate::config::output::BootInfoOutput;
@@ -14,7 +16,7 @@ use crate::config::output::StateInfoActiveOutput;
 use crate::config::output::StateInfoOutput;
 use crate::config::output::SystemInfoOutput;
 
-pub fn state_from_system(system: &System) -> SystemInfoOutput {
+pub fn state_from_system(system: &System) -> SystemResult<SystemInfoOutput> {
     let boot_flow = system.boot_flow().name().to_owned();
     let slots = system
         .slots()
@@ -48,11 +50,11 @@ pub fn state_from_system(system: &System) -> SystemInfoOutput {
     let active_boot_group = system
         .active_boot_entry()
         .map(|idx| system.boot_entries()[idx].name().to_owned());
-    let default_boot_group = Some(
-        system.boot_entries()[system.boot_flow().get_default(system).unwrap()]
-            .name()
-            .to_owned(),
-    );
+    let default = system
+        .boot_flow()
+        .get_default(system)
+        .whatever("unable to determine default boot group")?;
+    let default_boot_group = Some(system.boot_entries()[default].name().to_owned());
     let boot_groups = system
         .boot_entries()
         .iter()
@@ -73,10 +75,12 @@ pub fn state_from_system(system: &System) -> SystemInfoOutput {
             .map(|dev| dev.path().to_string_lossy().into_owned());
         StateInfoOutput::Active(StateInfoActiveOutput::new().with_data_partition(data_device))
     };
-    SystemInfoOutput::new(slots, state).with_boot(Some(BootInfoOutput {
-        boot_flow,
-        active_group: active_boot_group,
-        default_group: default_boot_group,
-        groups: boot_groups,
-    }))
+    Ok(
+        SystemInfoOutput::new(slots, state).with_boot(Some(BootInfoOutput {
+            boot_flow,
+            active_group: active_boot_group,
+            default_group: default_boot_group,
+            groups: boot_groups,
+        })),
+    )
 }
