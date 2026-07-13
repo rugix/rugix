@@ -15,6 +15,7 @@ use reportify::ResultExt;
 use rugix_common::disk::blkdev::BlockDevice;
 
 use rugix_common::mount::is_mount_point;
+use rugix_common::path::ValidatedRelativePath;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -313,6 +314,7 @@ fn setup_state_and_exec_init(
                 "unable to remove state profile",
             );
         } else {
+            let backup_name = validated_profile_name(&backup_name)?;
             let backup_profile = Path::new(STATE_PROFILES_DIR).join(backup_name);
             log_ignored_error(
                 fs::rename(state_profile, &backup_profile),
@@ -777,18 +779,12 @@ fn setup_persistent_state(
     for persist in persist {
         match persist {
             PersistConfig::Directory(PersistDirectoryConfig { directory }) => {
-                let directory = path_strip_root(directory.as_ref());
-                eprintln!(
-                    "Setting up bind mounts for directory `{}`...",
-                    directory.to_string_lossy()
-                );
-                let system_path = root_dir.join(directory);
-                let state_path = persist_dir.join(directory);
+                let directory = validated_state_path(directory.as_ref())?;
+                eprintln!("Setting up bind mounts for directory `{}`...", directory);
+                let system_path = root_dir.join(&directory);
+                let state_path = persist_dir.join(&directory);
                 if system_path.exists() && !system_path.is_dir() {
-                    bail!(
-                        "Error persisting `{}`, not a directory!",
-                        directory.to_string_lossy()
-                    );
+                    bail!("Error persisting `{}`, not a directory!", directory);
                 }
                 if !state_path.is_dir() {
                     log_ignored_error(
@@ -817,15 +813,12 @@ fn setup_persistent_state(
                     .whatever("unable to bind-mount persistent directory")?;
             }
             PersistConfig::File(PersistFileConfig { file, default }) => {
-                let file = path_strip_root(file.as_ref());
-                eprintln!(
-                    "Setting up bind mounts for file `{}`...",
-                    file.to_string_lossy()
-                );
-                let system_path = root_dir.join(file);
-                let state_path = persist_dir.join(file);
+                let file = validated_state_path(file.as_ref())?;
+                eprintln!("Setting up bind mounts for file `{}`...", file);
+                let system_path = root_dir.join(&file);
+                let state_path = persist_dir.join(&file);
                 if system_path.exists() && !system_path.is_file() {
-                    bail!("Error persisting `{}`, not a file!", file.to_string_lossy());
+                    bail!("Error persisting `{file}`, not a file!");
                 }
                 if !state_path.is_file() {
                     log_ignored_error(
@@ -856,7 +849,24 @@ fn setup_persistent_state(
     Ok(())
 }
 
-/// Strips the root `/` from a path.
+/// Validate a persisted state path after accepting one leading root separator.
+fn validated_state_path(path: &Path) -> SystemResult<ValidatedRelativePath> {
+    let path = path_strip_root(path);
+    let path = path
+        .to_str()
+        .ok_or_else(|| reportify::whatever!("persistent state path is not UTF-8"))?;
+    ValidatedRelativePath::new(path).whatever("invalid persistent state path")
+}
+
+fn validated_profile_name(name: &str) -> SystemResult<ValidatedRelativePath> {
+    let name = ValidatedRelativePath::new(name).whatever("invalid state backup name")?;
+    if !name.is_single_component() {
+        bail!("state backup name must contain exactly one path component");
+    }
+    Ok(name)
+}
+
+/// Strips one leading root `/` from a path.
 fn path_strip_root(path: &Path) -> &Path {
     if let Ok(stripped) = path.strip_prefix("/") {
         stripped
@@ -1004,6 +1014,8 @@ mod tests {
 
     use super::data_partition_is_new;
     use super::format_data_partition_if_new;
+    use super::validated_profile_name;
+    use super::validated_state_path;
 
     #[derive(Default)]
     struct RecordingDriver {
@@ -1103,5 +1115,26 @@ mod tests {
         format_data_partition_if_new(&table, 7, || driver.format(&ctx)).unwrap();
         assert!(data_partition_is_new(&table, 7));
         assert_eq!(driver.formats.get(), 1);
+    }
+
+    #[test]
+    fn persistent_state_paths_are_validated_after_stripping_one_root() {
+        assert_eq!(
+            validated_state_path(std::path::Path::new("/etc/machine-id"))
+                .unwrap()
+                .as_str(),
+            "etc/machine-id"
+        );
+        for path in ["/", "/../outside", "../outside", "/etc/../outside"] {
+            assert!(validated_state_path(std::path::Path::new(path)).is_err());
+        }
+    }
+
+    #[test]
+    fn state_backup_names_are_single_components() {
+        assert!(validated_profile_name("default.20260713").is_ok());
+        for name in ["", "../outside", "nested/name", "/absolute"] {
+            assert!(validated_profile_name(name).is_err());
+        }
     }
 }

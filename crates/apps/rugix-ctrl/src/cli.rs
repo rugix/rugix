@@ -157,7 +157,12 @@ pub fn main() -> SystemResult<()> {
                             .strftime("default.%Y%m%d%H%M%S")
                             .to_string()
                     });
-                    set_rugix_state_flag("reset-state", Some(&backup_name))?;
+                    let validated_backup_name = ValidatedRelativePath::new(backup_name)
+                        .whatever("invalid state backup name")?;
+                    if !validated_backup_name.is_single_component() {
+                        bail!("state backup name must contain exactly one path component");
+                    }
+                    set_rugix_state_flag("reset-state", Some(validated_backup_name.as_str()))?;
                 } else {
                     set_rugix_state_flag("reset-state", None)?;
                 };
