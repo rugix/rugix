@@ -35,6 +35,7 @@ use rugix_common::boot::grub::load_grub_env;
 use rugix_common::boot::grub::save_grub_env;
 use rugix_common::boot::grub::GrubEnv;
 use tracing::error;
+use tracing::warn;
 
 use crate::boot::fwenv::load_vars;
 use crate::boot::fwenv::set_vars;
@@ -147,6 +148,37 @@ fn mender_group_idx(inner: &MenderBootFlow, group: MenderGroup) -> BootGroupIdx 
     }
 }
 
+fn mender_group(inner: &MenderBootFlow, group: BootGroupIdx) -> BootFlowResult<MenderGroup> {
+    if group == inner.entry_a {
+        Ok(MenderGroup::A)
+    } else if group == inner.entry_b {
+        Ok(MenderGroup::B)
+    } else {
+        bail!("boot group does not belong to the Mender boot flow")
+    }
+}
+
+fn mender_state_values(
+    group: MenderGroup,
+    upgrade_available: bool,
+    boot_part_a: u32,
+    boot_part_b: u32,
+) -> Vec<(String, String)> {
+    let boot_part = match group {
+        MenderGroup::A => boot_part_a,
+        MenderGroup::B => boot_part_b,
+    };
+    vec![
+        ("bootcount".to_owned(), "0".to_owned()),
+        (
+            "upgrade_available".to_owned(),
+            u8::from(upgrade_available).to_string(),
+        ),
+        ("mender_boot_part".to_owned(), boot_part.to_string()),
+        ("mender_boot_part_hex".to_owned(), format!("{boot_part:#x}")),
+    ]
+}
+
 const MENDER_GRUB_ENV1: &str = "grub-mender-grubenv/mender_grubenv1/env";
 const MENDER_GRUB_LOCK1: &str = "grub-mender-grubenv/mender_grubenv1/lock";
 const MENDER_GRUB_LOCK1_SHA256: &str = "grub-mender-grubenv/mender_grubenv1/lock.sha256sum";
@@ -165,17 +197,43 @@ fn mender_save_grub_env(boot_root: &Path, env: &GrubEnv) -> BootFlowResult<()> {
     let mut unlocked = std::collections::HashMap::new();
     unlocked.insert("editing".to_owned(), "0".to_owned());
     // Primary environment file.
-    save_grub_env(boot_root.join(MENDER_GRUB_LOCK1), &locked).ok();
+    save_grub_env(boot_root.join(MENDER_GRUB_LOCK1), &locked)
+        .whatever("unable to lock primary Mender GRUB environment")?;
     save_grub_env(boot_root.join(MENDER_GRUB_ENV1), env)
         .whatever("unable to save Grub environment")?;
-    save_grub_env(boot_root.join(MENDER_GRUB_LOCK1), &unlocked).ok();
-    std::fs::write(boot_root.join(MENDER_GRUB_LOCK1_SHA256), MENDER_LOCK_SHA256).ok();
+    save_grub_env(boot_root.join(MENDER_GRUB_LOCK1), &unlocked)
+        .whatever("unable to unlock primary Mender GRUB environment")?;
+    std::fs::write(boot_root.join(MENDER_GRUB_LOCK1_SHA256), MENDER_LOCK_SHA256)
+        .whatever("unable to write primary Mender GRUB lock checksum")?;
     // Secondary environment file.
-    save_grub_env(boot_root.join(MENDER_GRUB_LOCK2), &locked).ok();
+    save_grub_env(boot_root.join(MENDER_GRUB_LOCK2), &locked)
+        .whatever("unable to lock secondary Mender GRUB environment")?;
     save_grub_env(boot_root.join(MENDER_GRUB_ENV2), env)
         .whatever("unable to save Grub environment")?;
-    save_grub_env(&boot_root.join(MENDER_GRUB_LOCK2), &unlocked).ok();
-    std::fs::write(boot_root.join(MENDER_GRUB_LOCK2_SHA256), MENDER_LOCK_SHA256).ok();
+    save_grub_env(boot_root.join(MENDER_GRUB_LOCK2), &unlocked)
+        .whatever("unable to unlock secondary Mender GRUB environment")?;
+    std::fs::write(boot_root.join(MENDER_GRUB_LOCK2_SHA256), MENDER_LOCK_SHA256)
+        .whatever("unable to write secondary Mender GRUB lock checksum")?;
+    Ok(())
+}
+
+fn repair_mender_grub_env(
+    boot_root: &Path,
+    env: &GrubEnv,
+    lock: &str,
+    lock_checksum: &str,
+    environment: &str,
+) -> BootFlowResult<()> {
+    let mut locked = std::collections::HashMap::new();
+    locked.insert("editing".to_owned(), "1".to_owned());
+    let mut unlocked = std::collections::HashMap::new();
+    unlocked.insert("editing".to_owned(), "0".to_owned());
+    save_grub_env(boot_root.join(lock), &locked).whatever("unable to lock environment copy")?;
+    save_grub_env(boot_root.join(environment), env)
+        .whatever("unable to repair environment copy")?;
+    save_grub_env(boot_root.join(lock), &unlocked).whatever("unable to unlock environment copy")?;
+    std::fs::write(boot_root.join(lock_checksum), MENDER_LOCK_SHA256)
+        .whatever("unable to repair environment lock checksum")?;
     Ok(())
 }
 
@@ -200,28 +258,39 @@ fn mender_load_grub_env(system: &System, boot_root: &Path) -> BootFlowResult<Gru
     };
 
     if !primary_ok || !secondary_ok {
-        let _write_guard = system.config_partition().and_then(|c| {
-            if boot_root.starts_with(c.path()) {
-                Some(c.acquire_write_guard())
-            } else {
-                None
-            }
-        });
-        let mut locked = std::collections::HashMap::new();
-        locked.insert("editing".to_owned(), "1".to_owned());
-        let mut unlocked = std::collections::HashMap::new();
-        unlocked.insert("editing".to_owned(), "0".to_owned());
+        let _write_guard = if let Some(config) = system
+            .config_partition()
+            .filter(|config| boot_root.starts_with(config.path()))
+        {
+            Some(
+                config
+                    .acquire_write_guard()
+                    .whatever("unable to make Mender GRUB environment writable")?,
+            )
+        } else {
+            None
+        };
         if !primary_ok {
-            save_grub_env(boot_root.join(MENDER_GRUB_LOCK1), &locked).ok();
-            save_grub_env(boot_root.join(MENDER_GRUB_ENV1), &boot_env).ok();
-            save_grub_env(boot_root.join(MENDER_GRUB_LOCK1), &unlocked).ok();
-            std::fs::write(boot_root.join(MENDER_GRUB_LOCK1_SHA256), MENDER_LOCK_SHA256).ok();
+            if let Err(error) = repair_mender_grub_env(
+                boot_root,
+                &boot_env,
+                MENDER_GRUB_LOCK1,
+                MENDER_GRUB_LOCK1_SHA256,
+                MENDER_GRUB_ENV1,
+            ) {
+                warn!(?error, "unable to repair primary Mender GRUB environment");
+            }
         }
         if !secondary_ok {
-            save_grub_env(boot_root.join(MENDER_GRUB_LOCK2), &locked).ok();
-            save_grub_env(boot_root.join(MENDER_GRUB_ENV2), &boot_env).ok();
-            save_grub_env(&boot_root.join(MENDER_GRUB_LOCK2), &unlocked).ok();
-            std::fs::write(boot_root.join(MENDER_GRUB_LOCK2_SHA256), MENDER_LOCK_SHA256).ok();
+            if let Err(error) = repair_mender_grub_env(
+                boot_root,
+                &boot_env,
+                MENDER_GRUB_LOCK2,
+                MENDER_GRUB_LOCK2_SHA256,
+                MENDER_GRUB_ENV2,
+            ) {
+                warn!(?error, "unable to repair secondary Mender GRUB environment");
+            }
         }
     }
     Ok(boot_env)
@@ -251,33 +320,28 @@ impl BootFlow for MenderGrub {
     ) -> super::BootFlowResult<()> {
         let mut boot_env = load_grub_env(self.inner.boot_root().join(MENDER_GRUB_ENV1))
             .whatever("unable to load Grub environment")?;
-        if group != self.get_default(system)? {
-            boot_env.insert("bootcount".to_owned(), "0".to_owned());
-            boot_env.insert("upgrade_available".to_owned(), "1".to_owned());
-        } else {
-            boot_env.insert("bootcount".to_owned(), "0".to_owned());
-            boot_env.insert("upgrade_available".to_owned(), "0".to_owned());
-        }
-        if group == self.inner.entry_a {
-            boot_env.insert(
-                "mender_boot_part".to_owned(),
-                self.inner.boot_part_a().to_string(),
-            );
-        } else {
-            boot_env.insert(
-                "mender_boot_part".to_owned(),
-                self.inner.boot_part_b().to_string(),
-            );
-        }
+        let trial = group != self.get_default(system)?;
+        let group = mender_group(&self.inner, group)?;
+        boot_env.extend(mender_state_values(
+            group,
+            trial,
+            self.inner.boot_part_a(),
+            self.inner.boot_part_b(),
+        ));
         // Load the boot environment once and repair it if necessary.
-        let _ = mender_load_grub_env(system, self.inner.boot_root());
-        let _write_guard = system.config_partition().and_then(|c| {
-            if self.inner.boot_root().starts_with(c.path()) {
-                Some(c.acquire_write_guard())
-            } else {
-                None
-            }
-        });
+        mender_load_grub_env(system, self.inner.boot_root())?;
+        let _write_guard = if let Some(config) = system
+            .config_partition()
+            .filter(|config| self.inner.boot_root().starts_with(config.path()))
+        {
+            Some(
+                config
+                    .acquire_write_guard()
+                    .whatever("unable to make Mender GRUB environment writable")?,
+            )
+        } else {
+            None
+        };
         mender_save_grub_env(self.inner.boot_root(), &boot_env)?;
         Ok(())
     }
@@ -306,31 +370,28 @@ impl BootFlow for MenderGrub {
     fn commit(&self, system: &crate::system::System) -> super::BootFlowResult<()> {
         let mut boot_env = load_grub_env(self.inner.boot_root().join(MENDER_GRUB_ENV1))
             .whatever("unable to load Grub environment")?;
-        boot_env.insert("bootcount".to_owned(), "0".to_owned());
-        boot_env.insert("upgrade_available".to_owned(), "0".to_owned());
-        if system
+        let active = system
             .require_active_boot_entry()
-            .whatever("unable to commit Mender GRUB boot flow")?
-            == self.inner.entry_a
+            .whatever("unable to commit Mender GRUB boot flow")?;
+        boot_env.extend(mender_state_values(
+            mender_group(&self.inner, active)?,
+            false,
+            self.inner.boot_part_a(),
+            self.inner.boot_part_b(),
+        ));
+        mender_load_grub_env(system, self.inner.boot_root())?;
+        let _write_guard = if let Some(config) = system
+            .config_partition()
+            .filter(|config| self.inner.boot_root().starts_with(config.path()))
         {
-            boot_env.insert(
-                "mender_boot_part".to_owned(),
-                self.inner.boot_part_a().to_string(),
-            );
+            Some(
+                config
+                    .acquire_write_guard()
+                    .whatever("unable to make Mender GRUB environment writable")?,
+            )
         } else {
-            boot_env.insert(
-                "mender_boot_part".to_owned(),
-                self.inner.boot_part_b().to_string(),
-            );
+            None
         };
-        let _ = mender_load_grub_env(system, self.inner.boot_root());
-        let _write_guard = system.config_partition().and_then(|c| {
-            if self.inner.boot_root().starts_with(c.path()) {
-                Some(c.acquire_write_guard())
-            } else {
-                None
-            }
-        });
         mender_save_grub_env(self.inner.boot_root(), &boot_env)?;
         Ok(())
     }
@@ -358,33 +419,15 @@ impl BootFlow for MenderUboot {
         system: &crate::system::System,
         group: BootGroupIdx,
     ) -> super::BootFlowResult<()> {
-        let mut boot_env = HashMap::new();
-        if group != self.get_default(system)? {
-            boot_env.insert("bootcount".to_owned(), "0".to_owned());
-            boot_env.insert("upgrade_available".to_owned(), "1".to_owned());
-        } else {
-            boot_env.insert("bootcount".to_owned(), "0".to_owned());
-            boot_env.insert("upgrade_available".to_owned(), "0".to_owned());
-        }
-        if group == self.inner.entry_a {
-            boot_env.insert(
-                "mender_boot_part".to_owned(),
-                self.inner.boot_part_a().to_string(),
-            );
-            boot_env.insert(
-                "mender_boot_part_hex".to_owned(),
-                format!("{:#x}", self.inner.boot_part_a()),
-            );
-        } else {
-            boot_env.insert(
-                "mender_boot_part".to_owned(),
-                self.inner.boot_part_b().to_string(),
-            );
-            boot_env.insert(
-                "mender_boot_part_hex".to_owned(),
-                format!("{:#x}", self.inner.boot_part_b()),
-            );
-        }
+        let trial = group != self.get_default(system)?;
+        let boot_env = mender_state_values(
+            mender_group(&self.inner, group)?,
+            trial,
+            self.inner.boot_part_a(),
+            self.inner.boot_part_b(),
+        )
+        .into_iter()
+        .collect::<HashMap<_, _>>();
         set_vars(&boot_env)?;
         Ok(())
     }
@@ -411,32 +454,17 @@ impl BootFlow for MenderUboot {
     }
 
     fn commit(&self, system: &crate::system::System) -> super::BootFlowResult<()> {
-        let mut boot_env = HashMap::new();
-        boot_env.insert("bootcount".to_owned(), "0".to_owned());
-        boot_env.insert("upgrade_available".to_owned(), "0".to_owned());
-        if system
+        let active = system
             .require_active_boot_entry()
-            .whatever("unable to commit Mender U-Boot flow")?
-            == self.inner.entry_a
-        {
-            boot_env.insert(
-                "mender_boot_part".to_owned(),
-                self.inner.boot_part_a().to_string(),
-            );
-            boot_env.insert(
-                "mender_boot_part_hex".to_owned(),
-                format!("{:#x}", self.inner.boot_part_a()),
-            );
-        } else {
-            boot_env.insert(
-                "mender_boot_part".to_owned(),
-                self.inner.boot_part_b().to_string(),
-            );
-            boot_env.insert(
-                "mender_boot_part_hex".to_owned(),
-                format!("{:#x}", self.inner.boot_part_b()),
-            );
-        };
+            .whatever("unable to commit Mender U-Boot flow")?;
+        let boot_env = mender_state_values(
+            mender_group(&self.inner, active)?,
+            false,
+            self.inner.boot_part_a(),
+            self.inner.boot_part_b(),
+        )
+        .into_iter()
+        .collect::<HashMap<_, _>>();
         set_vars(&boot_env)?;
         Ok(())
     }
@@ -445,6 +473,8 @@ impl BootFlow for MenderUboot {
 #[cfg(test)]
 mod tests {
     use super::mender_default_group;
+    use super::mender_save_grub_env;
+    use super::mender_state_values;
     use super::validate_mender_layout;
     use super::MenderGroup;
 
@@ -482,5 +512,37 @@ mod tests {
         assert!(validate_mender_layout(1, 2, 3).is_err());
         assert!(validate_mender_layout(3, 2, 3).is_err());
         assert!(validate_mender_layout(2, 2, 2).is_err());
+    }
+
+    #[test]
+    fn state_values_cover_trial_commit_and_rollback_transitions() {
+        let values = |group, trial| {
+            mender_state_values(group, trial, 2, 3)
+                .into_iter()
+                .collect::<hashbrown::HashMap<_, _>>()
+        };
+
+        let stable_a = values(MenderGroup::A, false);
+        assert_eq!(stable_a["mender_boot_part"], "2");
+        assert_eq!(stable_a["upgrade_available"], "0");
+
+        let trial_b = values(MenderGroup::B, true);
+        assert_eq!(trial_b["mender_boot_part"], "3");
+        assert_eq!(trial_b["mender_boot_part_hex"], "0x3");
+        assert_eq!(trial_b["upgrade_available"], "1");
+
+        let committed_b = values(MenderGroup::B, false);
+        assert_eq!(committed_b["mender_boot_part"], "3");
+        assert_eq!(committed_b["upgrade_available"], "0");
+
+        let rolled_back_a = values(MenderGroup::A, false);
+        assert_eq!(rolled_back_a, stable_a);
+    }
+
+    #[test]
+    fn grub_redundancy_write_failures_are_propagated() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let env = std::collections::HashMap::new();
+        assert!(mender_save_grub_env(tempdir.path(), &env).is_err());
     }
 }
