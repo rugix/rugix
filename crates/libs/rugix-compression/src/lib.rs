@@ -164,11 +164,18 @@ impl ByteProcessor for XzDecoder {
         while !input.is_empty() {
             self.flush_buffer(output)?;
             let total_in = self.stream.total_in();
+            let total_out = self.stream.total_out();
             match self.feed_stream(input, xz2::stream::Action::Run)? {
                 xz2::stream::Status::StreamEnd => break,
                 _ => { /* do nothing */ }
             }
             let written = self.stream.total_in() - total_in;
+            if written == 0 && self.stream.total_out() == total_out {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "XZ decoder made no progress",
+                ));
+            }
             input = &input[written as usize..];
         }
         Ok(())
@@ -177,12 +184,49 @@ impl ByteProcessor for XzDecoder {
     fn finalize(mut self, output: &mut dyn Write) -> std::io::Result<()> {
         loop {
             self.flush_buffer(output)?;
+            let total_out = self.stream.total_out();
             match self.feed_stream(&[], xz2::stream::Action::Finish)? {
                 xz2::stream::Status::StreamEnd => break,
-                _ => { /* nothing to do */ }
+                _ if self.stream.total_out() == total_out => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "incomplete XZ stream",
+                    ));
+                }
+                _ => {}
             }
         }
         self.flush_buffer(output)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ByteProcessor;
+    use super::XzDecoder;
+    use super::XzEncoder;
+
+    #[test]
+    fn xz_round_trip_still_makes_progress() {
+        let input = b"Rugix compression regression test".repeat(1024);
+        let mut encoded = Vec::new();
+        let mut encoder = XzEncoder::new(6);
+        encoder.process(&input, &mut encoded).unwrap();
+        encoder.finalize(&mut encoded).unwrap();
+
+        let mut decoded = Vec::new();
+        let mut decoder = XzDecoder::new();
+        decoder.process(&encoded, &mut decoded).unwrap();
+        decoder.finalize(&mut decoded).unwrap();
+        assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn invalid_xz_input_returns_an_error() {
+        let mut decoder = XzDecoder::new();
+        let mut output = Vec::new();
+        decoder.process(b"not xz", &mut output).unwrap();
+        assert!(decoder.finalize(&mut output).is_err());
     }
 }
