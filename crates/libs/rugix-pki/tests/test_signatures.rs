@@ -4,6 +4,12 @@ use std::process::Command;
 use std::time::Duration;
 use std::time::SystemTime;
 
+use cms::content_info::ContentInfo;
+use cms::signed_data::SignedData;
+use der::Decode;
+use der::Encode;
+use der::asn1::Any;
+use der::asn1::OctetString;
 use rugix_pki::CmsSigner;
 use rugix_pki::CmsSignerBuilder;
 use rugix_pki::CmsVerifier;
@@ -147,6 +153,98 @@ impl TestPki {
             temp_dir,
         }
     }
+
+    fn openssl_sign(&self, data: &[u8], extra_args: &[&str]) -> Vec<u8> {
+        let dir = self.temp_dir.path();
+        let data_path = dir.join("openssl-input.bin");
+        let signer_cert_path = dir.join("openssl-signer.crt");
+        let signer_key_path = dir.join("openssl-signer.key");
+        let signature_path = dir.join("openssl-signature.cms");
+        std::fs::write(&data_path, data).expect("failed to write OpenSSL input");
+        std::fs::write(&signer_cert_path, &self.signer_cert_pem)
+            .expect("failed to write OpenSSL signer certificate");
+        std::fs::write(&signer_key_path, &self.signer_key_pem)
+            .expect("failed to write OpenSSL signer key");
+        let status = Command::new("openssl")
+            .args(["cms", "-sign", "-in"])
+            .arg(&data_path)
+            .args(["-signer"])
+            .arg(&signer_cert_path)
+            .args(["-inkey"])
+            .arg(&signer_key_path)
+            .args(["-out"])
+            .arg(&signature_path)
+            .args(["-outform", "DER", "-nodetach", "-binary"])
+            .args(extra_args)
+            .status()
+            .expect("failed to run OpenSSL CMS signing");
+        assert!(status.success(), "OpenSSL CMS signing failed");
+        std::fs::read(signature_path).expect("failed to read OpenSSL signature")
+    }
+}
+
+#[test]
+fn test_verification_accepts_rotated_roots_in_either_order() {
+    let pki = TestPki::new();
+    let signature = CmsSigner::new(&pki.signer_cert_pem, &pki.signer_key_pem)
+        .unwrap()
+        .sign(b"root rotation")
+        .unwrap();
+
+    for roots in [
+        [&pki.other_root_cert_pem, &pki.root_cert_pem],
+        [&pki.root_cert_pem, &pki.other_root_cert_pem],
+    ] {
+        assert!(roots.iter().any(|root| {
+            CmsVerifier::new(root)
+                .and_then(|verifier| verifier.verify(&signature))
+                .is_ok()
+        }));
+    }
+}
+
+#[test]
+fn test_openssl_id_data_without_signed_attributes() {
+    let pki = TestPki::new();
+    let signature = pki.openssl_sign(b"no signed attributes", &["-noattr"]);
+    let result = CmsVerifier::new(&pki.root_cert_pem)
+        .unwrap()
+        .verify(&signature)
+        .unwrap();
+    assert_eq!(result.content, b"no signed attributes");
+}
+
+#[test]
+fn test_subject_key_identifier_signer_id() {
+    let pki = TestPki::new();
+    let signature = pki.openssl_sign(b"subject key identifier", &["-keyid"]);
+    let result = CmsVerifier::new(&pki.root_cert_pem)
+        .unwrap()
+        .verify(&signature)
+        .unwrap();
+    assert_eq!(result.content, b"subject key identifier");
+}
+
+#[test]
+fn test_later_signer_info_is_tried_after_an_invalid_one() {
+    let pki = TestPki::new();
+    let signature = CmsSigner::new(&pki.signer_cert_pem, &pki.signer_key_pem)
+        .unwrap()
+        .sign(b"multiple signer infos")
+        .unwrap();
+    let mut content_info = ContentInfo::from_der(&signature).unwrap();
+    let mut signed_data = content_info.content.decode_as::<SignedData>().unwrap();
+    let mut invalid = signed_data.signer_infos.0.iter().next().unwrap().clone();
+    invalid.signature = OctetString::new(vec![0; invalid.signature.as_bytes().len()]).unwrap();
+    signed_data.signer_infos.0.insert(invalid).unwrap();
+    assert_eq!(signed_data.signer_infos.0.len(), 2);
+    content_info.content = Any::from_der(&signed_data.to_der().unwrap()).unwrap();
+
+    let result = CmsVerifier::new(&pki.root_cert_pem)
+        .unwrap()
+        .verify(&content_info.to_der().unwrap())
+        .unwrap();
+    assert_eq!(result.content, b"multiple signer infos");
 }
 
 #[test]

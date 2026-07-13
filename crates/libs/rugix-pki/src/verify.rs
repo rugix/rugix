@@ -119,67 +119,28 @@ impl CmsVerifier {
             .map_err(|e| PkiError::InvalidCms(format!("failed to decode content: {}", e)))?;
         let content = content_bytes.as_bytes().to_vec();
 
-        let signer_info = signed_data
-            .signer_infos
-            .0
-            .iter()
-            .next()
-            .ok_or(PkiError::NoSignerInfo)?;
-
         let embedded_certs = extract_certificates(&signed_data)?;
-        let signer_cert = find_signer_certificate(&embedded_certs, &signer_info.sid)?;
-
-        let signer_cert_der = signer_cert
-            .to_der()
-            .map_err(|e| PkiError::DerParse(e.to_string()))?;
-
-        validate_end_entity_key_usage(signer_cert)?;
-        let chain_der =
-            validate_certificate_chain(&signer_cert_der, &embedded_certs, &self.root_cert)?;
-
-        // RFC 5652 Section 5.3: The digest algorithm used by the signer should be
-        // among those listed in the SignedData digestAlgorithms set.
-        if !signed_data
-            .digest_algorithms
-            .iter()
-            .any(|alg| alg.oid == signer_info.digest_alg.oid)
-        {
-            return Err(PkiError::InvalidCms(
-                "signer digest algorithm not listed in SignedData digestAlgorithms".to_owned(),
-            ));
+        if signed_data.signer_infos.0.is_empty() {
+            return Err(PkiError::NoSignerInfo);
         }
-
-        if let Some(signed_attrs) = &signer_info.signed_attrs {
-            // RFC 5652 Section 5.6: if signed attributes are present, the content-type
-            // attribute value MUST match SignedData encapContentInfo eContentType.
-            verify_content_type_attribute(
-                signed_attrs,
-                signed_data.encap_content_info.econtent_type,
-            )
-            .map_err(PkiError::InvalidCms)?;
-        } else {
-            // RFC 5652 Section 5.3: signed attributes MUST be present if
-            // eContentType is anything other than id-data.
-            if signed_data.encap_content_info.econtent_type != ID_DATA {
-                return Err(PkiError::InvalidCms(
-                    "signed attributes are required when eContentType is not id-data".to_owned(),
-                ));
+        let mut signer_errors = Vec::new();
+        for signer_info in signed_data.signer_infos.0.iter() {
+            match verify_signer(
+                &self.root_cert,
+                &signed_data,
+                &content,
+                &embedded_certs,
+                signer_info,
+            ) {
+                Ok(result) => return Ok(result),
+                Err(error) => signer_errors.push(error.to_string()),
             }
         }
-
-        verify_cms_signature(&content, signer_info, signer_cert)?;
-
-        let signing_time = signer_info
-            .signed_attrs
-            .as_ref()
-            .and_then(extract_signing_time_attribute);
-
-        Ok(VerificationResult {
-            content,
-            signer_certificate: signer_cert_der,
-            certificate_chain: chain_der,
-            signing_time,
-        })
+        Err(PkiError::SignatureVerification(format!(
+            "none of {} signer infos verified: {}",
+            signer_errors.len(),
+            signer_errors.join("; ")
+        )))
     }
 
     /// Verify a DER-encoded CMS signature and check that the content matches expected
@@ -191,6 +152,64 @@ impl CmsVerifier {
         }
         Ok(())
     }
+}
+
+fn verify_signer(
+    root_cert: &Certificate,
+    signed_data: &SignedData,
+    content: &[u8],
+    embedded_certs: &[Certificate],
+    signer_info: &cms::signed_data::SignerInfo,
+) -> PkiResult<VerificationResult> {
+    let signer_cert = find_signer_certificate(embedded_certs, &signer_info.sid)?;
+
+    let signer_cert_der = signer_cert
+        .to_der()
+        .map_err(|e| PkiError::DerParse(e.to_string()))?;
+
+    validate_end_entity_key_usage(signer_cert)?;
+    let chain_der = validate_certificate_chain(&signer_cert_der, embedded_certs, root_cert)?;
+
+    // RFC 5652 Section 5.3: The digest algorithm used by the signer should be
+    // among those listed in the SignedData digestAlgorithms set.
+    if !signed_data
+        .digest_algorithms
+        .iter()
+        .any(|alg| alg.oid == signer_info.digest_alg.oid)
+    {
+        return Err(PkiError::InvalidCms(
+            "signer digest algorithm not listed in SignedData digestAlgorithms".to_owned(),
+        ));
+    }
+
+    if let Some(signed_attrs) = &signer_info.signed_attrs {
+        // RFC 5652 Section 5.6: if signed attributes are present, the content-type
+        // attribute value MUST match SignedData encapContentInfo eContentType.
+        verify_content_type_attribute(signed_attrs, signed_data.encap_content_info.econtent_type)
+            .map_err(PkiError::InvalidCms)?;
+    } else {
+        // RFC 5652 Section 5.3: signed attributes MUST be present if
+        // eContentType is anything other than id-data.
+        if signed_data.encap_content_info.econtent_type != ID_DATA {
+            return Err(PkiError::InvalidCms(
+                "signed attributes are required when eContentType is not id-data".to_owned(),
+            ));
+        }
+    }
+
+    verify_cms_signature(content, signer_info, signer_cert)?;
+
+    let signing_time = signer_info
+        .signed_attrs
+        .as_ref()
+        .and_then(extract_signing_time_attribute);
+
+    Ok(VerificationResult {
+        content: content.to_vec(),
+        signer_certificate: signer_cert_der,
+        certificate_chain: chain_der,
+        signing_time,
+    })
 }
 
 /// Result of successful CMS verification.
@@ -253,10 +272,18 @@ fn find_signer_certificate<'a>(
                 "signer certificate not found in embedded certificates".into(),
             ))
         }
-        SignerIdentifier::SubjectKeyIdentifier(_ski) => {
-            // TODO: Support SKI-based lookup
+        SignerIdentifier::SubjectKeyIdentifier(ski) => {
+            for cert in certificates {
+                let cert_ski = cert
+                    .tbs_certificate
+                    .get::<x509_cert::ext::pkix::SubjectKeyIdentifier>()
+                    .map_err(|error| PkiError::CertificateParse(error.to_string()))?;
+                if cert_ski.is_some_and(|(_, cert_ski)| cert_ski.0 == ski.0) {
+                    return Ok(cert);
+                }
+            }
             Err(PkiError::ChainValidation(
-                "SubjectKeyIdentifier lookup not yet supported".into(),
+                "signer certificate matching SubjectKeyIdentifier not found".into(),
             ))
         }
     }
@@ -399,9 +426,7 @@ fn verify_cms_signature(
 
         encode_signed_attrs_as_set(signed_attrs).map_err(PkiError::SignatureVerification)?
     } else {
-        return Err(PkiError::SignatureVerification(
-            "missing signed attributes".into(),
-        ));
+        content.to_vec()
     };
 
     verify_signature_with_algorithm_params(
