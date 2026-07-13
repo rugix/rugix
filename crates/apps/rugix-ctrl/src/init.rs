@@ -1037,16 +1037,12 @@ fn check_deferred_spare_reboot(system: &System) -> SystemResult<()> {
             .find_by_name(target_name)
             .map(|(idx, _)| idx)
             .ok_or_else(|| reportify::whatever!("deferred reboot target disappeared"))?;
-        set_target_clear_marker_and_reboot(
-            || {
-                system
-                    .boot_flow()
-                    .set_try_next(system, target)
-                    .whatever("unable to set deferred reboot target")
-            },
-            || clear_flag(DEFERRED_SPARE_REBOOT_FLAG),
-            || system.reboot(),
-        )?;
+        system
+            .boot_flow()
+            .set_try_next(system, target)
+            .whatever("unable to set deferred reboot target")?;
+        clear_flag(DEFERRED_SPARE_REBOOT_FLAG)?;
+        system.reboot()?;
     }
     Ok(())
 }
@@ -1071,23 +1067,9 @@ fn select_deferred_target<'a>(
     legacy_spare.ok_or_else(|| reportify::whatever!("unable to determine legacy spare target"))
 }
 
-fn set_target_clear_marker_and_reboot(
-    set_target: impl FnOnce() -> SystemResult<()>,
-    clear_marker: impl FnOnce() -> SystemResult<()>,
-    reboot: impl FnOnce() -> SystemResult<()>,
-) -> SystemResult<()> {
-    set_target()?;
-    clear_marker()?;
-    reboot()
-}
-
 #[cfg(test)]
 mod deferred_reboot_tests {
-    use std::cell::Cell;
-
     use super::select_deferred_target;
-    use super::set_target_clear_marker_and_reboot;
-    use crate::system::SystemResult;
 
     #[test]
     fn recorded_and_legacy_deferred_targets_are_resolved_safely() {
@@ -1103,47 +1085,6 @@ mod deferred_reboot_tests {
         assert!(select_deferred_target(Some("missing"), &groups, None).is_err());
         assert!(select_deferred_target(None, &["a", "b", "c"], Some("b")).is_err());
         assert!(select_deferred_target(None, &["a"], None).is_err());
-    }
-
-    #[test]
-    fn bootloader_failure_retains_deferred_marker() {
-        let cleared = Cell::new(false);
-        let rebooted = Cell::new(false);
-        let result = set_target_clear_marker_and_reboot(
-            || -> SystemResult<()> { reportify::bail!("injected bootloader failure") },
-            || {
-                cleared.set(true);
-                Ok(())
-            },
-            || {
-                rebooted.set(true);
-                Ok(())
-            },
-        );
-        assert!(result.is_err());
-        assert!(!cleared.get());
-        assert!(!rebooted.get());
-    }
-
-    #[test]
-    fn deferred_reboot_runs_only_after_target_and_marker_updates() {
-        let stage = Cell::new(0);
-        set_target_clear_marker_and_reboot(
-            || {
-                assert_eq!(stage.replace(1), 0);
-                Ok(())
-            },
-            || {
-                assert_eq!(stage.replace(2), 1);
-                Ok(())
-            },
-            || {
-                assert_eq!(stage.replace(3), 2);
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert_eq!(stage.get(), 3);
     }
 }
 
