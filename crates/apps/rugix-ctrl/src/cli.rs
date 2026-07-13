@@ -1287,10 +1287,8 @@ fn install_app_bundle<S: BundleSource>(
                 ),
             )
             .whatever("unable to write generation metadata")?;
-        rugix_common::fsutils::sync_tree(gen_dir)
-            .whatever("unable to synchronize app generation")?;
-        crate::apps::manager::AppManager::mark_complete(gen_dir)
-            .whatever("unable to mark generation as complete")?;
+        crate::apps::manager::AppManager::finalize_generation(gen_dir)
+            .whatever("unable to finalize app generation")?;
     }
 
     // Phase 3: activate deterministically and restore every earlier app if one fails.

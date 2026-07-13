@@ -283,6 +283,17 @@ impl AppManager {
         Ok(())
     }
 
+    /// Synchronize a generation tree and only then create its durable completion marker.
+    pub fn finalize_generation(gen_dir: &Path) -> AppsResult<()> {
+        finalize_generation_with(
+            || {
+                rugix_common::fsutils::sync_tree(gen_dir)
+                    .whatever("unable to synchronize app generation")
+            },
+            || Self::mark_complete(gen_dir),
+        )
+    }
+
     /// Check whether a generation is complete (fully installed).
     pub fn is_complete(gen_dir: &Path) -> bool {
         gen_dir.join(".rugix/complete").exists()
@@ -882,6 +893,14 @@ impl AppManager {
     }
 }
 
+fn finalize_generation_with(
+    synchronize: impl FnOnce() -> AppsResult<()>,
+    mark_complete: impl FnOnce() -> AppsResult<()>,
+) -> AppsResult<()> {
+    synchronize()?;
+    mark_complete()
+}
+
 /// Load an app manifest.
 fn load_manifest(gen_dir: &Path) -> AppsResult<AppManifest> {
     let manifest_path = gen_dir.join("app.toml");
@@ -898,6 +917,7 @@ mod tests {
     use crate::config::apps::AppStateActive;
     use crate::config::apps::AppsConfig;
 
+    use super::finalize_generation_with;
     use super::AppManager;
 
     fn setup_generation(manager: &AppManager, app: &str, generation: u64, script: &str) {
@@ -1042,5 +1062,19 @@ mod tests {
         assert_eq!(manager.gc(&lock, "example", 1).unwrap(), vec![1, 4]);
         assert!(manager.generation_dir("example", 2).unwrap().exists());
         assert!(manager.generation_dir("example", 3).unwrap().exists());
+    }
+
+    #[test]
+    fn synchronization_failure_prevents_generation_completion() {
+        let completed = std::cell::Cell::new(false);
+        let result = finalize_generation_with(
+            || -> super::AppsResult<()> { reportify::bail!("injected synchronization failure") },
+            || {
+                completed.set(true);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(!completed.get());
     }
 }
