@@ -6,11 +6,25 @@
   "properties": {
     "signatures": {
       "$ref": "#/$defs/rugix_ctrl.config.SignaturesConfig"
+    },
+    "compatibility": {
+      "$ref": "#/$defs/rugix_ctrl.config.CompatibilityConfig"
     }
   },
   "required": [],
   "unevaluatedProperties": false,
   "$defs": {
+    "rugix_ctrl.config.CompatibilityConfig": {
+      "$id": "rugix_ctrl.config.CompatibilityConfig",
+      "type": "object",
+      "properties": {
+        "requireBundleComponents": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "unevaluatedProperties": false
+    },
     "rugix_ctrl.config.SignaturesConfig": {
       "$id": "rugix_ctrl.config.SignaturesConfig",
       "type": "object",

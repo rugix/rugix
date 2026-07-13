@@ -2,11 +2,17 @@
 record Config {
     /// Signature check configuration.
     signatures?: SignaturesConfig,
+    /// Component compatibility policy.
+    compatibility?: CompatibilityConfig,
 }
 
 record SignaturesConfig {
     /// Paths to root certificates.
     /// 
-    /// Currently, only a single root certificate is supported.
     roots: [string],
+}
+
+record CompatibilityConfig {
+    /// Require update bundles to carry component metadata.
+    require_bundle_components?: bool,
 }
