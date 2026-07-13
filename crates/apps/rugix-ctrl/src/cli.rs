@@ -2022,6 +2022,14 @@ fn prepare_system_update<T>(
     Ok(preflight)
 }
 
+fn finalize_payload_and_record<T>(
+    finalize: impl FnOnce() -> SystemResult<T>,
+    record: impl FnOnce(T) -> SystemResult<()>,
+) -> SystemResult<()> {
+    let finalized = finalize()?;
+    record(finalized)
+}
+
 fn install_update_bundle<R: BundleSource>(
     system: &System,
     config: &Config,
@@ -2217,180 +2225,197 @@ fn install_update_bundle<R: BundleSource>(
             } else {
                 None
             };
-            let decoded_payload_info = if let Some(delta_encoding) = &payload_entry.delta_encoding {
-                let delta_encoding = delta_encoding.clone();
-                if delta_encoding.inputs.len() != 1 {
-                    bail!("unsupported number of delta encoding inputs");
-                }
-                let input = &delta_encoding.inputs[0];
-                let mut source = None;
-                'slots: for (_, delta_slot) in system.slots().iter() {
-                    let Ok(Some(slot_state)) = payload_db::get_stored_state(delta_slot.name())
-                    else {
-                        continue;
-                    };
-                    for input_hash in &input.hashes {
-                        let Some(slot_hash) = slot_state.hashes.get(&input_hash.algorithm()) else {
-                            trace!(slot_name = delta_slot.name(), algorithm = ?input_hash.algorithm(), "no hash found");
-                            continue;
-                        };
-                        if slot_hash == input_hash {
-                            // We found the slot to use as a source.
-                            source = Some(delta_slot);
-                            trace!(slot_name = delta_slot.name(), "delta source found");
-                            break 'slots;
-                        } else {
-                            trace!(slot_name = delta_slot.name(), %slot_hash, %input_hash, "hash does not match");
+            let delta_encoding = payload_entry.delta_encoding.clone();
+            finalize_payload_and_record(
+                || {
+                    let decoded_payload_info = if let Some(delta_encoding) = &delta_encoding {
+                        let delta_encoding = delta_encoding.clone();
+                        if delta_encoding.inputs.len() != 1 {
+                            bail!("unsupported number of delta encoding inputs");
                         }
-                    }
-                }
-                let Some(source) = source else {
-                    bail!("no slot suitable delta source found");
-                };
-                // This is here so that we get an error when introducing additional formats.
-                match delta_encoding.format {
-                    rugix_bundle::manifest::DeltaEncodingFormat::Xdelta => { /* do nothing */ }
-                }
-                let source = match source.kind() {
-                    SlotKind::Block(_) => source.require_available_block()?.path().to_owned(),
-                    SlotKind::File { path } => path.to_owned(),
-                    SlotKind::Custom { .. } => {
-                        bail!("source slot must not be a custom slot");
-                    }
-                };
-                let target = match slot.kind() {
-                    SlotKind::Block(_) => {
-                        let device = slot.require_available_block()?;
-                        std::fs::OpenOptions::new()
-                            .read(true)
-                            .write(true)
-                            .open(device)
-                            .whatever("unable to open payload target")?
-                    }
-                    SlotKind::File { path } => std::fs::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .create(true)
-                        .truncate(true)
-                        .open(path)
-                        .whatever("unable to open payload target")?,
-                    SlotKind::Custom { .. } => {
-                        bail!("custom slots do not support delta updates yet")
-                    }
-                };
-                let mut target_writer =
-                    HashWriter::new(delta_encoding.original_hash.algorithm(), target);
-                let (mut patch_reader, patch_writer) = buffered_pipe(8192);
+                        let input = &delta_encoding.inputs[0];
+                        let mut source = None;
+                        'slots: for (_, delta_slot) in system.slots().iter() {
+                            let Ok(Some(slot_state)) =
+                                payload_db::get_stored_state(delta_slot.name())
+                            else {
+                                continue;
+                            };
+                            for input_hash in &input.hashes {
+                                let Some(slot_hash) =
+                                    slot_state.hashes.get(&input_hash.algorithm())
+                                else {
+                                    trace!(slot_name = delta_slot.name(), algorithm = ?input_hash.algorithm(), "no hash found");
+                                    continue;
+                                };
+                                if slot_hash == input_hash {
+                                    // We found the slot to use as a source.
+                                    source = Some(delta_slot);
+                                    trace!(slot_name = delta_slot.name(), "delta source found");
+                                    break 'slots;
+                                } else {
+                                    trace!(slot_name = delta_slot.name(), %slot_hash, %input_hash, "hash does not match");
+                                }
+                            }
+                        }
+                        let Some(source) = source else {
+                            bail!("no slot suitable delta source found");
+                        };
+                        // This is here so that we get an error when introducing additional formats.
+                        match delta_encoding.format {
+                            rugix_bundle::manifest::DeltaEncodingFormat::Xdelta => { /* do nothing */
+                            }
+                        }
+                        let source = match source.kind() {
+                            SlotKind::Block(_) => {
+                                source.require_available_block()?.path().to_owned()
+                            }
+                            SlotKind::File { path } => path.to_owned(),
+                            SlotKind::Custom { .. } => {
+                                bail!("source slot must not be a custom slot");
+                            }
+                        };
+                        let target = match slot.kind() {
+                            SlotKind::Block(_) => {
+                                let device = slot.require_available_block()?;
+                                std::fs::OpenOptions::new()
+                                    .read(true)
+                                    .write(true)
+                                    .open(device)
+                                    .whatever("unable to open payload target")?
+                            }
+                            SlotKind::File { path } => std::fs::OpenOptions::new()
+                                .read(true)
+                                .write(true)
+                                .create(true)
+                                .truncate(true)
+                                .open(path)
+                                .whatever("unable to open payload target")?,
+                            SlotKind::Custom { .. } => {
+                                bail!("custom slots do not support delta updates yet")
+                            }
+                        };
+                        let mut target_writer =
+                            HashWriter::new(delta_encoding.original_hash.algorithm(), target);
+                        let (mut patch_reader, patch_writer) = buffered_pipe(8192);
 
-                let (decode_result, xdelta_result) = std::thread::scope(|scope| {
-                    let target_writer = &mut target_writer;
-                    // We must move the `patch_reader` here as we need it to be dropped when
-                    // the decompression fails. Otherwise, we get a deadlock when waiting for
-                    // the payload decoding in the following.
-                    let handle = scope.spawn(move || {
-                        trace!("starting xdelta");
-                        let result = xdelta_decompress(&source, &mut patch_reader, target_writer);
-                        trace!(?result, "xdelta terminated");
-                        result
-                    });
-                    let decode_result = payload.decode_into(
-                        BufferedPipeTarget {
-                            writer: patch_writer,
-                        },
-                        block_provider
-                            .as_ref()
-                            .map(|p| p as &dyn StoredBlockProvider),
-                        &mut progress,
-                    );
-                    trace!("finished decoding payload into pipe");
-                    (decode_result, handle.join().unwrap())
-                });
-                decode_result.whatever("unable to decode payload")?;
-                xdelta_result.whatever("unable to decode delta update")?;
-                let (target_hash, target_size) = target_writer
-                    .finalize_synced()
-                    .whatever("unable to synchronize delta payload target")?;
-                if target_hash != delta_encoding.original_hash {
-                    bail!("decoded slot data does not match hash");
-                }
-                DecodedPayloadInfo {
-                    hash: target_hash,
-                    size: target_size.into(),
-                }
-            } else {
-                match slot.kind() {
-                    SlotKind::Block(_) => {
-                        let device = slot.require_available_block()?;
-                        let target = std::fs::OpenOptions::new()
-                            .read(true)
-                            .write(true)
-                            .open(device)
-                            .whatever("unable to open payload target")?;
-                        payload
-                            .decode_into(
-                                target,
+                        let (decode_result, xdelta_result) = std::thread::scope(|scope| {
+                            let target_writer = &mut target_writer;
+                            // We must move the `patch_reader` here as we need it to be dropped when
+                            // the decompression fails. Otherwise, we get a deadlock when waiting
+                            // for the payload decoding in the
+                            // following.
+                            let handle = scope.spawn(move || {
+                                trace!("starting xdelta");
+                                let result =
+                                    xdelta_decompress(&source, &mut patch_reader, target_writer);
+                                trace!(?result, "xdelta terminated");
+                                result
+                            });
+                            let decode_result = payload.decode_into(
+                                BufferedPipeTarget {
+                                    writer: patch_writer,
+                                },
                                 block_provider
                                     .as_ref()
                                     .map(|p| p as &dyn StoredBlockProvider),
                                 &mut progress,
-                            )
-                            .whatever("unable to decode payload")?
-                    }
-                    SlotKind::File { path } => {
-                        let target = std::fs::OpenOptions::new()
-                            .read(true)
-                            .write(true)
-                            .create(true)
-                            .truncate(true)
-                            .open(path)
-                            .whatever("unable to open payload target")?;
-                        payload
-                            .decode_into(
-                                target,
-                                block_provider
-                                    .as_ref()
-                                    .map(|p| p as &dyn StoredBlockProvider),
-                                &mut progress,
-                            )
-                            .whatever("unable to decode payload")?
-                    }
-                    SlotKind::Custom { handler } => {
-                        let target = CustomTarget::new(handler.iter().map(|arg| arg.as_str()))?;
-                        payload
-                            .decode_into(
-                                target,
-                                block_provider
-                                    .as_ref()
-                                    .map(|p| p as &dyn StoredBlockProvider),
-                                &mut progress,
-                            )
-                            .whatever("unable to decode payload")?
-                    }
-                }
-            };
-            payload_db::save_slot_state(
-                slot.name(),
-                // Only save the hashes and size if the slot is immutable.
-                &SlotState {
-                    hashes: if slot.is_immutable() {
-                        [(
-                            decoded_payload_info.hash.algorithm(),
-                            decoded_payload_info.hash,
-                        )]
-                        .into_iter()
-                        .collect()
+                            );
+                            trace!("finished decoding payload into pipe");
+                            (decode_result, handle.join().unwrap())
+                        });
+                        decode_result.whatever("unable to decode payload")?;
+                        xdelta_result.whatever("unable to decode delta update")?;
+                        let (target_hash, target_size) = target_writer
+                            .finalize_synced()
+                            .whatever("unable to synchronize delta payload target")?;
+                        if target_hash != delta_encoding.original_hash {
+                            bail!("decoded slot data does not match hash");
+                        }
+                        DecodedPayloadInfo {
+                            hash: target_hash,
+                            size: target_size.into(),
+                        }
                     } else {
-                        Default::default()
-                    },
-                    size: if slot.is_immutable() {
-                        Some(decoded_payload_info.size)
-                    } else {
-                        None
-                    },
-                    updated_at: Some(jiff::Timestamp::now()),
+                        match slot.kind() {
+                            SlotKind::Block(_) => {
+                                let device = slot.require_available_block()?;
+                                let target = std::fs::OpenOptions::new()
+                                    .read(true)
+                                    .write(true)
+                                    .open(device)
+                                    .whatever("unable to open payload target")?;
+                                payload
+                                    .decode_into(
+                                        target,
+                                        block_provider
+                                            .as_ref()
+                                            .map(|p| p as &dyn StoredBlockProvider),
+                                        &mut progress,
+                                    )
+                                    .whatever("unable to decode payload")?
+                            }
+                            SlotKind::File { path } => {
+                                let target = std::fs::OpenOptions::new()
+                                    .read(true)
+                                    .write(true)
+                                    .create(true)
+                                    .truncate(true)
+                                    .open(path)
+                                    .whatever("unable to open payload target")?;
+                                payload
+                                    .decode_into(
+                                        target,
+                                        block_provider
+                                            .as_ref()
+                                            .map(|p| p as &dyn StoredBlockProvider),
+                                        &mut progress,
+                                    )
+                                    .whatever("unable to decode payload")?
+                            }
+                            SlotKind::Custom { handler } => {
+                                let target =
+                                    CustomTarget::new(handler.iter().map(|arg| arg.as_str()))?;
+                                payload
+                                    .decode_into(
+                                        target,
+                                        block_provider
+                                            .as_ref()
+                                            .map(|p| p as &dyn StoredBlockProvider),
+                                        &mut progress,
+                                    )
+                                    .whatever("unable to decode payload")?
+                            }
+                        }
+                    };
+                    Ok(decoded_payload_info)
                 },
-            )
-            .whatever("unable to save slot state")?;
+                |decoded_payload_info| {
+                    payload_db::save_slot_state(
+                        slot.name(),
+                        // Only save the hashes and size if the slot is immutable.
+                        &SlotState {
+                            hashes: if slot.is_immutable() {
+                                [(
+                                    decoded_payload_info.hash.algorithm(),
+                                    decoded_payload_info.hash,
+                                )]
+                                .into_iter()
+                                .collect()
+                            } else {
+                                Default::default()
+                            },
+                            size: if slot.is_immutable() {
+                                Some(decoded_payload_info.size)
+                            } else {
+                                None
+                            },
+                            updated_at: Some(jiff::Timestamp::now()),
+                        },
+                    )
+                    .whatever("unable to save slot state")
+                },
+            )?;
             continue;
         } else if let SystemPayloadDestination::Execute = destination {
             let type_execute = payload_entry
@@ -2965,6 +2990,7 @@ mod tests {
     use super::app_activation_outcome;
     use super::clear_target_overlay_with;
     use super::enforce_bundle_component_policy;
+    use super::finalize_payload_and_record;
     use super::preflight_system_deliveries;
     use super::prepare_system_update;
     use super::requires_bundle_components;
@@ -3203,6 +3229,30 @@ mod tests {
         assert!(prepared.is_err());
         assert!(!pre_install.get());
         assert!(!payload_written.get());
+    }
+
+    #[test]
+    fn failed_payload_synchronization_preserves_state_and_boot_selection() {
+        use std::cell::Cell;
+
+        let payload_state_written = Cell::new(false);
+        let boot_selection_changed = Cell::new(false);
+        let result = finalize_payload_and_record(
+            || -> crate::system::SystemResult<()> {
+                reportify::bail!("injected payload synchronization failure")
+            },
+            |_| {
+                payload_state_written.set(true);
+                Ok(())
+            },
+        );
+        if result.is_ok() {
+            boot_selection_changed.set(true);
+        }
+
+        assert!(result.is_err());
+        assert!(!payload_state_written.get());
+        assert!(!boot_selection_changed.get());
     }
 
     #[test]
