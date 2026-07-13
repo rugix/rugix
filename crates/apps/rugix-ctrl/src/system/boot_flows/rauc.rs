@@ -23,32 +23,75 @@ struct RaucBootFlow {
     groups: HashMap<BootGroupIdx, RaucBootGroup>,
 }
 
-fn rauc_boot_fow(
+fn rauc_boot_flow(
     boot_entries: &BootGroups,
     config: &RaucBootFlowConfig,
 ) -> BootFlowResult<RaucBootFlow> {
+    let boot_entries = boot_entries.iter().collect::<Vec<_>>();
+    if boot_entries.len() < 2 {
+        bail!("at least two boot groups are required");
+    }
+
+    let group_names = match &config.group_names {
+        Some(group_names) => group_names.clone(),
+        None => boot_entries
+            .iter()
+            .map(|(_, group)| group.name().to_uppercase())
+            .collect(),
+    };
+    validate_group_names(&group_names, boot_entries.len())?;
+
     let groups = boot_entries
         .iter()
         .enumerate()
-        .map(|(no, (idx, group))| {
+        .map(|(no, (idx, _))| {
             (
-                idx,
+                *idx,
                 RaucBootGroup {
-                    idx,
-                    name: config
-                        .group_names
-                        .as_ref()
-                        .and_then(|n| n.get(no))
-                        .map(|n| n.to_owned())
-                        .unwrap_or_else(|| group.name().to_uppercase()),
+                    idx: *idx,
+                    name: group_names[no].clone(),
                 },
             )
         })
         .collect::<HashMap<_, _>>();
-    if groups.len() < 2 {
-        bail!("at least two boot groups are required");
-    }
     Ok(RaucBootFlow { groups })
+}
+
+fn validate_group_names(group_names: &[String], boot_group_count: usize) -> BootFlowResult<()> {
+    if group_names.len() != boot_group_count {
+        bail!("the number of RAUC group names must match the number of boot groups");
+    }
+    let mut unique_names = hashbrown::HashSet::new();
+    for name in group_names {
+        if name.trim().is_empty() {
+            bail!("RAUC group names must not be empty");
+        }
+        if !unique_names.insert(name) {
+            bail!("duplicate RAUC group name {name:?}");
+        }
+    }
+    Ok(())
+}
+
+fn grub_default_group<'a>(
+    boot_order: impl IntoIterator<Item = &'a str>,
+    boot_env: &HashMap<String, String>,
+    configured_names: &[&str],
+) -> Option<&'a str> {
+    boot_order.into_iter().find(|group| {
+        if !configured_names.contains(group) {
+            return false;
+        }
+        let group_ok = boot_env
+            .get(&format!("{group}_OK"))
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or(0);
+        let group_try = boot_env
+            .get(&format!("{group}_TRY"))
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or(1);
+        group_ok > 0 && group_try < 1
+    })
 }
 
 #[derive(Debug)]
@@ -58,7 +101,7 @@ pub struct RaucUboot {
 
 impl RaucUboot {
     pub fn new(boot_entries: &BootGroups, config: &RaucBootFlowConfig) -> BootFlowResult<Self> {
-        let inner = rauc_boot_fow(boot_entries, config)?;
+        let inner = rauc_boot_flow(boot_entries, config)?;
         Ok(Self { inner })
     }
 }
@@ -175,7 +218,7 @@ pub struct RaucGrub {
 
 impl RaucGrub {
     pub fn new(boot_entries: &BootGroups, config: &RaucBootFlowConfig) -> BootFlowResult<Self> {
-        let inner = rauc_boot_fow(boot_entries, config)?;
+        let inner = rauc_boot_flow(boot_entries, config)?;
         Ok(Self { inner })
     }
 }
@@ -228,20 +271,20 @@ impl BootFlow for RaucGrub {
         else {
             bail!("unable to determine the boot order");
         };
-        for group in boot_order {
-            let group_ok = boot_env
-                .get(&format!("{group}_OK"))
-                .and_then(|v| v.trim().parse::<u32>().ok())
-                .unwrap_or(0);
-            let group_try = boot_env
-                .get(&format!("{group}_TRY"))
-                .and_then(|v| v.trim().parse::<u32>().ok())
-                .unwrap_or(1);
-            for rauc_group in self.inner.groups.values() {
-                if group_ok > 0 && group_try < 1 {
-                    return Ok(rauc_group.idx);
-                }
-            }
+        let configured_names = self
+            .inner
+            .groups
+            .values()
+            .map(|group| group.name.as_str())
+            .collect::<Vec<_>>();
+        if let Some(group) = grub_default_group(boot_order, &boot_env, &configured_names) {
+            return Ok(self
+                .inner
+                .groups
+                .values()
+                .find(|rauc_group| rauc_group.name == group)
+                .expect("validated RAUC group name")
+                .idx);
         }
         bail!("unable to determine the default boot group");
     }
@@ -289,5 +332,72 @@ impl BootFlow for RaucGrub {
         env.insert(format!("{}_TRY", rauc_group.name), "0".to_owned());
         set_vars(&env)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hashbrown::HashMap;
+
+    use super::grub_default_group;
+    use super::validate_group_names;
+
+    fn grub_env(values: &[(&str, &str)]) -> HashMap<String, String> {
+        values
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn grub_default_follows_boot_order_and_group_state() {
+        let cases = [
+            ("A B", vec![("A_OK", "1"), ("A_TRY", "0")], Some("A")),
+            ("B A", vec![("A_OK", "1"), ("A_TRY", "0")], Some("A")),
+            ("A B", vec![("B_OK", "1"), ("B_TRY", "0")], Some("B")),
+            (
+                "B A",
+                vec![("A_OK", "1"), ("A_TRY", "0"), ("B_OK", "1"), ("B_TRY", "0")],
+                Some("B"),
+            ),
+            ("A B", vec![("A_OK", "1"), ("A_TRY", "1")], None),
+        ];
+
+        for (boot_order, values, expected) in cases {
+            let env = grub_env(&values);
+            assert_eq!(
+                grub_default_group(boot_order.split_whitespace(), &env, &["A", "B"]),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn grub_default_ignores_unconfigured_groups() {
+        let env = grub_env(&[("UNKNOWN_OK", "1"), ("UNKNOWN_TRY", "0")]);
+        assert_eq!(
+            grub_default_group("UNKNOWN A".split_whitespace(), &env, &["A", "B"]),
+            None
+        );
+    }
+
+    #[test]
+    fn grub_default_does_not_depend_on_configured_group_order() {
+        let env = grub_env(&[("B_OK", "1"), ("B_TRY", "0")]);
+        for configured_names in [["A", "B"], ["B", "A"]] {
+            assert_eq!(
+                grub_default_group("A B".split_whitespace(), &env, &configured_names),
+                Some("B")
+            );
+        }
+    }
+
+    #[test]
+    fn group_names_must_be_nonempty_and_unique() {
+        assert!(validate_group_names(&["A".into(), "B".into()], 2).is_ok());
+        assert!(validate_group_names(&["A".into()], 2).is_err());
+        assert!(validate_group_names(&["A".into(), "B".into(), "C".into()], 2).is_err());
+        assert!(validate_group_names(&["A".into(), "A".into()], 2).is_err());
+        assert!(validate_group_names(&["A".into(), "  ".into()], 2).is_err());
     }
 }
