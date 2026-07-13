@@ -437,29 +437,13 @@ fn main() -> BundleResult<()> {
                 let (new_slot, old_slot) = slot
                     .split_once(':')
                     .unwrap_or((slot.as_str(), slot.as_str()));
-                let Some(new_payload_idx) =
-                    new_manifest
-                        .payloads
-                        .iter()
-                        .position(|p| match &p.delivery {
-                            DeliveryConfig::Slot(config) => config.slot == new_slot,
-                            _ => false,
-                        })
-                else {
+                let Some(new_payload_idx) = slot_payload_index(&new_manifest, new_slot) else {
                     if explicit_slots {
                         bail!("unable to find slot {new_slot:?} in new bundle");
                     }
                     continue;
                 };
-                let Some(old_payload_idx) =
-                    old_manifest
-                        .payloads
-                        .iter()
-                        .position(|p| match &p.delivery {
-                            DeliveryConfig::Slot(config) => config.slot == old_slot,
-                            _ => false,
-                        })
-                else {
+                let Some(old_payload_idx) = slot_payload_index(&old_manifest, old_slot) else {
                     if explicit_slots {
                         bail!("unable to find slot {old_slot:?} in old bundle");
                     }
@@ -701,6 +685,12 @@ fn delta_payload_filenames(
     Ok((old_filename, new_filename))
 }
 
+fn slot_payload_index(manifest: &BundleManifest, slot: &str) -> Option<usize> {
+    manifest.payloads.iter().position(
+        |payload| matches!(&payload.delivery, DeliveryConfig::Slot(config) if config.slot == slot),
+    )
+}
+
 pub fn unpack(src: &Path, dst: &Path) -> BundleResult<()> {
     if std::fs::symlink_metadata(dst)
         .map(|metadata| metadata.file_type().is_symlink())
@@ -777,6 +767,7 @@ mod tests {
     use rugix_bundle::manifest::UpdateType;
 
     use super::delta_payload_filenames;
+    use super::slot_payload_index;
     use super::unpack;
 
     fn payload(slot: &str, filename: &str) -> Payload {
@@ -802,6 +793,9 @@ mod tests {
             ("old-a.img".to_owned(), "renamed-a.img".to_owned())
         );
         assert!(delta_payload_filenames(&old, &new, 0, 2).is_err());
+        assert_eq!(slot_payload_index(&old, "a"), Some(0));
+        assert_eq!(slot_payload_index(&new, "a"), Some(1));
+        assert_eq!(slot_payload_index(&old, "missing"), None);
     }
 
     #[cfg(unix)]
