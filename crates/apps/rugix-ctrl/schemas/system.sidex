@@ -30,6 +30,8 @@ record PartitionConfig {
     path?: string,
     /// Indicates whether the partition is write-protected.
     protected?: bool,
+    /// Fail initialization instead of using ephemeral state when mounting the data partition fails.
+    fail_closed_on_mount_error?: bool,
     /// Driver responsible for formatting, mounting, and wiping the partition.
     ///
     /// Only valid on the data partition. Mutually exclusive with `mount_script`.

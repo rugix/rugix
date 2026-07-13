@@ -346,6 +346,9 @@
         "protected": {
           "type": "boolean"
         },
+        "fail-closed-on-mount-error": {
+          "type": "boolean"
+        },
         "driver": {
           "$ref": "#/$defs/rugix_ctrl.system.DataPartitionDriverConfig"
         }

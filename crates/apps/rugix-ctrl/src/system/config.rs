@@ -108,6 +108,19 @@ mod tests {
     }
 
     #[test]
+    fn data_mount_failure_policy_parses() {
+        let config = toml::from_str::<SystemConfig>(indoc! {r#"
+            [data-partition]
+            fail-closed-on-mount-error = true
+        "#})
+        .unwrap();
+        assert_eq!(
+            config.data_partition.unwrap().fail_closed_on_mount_error,
+            Some(true)
+        );
+    }
+
+    #[test]
     fn test_driver_and_mount_script_are_mutually_exclusive() {
         let config: SystemConfig = toml::from_str(indoc! {r#"
             [data-partition]

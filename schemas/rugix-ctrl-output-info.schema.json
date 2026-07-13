@@ -122,6 +122,17 @@
           "required": [
             "status"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "const": "EphemeralFallback"
+            }
+          },
+          "required": [
+            "status"
+          ]
         }
       ]
     }

@@ -25,6 +25,8 @@ variant StateInfoOutput {
     /// 
     /// State is stored in memory and will fail to persist even if declared.
     Error,
+    /// The data partition failed to mount and state is temporarily stored in memory.
+    EphemeralFallback,
 }
 
 /// Information about the state management mechanism, if state management is active.
