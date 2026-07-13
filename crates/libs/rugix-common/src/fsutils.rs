@@ -42,9 +42,35 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), Report<FsError>> {
     fs::rename(&tmp_path, path).whatever("unable to rename temporary file")?;
     // Fsync the parent directory so that the rename is durable across crashes.
     if let Some(parent) = path.parent() {
-        if let Ok(dir) = File::open(parent) {
-            let _ = dir.sync_all();
+        File::open(parent)
+            .whatever("unable to open parent directory")?
+            .sync_all()
+            .whatever("unable to sync parent directory")?;
+    }
+    Ok(())
+}
+
+/// Synchronize all regular files and directories in a filesystem tree.
+pub fn sync_tree(root: &Path) -> Result<(), Report<FsError>> {
+    let metadata = fs::symlink_metadata(root).whatever("unable to read sync-tree metadata")?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_file() {
+        return File::open(root)
+            .whatever("unable to open file for synchronization")?
+            .sync_all()
+            .whatever("unable to synchronize file");
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(root).whatever("unable to read directory for synchronization")? {
+            let entry = entry.whatever("unable to read sync-tree directory entry")?;
+            sync_tree(&entry.path())?;
         }
+        return File::open(root)
+            .whatever("unable to open directory for synchronization")?
+            .sync_all()
+            .whatever("unable to synchronize directory");
     }
     Ok(())
 }

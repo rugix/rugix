@@ -43,7 +43,6 @@ use si_crypto_hashes::HashAlgorithm;
 use si_crypto_hashes::HashDigest;
 use si_crypto_hashes::Hasher;
 use tracing::debug;
-use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
@@ -1125,7 +1124,9 @@ fn install_app_bundle<S: BundleSource>(
                 });
                 decode_result.whatever("unable to decode delta app payload")?;
                 xdelta_result.whatever("unable to decompress delta app payload")?;
-                let (target_hash, target_size) = target_writer.finalize();
+                let (target_hash, target_size) = target_writer
+                    .finalize_synced()
+                    .whatever("unable to synchronize delta app payload")?;
                 if target_hash != delta_encoding.original_hash {
                     bail!("decoded app file data does not match hash");
                 }
@@ -1253,9 +1254,8 @@ fn install_app_bundle<S: BundleSource>(
     for (app_name, (gen_number, gen_dir)) in &app_generations {
         // Persist payload hashes for this generation.
         if let Some(states) = payload_states.get(app_name) {
-            if let Err(e) = crate::apps::manager::AppManager::save_payload_states(gen_dir, states) {
-                warn!(app = %app_name, "failed to save payload states: {e:?}");
-            }
+            crate::apps::manager::AppManager::save_payload_states(gen_dir, states)
+                .whatever("unable to save app payload states")?;
         }
         info!(app = %app_name, generation = gen_number, "finalizing app generation");
         if bundle_components_app.as_ref() == Some(app_name) {
@@ -1277,6 +1277,8 @@ fn install_app_bundle<S: BundleSource>(
                 ),
             )
             .whatever("unable to write generation metadata")?;
+        rugix_common::fsutils::sync_tree(gen_dir)
+            .whatever("unable to synchronize app generation")?;
         crate::apps::manager::AppManager::mark_complete(gen_dir)
             .whatever("unable to mark generation as complete")?;
         let lock = &app_locks[app_name];
@@ -2079,7 +2081,9 @@ fn install_update_bundle<R: BundleSource>(
                 });
                 decode_result.whatever("unable to decode payload")?;
                 xdelta_result.whatever("unable to decode delta update")?;
-                let (target_hash, target_size) = target_writer.finalize();
+                let (target_hash, target_size) = target_writer
+                    .finalize_synced()
+                    .whatever("unable to synchronize delta payload target")?;
                 if target_hash != delta_encoding.original_hash {
                     bail!("decoded slot data does not match hash");
                 }
@@ -2138,7 +2142,7 @@ fn install_update_bundle<R: BundleSource>(
                     }
                 }
             };
-            if let Err(error) = payload_db::save_slot_state(
+            payload_db::save_slot_state(
                 slot.name(),
                 // Only save the hashes and size if the slot is immutable.
                 &SlotState {
@@ -2159,9 +2163,8 @@ fn install_update_bundle<R: BundleSource>(
                     },
                     updated_at: Some(jiff::Timestamp::now()),
                 },
-            ) {
-                error!("unable to save slot state: {error:?}");
-            }
+            )
+            .whatever("unable to save slot state")?;
             continue;
         } else if let SystemPayloadDestination::Execute = destination {
             let type_execute = payload_entry
@@ -2212,6 +2215,14 @@ impl<W> HashWriter<W> {
 
     pub fn finalize(self) -> (HashDigest, u64) {
         (self.hasher.finalize(), self.size)
+    }
+}
+
+impl HashWriter<File> {
+    pub fn finalize_synced(mut self) -> io::Result<(HashDigest, u64)> {
+        self.writer.flush()?;
+        self.writer.sync_all()?;
+        Ok((self.hasher.finalize(), self.size))
     }
 }
 
