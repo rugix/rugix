@@ -62,6 +62,7 @@ use xscript::Vars;
 use crate::utils::clear_flag;
 use crate::utils::is_flag_set;
 use crate::utils::is_init_process;
+use crate::utils::read_deferred_reboot_target;
 use crate::utils::DEFERRED_SPARE_REBOOT_FLAG;
 
 mod error_shell;
@@ -965,21 +966,103 @@ fn exec_system_init() -> SystemResult<()> {
 fn check_deferred_spare_reboot(system: &System) -> SystemResult<()> {
     if is_flag_set(DEFERRED_SPARE_REBOOT_FLAG) {
         println!("Executing deferred reboot to spare partitions.");
-        // Remove file and make sure that changes are synced to disk.
-        clear_flag(DEFERRED_SPARE_REBOOT_FLAG)?;
-        nix::unistd::sync();
-        if !system.needs_commit()? {
-            // Reboot to the spare partitions.
-            if let Some((spare, _)) = system.spare_entry()? {
+        let recorded_target = read_deferred_reboot_target()?;
+        let group_names = system
+            .boot_entries()
+            .iter()
+            .map(|(_, entry)| entry.name())
+            .collect::<Vec<_>>();
+        let legacy_spare = if recorded_target.is_none() {
+            system.spare_entry()?.map(|(_, entry)| entry.name())
+        } else {
+            None
+        };
+        let target_name =
+            select_deferred_target(recorded_target.as_deref(), &group_names, legacy_spare)?;
+        let target = system
+            .boot_entries()
+            .find_by_name(target_name)
+            .map(|(idx, _)| idx)
+            .ok_or_else(|| reportify::whatever!("deferred reboot target disappeared"))?;
+        set_target_then_clear_marker(
+            || {
                 system
                     .boot_flow()
-                    .set_try_next(system, spare)
-                    .whatever("unable to set next boot group")?;
-                system.reboot()?;
-            }
-        }
+                    .set_try_next(system, target)
+                    .whatever("unable to set deferred reboot target")
+            },
+            || clear_flag(DEFERRED_SPARE_REBOOT_FLAG),
+        )?;
+        system.reboot()?;
     }
     Ok(())
+}
+
+fn select_deferred_target<'a>(
+    recorded_target: Option<&'a str>,
+    group_names: &[&'a str],
+    legacy_spare: Option<&'a str>,
+) -> SystemResult<&'a str> {
+    if let Some(target) = recorded_target {
+        if group_names.contains(&target) {
+            return Ok(target);
+        }
+        bail!("recorded deferred reboot target {target:?} does not exist");
+    }
+    if group_names.len() != 2 {
+        bail!(
+            "legacy deferred reboot marker is ambiguous with {} boot groups; remove the marker or select a target explicitly",
+            group_names.len()
+        );
+    }
+    legacy_spare.ok_or_else(|| reportify::whatever!("unable to determine legacy spare target"))
+}
+
+fn set_target_then_clear_marker(
+    set_target: impl FnOnce() -> SystemResult<()>,
+    clear_marker: impl FnOnce() -> SystemResult<()>,
+) -> SystemResult<()> {
+    set_target()?;
+    clear_marker()
+}
+
+#[cfg(test)]
+mod deferred_reboot_tests {
+    use std::cell::Cell;
+
+    use super::select_deferred_target;
+    use super::set_target_then_clear_marker;
+    use crate::system::SystemResult;
+
+    #[test]
+    fn recorded_and_legacy_deferred_targets_are_resolved_safely() {
+        let groups = ["a", "b"];
+        assert_eq!(
+            select_deferred_target(Some("b"), &groups, None).unwrap(),
+            "b"
+        );
+        assert_eq!(
+            select_deferred_target(None, &groups, Some("b")).unwrap(),
+            "b"
+        );
+        assert!(select_deferred_target(Some("missing"), &groups, None).is_err());
+        assert!(select_deferred_target(None, &["a", "b", "c"], Some("b")).is_err());
+        assert!(select_deferred_target(None, &["a"], None).is_err());
+    }
+
+    #[test]
+    fn bootloader_failure_retains_deferred_marker() {
+        let cleared = Cell::new(false);
+        let result = set_target_then_clear_marker(
+            || -> SystemResult<()> { reportify::bail!("injected bootloader failure") },
+            || {
+                cleared.set(true);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(!cleared.get());
+    }
 }
 
 fn log_ignored_error<T, E>(result: Result<T, E>, context: &'static str) -> Option<T>
