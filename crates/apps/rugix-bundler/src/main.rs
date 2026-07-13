@@ -460,11 +460,15 @@ fn main() -> BundleResult<()> {
                     continue;
                 };
                 info!(%old_slot, %new_slot, "computing delta");
-                let old_filename = &old_manifest.payloads[old_payload_idx].filename;
-                let new_filename = &old_manifest.payloads[new_payload_idx].filename;
+                let (old_filename, new_filename) = delta_payload_filenames(
+                    &old_manifest,
+                    &new_manifest,
+                    old_payload_idx,
+                    new_payload_idx,
+                )?;
                 let new_filename_patched = format!("{new_filename}.xdelta");
-                let old_path = old_dir.path().join("payloads").join(old_filename);
-                let new_path = new_dir.path().join("payloads").join(new_filename);
+                let old_path = old_dir.path().join("payloads").join(&old_filename);
+                let new_path = new_dir.path().join("payloads").join(&new_filename);
                 let hash_algorithm = new_manifest
                     .hash_algorithm
                     .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256);
@@ -514,11 +518,15 @@ fn main() -> BundleResult<()> {
                     continue;
                 };
                 info!(app = %new_app, path = %new_app_path, "computing app-file delta");
-                let old_filename = &old_manifest.payloads[old_payload_idx].filename;
-                let new_filename = &new_manifest.payloads[new_payload_idx].filename;
+                let (old_filename, new_filename) = delta_payload_filenames(
+                    &old_manifest,
+                    &new_manifest,
+                    old_payload_idx,
+                    new_payload_idx,
+                )?;
                 let new_filename_patched = format!("{new_filename}.xdelta");
-                let old_path = old_dir.path().join("payloads").join(old_filename);
-                let new_path = new_dir.path().join("payloads").join(new_filename);
+                let old_path = old_dir.path().join("payloads").join(&old_filename);
+                let new_path = new_dir.path().join("payloads").join(&new_filename);
                 let hash_algorithm = new_manifest
                     .hash_algorithm
                     .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256);
@@ -666,6 +674,27 @@ fn main() -> BundleResult<()> {
     Ok(())
 }
 
+fn delta_payload_filenames(
+    old_manifest: &BundleManifest,
+    new_manifest: &BundleManifest,
+    old_payload_idx: usize,
+    new_payload_idx: usize,
+) -> BundleResult<(String, String)> {
+    let old_filename = old_manifest
+        .payloads
+        .get(old_payload_idx)
+        .ok_or_else(|| reportify::whatever!("old payload index {old_payload_idx} is out of range"))?
+        .filename
+        .clone();
+    let new_filename = new_manifest
+        .payloads
+        .get(new_payload_idx)
+        .ok_or_else(|| reportify::whatever!("new payload index {new_payload_idx} is out of range"))?
+        .filename
+        .clone();
+    Ok((old_filename, new_filename))
+}
+
 pub fn unpack(src: &Path, dst: &Path) -> BundleResult<()> {
     std::fs::create_dir_all(dst).unwrap();
     let source = FileSource::from_unbuffered(File::open(&src).unwrap());
@@ -694,6 +723,42 @@ pub fn unpack(src: &Path, dst: &Path) -> BundleResult<()> {
         payload_reader.decode_into(target, None, &mut |_| {})?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use rugix_bundle::manifest::BundleManifest;
+    use rugix_bundle::manifest::DeliveryConfig;
+    use rugix_bundle::manifest::Payload;
+    use rugix_bundle::manifest::SlotDeliveryConfig;
+    use rugix_bundle::manifest::UpdateType;
+
+    use super::delta_payload_filenames;
+
+    fn payload(slot: &str, filename: &str) -> Payload {
+        Payload::new(
+            DeliveryConfig::Slot(SlotDeliveryConfig::new(slot.to_owned())),
+            filename.to_owned(),
+        )
+    }
+
+    #[test]
+    fn delta_filenames_come_from_their_respective_manifests() {
+        let old = BundleManifest::new(
+            UpdateType::Full,
+            vec![payload("a", "old-a.img"), payload("b", "old-b.img")],
+        );
+        let new = BundleManifest::new(
+            UpdateType::Full,
+            vec![payload("b", "new-b.img"), payload("a", "renamed-a.img")],
+        );
+
+        assert_eq!(
+            delta_payload_filenames(&old, &new, 0, 1).unwrap(),
+            ("old-a.img".to_owned(), "renamed-a.img".to_owned())
+        );
+        assert!(delta_payload_filenames(&old, &new, 0, 2).is_err());
+    }
 }
 
 #[tracing::instrument(level = Level::DEBUG)]
