@@ -1334,6 +1334,30 @@ pub struct UpdateStatus {
     state: Mutex<UpdateState>,
 }
 
+#[derive(Debug, Default)]
+struct ProgressCursors {
+    hook: f64,
+    json: f64,
+}
+
+impl ProgressCursors {
+    fn should_emit_hook(&self, progress: f64) -> bool {
+        (progress >= 100.0 && self.hook < 100.0) || progress - self.hook > 0.9
+    }
+
+    fn should_emit_json(&self, progress: f64) -> bool {
+        (progress >= 100.0 && self.json < 100.0) || progress - self.json > 0.4
+    }
+
+    fn mark_hook_emitted(&mut self, progress: f64) {
+        self.hook = progress;
+    }
+
+    fn mark_json_emitted(&mut self, progress: f64) {
+        self.json = progress;
+    }
+}
+
 impl StatusSegment for UpdateStatus {
     fn draw(&self, ctx: &mut rugix_cli::DrawCtx) {
         let state = self.state.lock().unwrap();
@@ -1706,50 +1730,61 @@ fn install_update_bundle<R: BundleSource>(
         }),
     });
 
+    let mut progress_cursors = ProgressCursors::default();
+    let hooks = HooksLoader::default()
+        .load_hooks("update-install")
+        .whatever("unable to load `update-install` hooks")?;
+    let mut emit_progress = |current_progress: f64| {
+        if progress_cursors.should_emit_hook(current_progress) {
+            let hook_vars = vars! {
+                RUGIX_UPDATE_PROGRESS = format!("{current_progress:.2}")
+            };
+            match hooks.run_hooks(
+                "progress",
+                hook_vars,
+                RunOptions::default().with_silent(true),
+            ) {
+                Ok(()) => progress_cursors.mark_hook_emitted(current_progress),
+                Err(error) => {
+                    warn!("error running 'update-install/progress' hooks: {error:?}");
+                }
+            }
+        }
+        if rugix_cli::stdout_is_piped() && progress_cursors.should_emit_json(current_progress) {
+            let event = Event::UpdateProgress(UpdateProgressEvent {
+                progress: current_progress,
+            });
+            let result = serde_json::to_vec(&event)
+                .map_err(io::Error::other)
+                .and_then(|mut bytes| {
+                    bytes.push(b'\n');
+                    std::io::stdout().write_all(&bytes)
+                });
+            match result {
+                Ok(()) => progress_cursors.mark_json_emitted(current_progress),
+                Err(error) => warn!("unable to emit JSON update progress: {error}"),
+            }
+        }
+    };
     let mut progress = {
-        let hooks = HooksLoader::default()
-            .load_hooks("update-install")
-            .whatever("unable to load `update-install` hooks")?;
-
-        let mut last_progress = 0.0;
-        move |source: &R| {
+        |source: &R| {
             let Some(bytes_total) = source.bytes_total() else {
                 return;
             };
+            if bytes_total.raw == 0 {
+                return;
+            }
             let Some(bytes_read) = source.bytes_read() else {
                 return;
             };
-            let current_progress = (bytes_read.raw as f64) / (bytes_total.raw as f64) * 100.0;
+            let current_progress =
+                ((bytes_read.raw as f64) / (bytes_total.raw as f64) * 100.0).min(100.0);
             {
                 let mut update_state = update_status.state.lock().unwrap();
                 update_state.bytes_read = bytes_read.raw;
                 update_state.bytes_total = bytes_total.raw;
             }
-            if current_progress - last_progress > 0.9 {
-                let hook_vars = vars! {
-                    RUGIX_UPDATE_PROGRESS = format!("{current_progress:.2}")
-                };
-                if let Err(error) = hooks.run_hooks(
-                    "progress",
-                    hook_vars.clone(),
-                    RunOptions::default().with_silent(true),
-                ) {
-                    warn!("error running 'update-install/progress' hooks: {error:?}");
-                }
-                last_progress = current_progress;
-            }
-            if current_progress - last_progress > 0.4 && rugix_cli::stdout_is_piped() {
-                let mut stdout = std::io::stdout();
-                stdout
-                    .write_all(
-                        &serde_json::to_vec(&Event::UpdateProgress(UpdateProgressEvent {
-                            progress: current_progress,
-                        }))
-                        .unwrap(),
-                    )
-                    .ok();
-                stdout.write_all(b"\n").ok();
-            }
+            emit_progress(current_progress);
         }
     };
 
@@ -2002,6 +2037,8 @@ fn install_update_bundle<R: BundleSource>(
             continue;
         }
     }
+    drop(progress);
+    emit_progress(100.0);
 
     let reboot_type = if !bundle_reader.header().is_incremental {
         system
@@ -2547,6 +2584,7 @@ mod tests {
     use super::preflight_system_deliveries;
     use super::HashWriter;
     use super::PayloadDelivery;
+    use super::ProgressCursors;
     use super::SystemPayloadDestination;
 
     fn no_delivery() -> PayloadDelivery<'static> {
@@ -2716,5 +2754,33 @@ mod tests {
         assert_eq!(std::io::Write::write(&mut writer, b"four").unwrap(), 2);
         let (_, size) = writer.finalize();
         assert_eq!(size, 2);
+    }
+
+    #[test]
+    fn hook_and_json_progress_use_independent_cursors() {
+        let mut cursors = ProgressCursors::default();
+        assert!(cursors.should_emit_hook(1.0));
+        assert!(cursors.should_emit_json(1.0));
+
+        cursors.mark_hook_emitted(1.0);
+        assert!(!cursors.should_emit_hook(1.4));
+        assert!(cursors.should_emit_json(1.4));
+
+        cursors.mark_json_emitted(1.4);
+        assert!(cursors.should_emit_hook(2.0));
+        assert!(cursors.should_emit_json(2.0));
+    }
+
+    #[test]
+    fn final_progress_is_always_emitted_once() {
+        let mut cursors = ProgressCursors::default();
+        cursors.mark_hook_emitted(99.8);
+        cursors.mark_json_emitted(99.8);
+        assert!(cursors.should_emit_hook(100.0));
+        assert!(cursors.should_emit_json(100.0));
+        cursors.mark_hook_emitted(100.0);
+        cursors.mark_json_emitted(100.0);
+        assert!(!cursors.should_emit_hook(100.0));
+        assert!(!cursors.should_emit_json(100.0));
     }
 }
