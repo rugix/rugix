@@ -469,16 +469,11 @@ pub fn main() -> SystemResult<()> {
         Command::Boot(cmd) => match cmd {
             BootCommand::MarkGood { group } => {
                 let system = System::initialize()?;
-                let boot_group = match group {
-                    Some(entry_name) => {
-                        let Some((group, _)) = system.boot_entries().find_by_name(entry_name)
-                        else {
-                            bail!("unable to find boot group {entry_name}")
-                        };
-                        group
-                    }
-                    None => system.require_active_boot_entry()?,
-                };
+                let boot_group = resolve_mark_good_group(
+                    system.boot_entries(),
+                    system.active_boot_entry(),
+                    group.as_deref(),
+                )?;
                 info!(
                     "marking boot group {} as good",
                     system.boot_entries()[boot_group].name()
@@ -852,6 +847,20 @@ pub fn main() -> SystemResult<()> {
         }
     }
     Ok(())
+}
+
+fn resolve_mark_good_group(
+    groups: &crate::system::boot_groups::BootGroups,
+    active: Option<BootGroupIdx>,
+    requested: Option<&str>,
+) -> SystemResult<BootGroupIdx> {
+    if let Some(requested) = requested {
+        return groups
+            .find_by_name(requested)
+            .map(|(index, _)| index)
+            .ok_or_else(|| whatever!("unable to find boot group {requested}"));
+    }
+    active.ok_or_else(|| whatever!("unable to determine the active boot group"))
 }
 
 fn run_components_check() -> SystemResult<bool> {
@@ -2955,6 +2964,7 @@ mod tests {
     use super::preflight_system_deliveries;
     use super::prepare_system_update;
     use super::requires_bundle_components;
+    use super::resolve_mark_good_group;
     use super::run_app_activation_transaction;
     use super::validate_app_archive;
     use super::validate_app_deliveries;
@@ -3021,6 +3031,24 @@ mod tests {
                 .unwrap(),
             vec![SystemPayloadDestination::Slot(target_idx)]
         );
+    }
+
+    #[test]
+    fn mark_good_without_a_known_active_group_returns_a_command_error() {
+        let slots = file_slots(&["system"]);
+        let groups_config = [(
+            "a".to_owned(),
+            BootGroupConfig {
+                slots: IndexMap::new(),
+            },
+        )]
+        .into_iter()
+        .collect::<IndexMap<_, _>>();
+        let groups = BootGroups::from_config(&slots, Some(&groups_config)).unwrap();
+
+        let error = resolve_mark_good_group(&groups, None, None).unwrap_err();
+        assert!(format!("{error:?}").contains("unable to determine the active boot group"));
+        assert!(resolve_mark_good_group(&groups, None, Some("missing")).is_err());
     }
 
     #[test]
