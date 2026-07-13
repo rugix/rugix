@@ -58,14 +58,15 @@ error. Destination and component checks occur before update mutation. Corruption
 streaming a payload may partially modify only its inactive destination; Rugix does not save its
 state or select it for boot.
 
-If component metadata is required with `compatibility.requireBundleComponents = true`, a bundle
+If component metadata is required with `compatibility.require-bundle-components = true`, a bundle
 without it is rejected. `--skip-compatibility-check` is the explicit operator override and is
 reported in logs and machine-readable events. Malformed component metadata is rejected even when
 the compatibility comparison is skipped.
 
 ## Data Partition Mount Failures
 
-Set `data-partition.fail-closed-on-mount-error = true` when continuing without persistent data is
-unsafe. With the compatibility fallback, Rugix starts with ephemeral data, emits a prominent
-diagnostic, records it on the config partition when possible, and reports `EphemeralFallback` in
-machine-readable system information. Changes made in that mode do not survive reboot.
+By default, a data-partition mount failure falls back to ephemeral state so boot can continue.
+Set `data-partition.fail-on-mount-error = true` only when continuing without persistent data is
+unsafe. With the default fallback, Rugix emits a prominent diagnostic, records it on the config
+partition when possible, and reports `EphemeralFallback` in machine-readable system information.
+Changes made in that mode do not survive reboot.

@@ -249,18 +249,17 @@ fn setup_state_and_exec_init(
         data_partition.path().to_path_buf(),
         Path::new(MOUNT_POINT_DATA).to_path_buf(),
     );
-    let fail_closed = data_partition_config
-        .fail_closed_on_mount_error
-        .unwrap_or(false);
-    let mount_error = match data_mount_error_policy(data_driver.mount(&driver_ctx), fail_closed) {
-        Ok(error) => error,
-        Err(error) => {
-            write_data_mount_diagnostic(system, &format!("{error:?}"));
-            return Err(error).whatever(
-                "mounting the data partition failed and fail-closed policy is configured",
-            );
-        }
-    };
+    let fail_on_mount_error = data_partition_config.fail_on_mount_error.unwrap_or(false);
+    let mount_error =
+        match data_mount_error_policy(data_driver.mount(&driver_ctx), fail_on_mount_error) {
+            Ok(error) => error,
+            Err(error) => {
+                write_data_mount_diagnostic(system, &format!("{error:?}"));
+                return Err(error).whatever(
+                    "mounting the data partition failed and fail-on-mount-error is configured",
+                );
+            }
+        };
     if let Some(error) = mount_error {
         warn!(
             error = ?error,
@@ -365,10 +364,13 @@ fn setup_state_and_exec_init(
     Ok(())
 }
 
-fn data_mount_error_policy<E>(mount: Result<(), E>, fail_closed: bool) -> Result<Option<E>, E> {
+fn data_mount_error_policy<E>(
+    mount: Result<(), E>,
+    fail_on_mount_error: bool,
+) -> Result<Option<E>, E> {
     match mount {
         Ok(()) => Ok(None),
-        Err(error) if fail_closed => Err(error),
+        Err(error) if fail_on_mount_error => Err(error),
         Err(error) => Ok(Some(error)),
     }
 }
@@ -1303,7 +1305,7 @@ mod tests {
     }
 
     #[test]
-    fn data_mount_policy_covers_normal_fail_closed_and_ephemeral_modes() {
+    fn data_mount_policy_covers_normal_failure_and_ephemeral_modes() {
         assert_eq!(data_mount_error_policy::<&str>(Ok(()), false), Ok(None));
         assert_eq!(
             data_mount_error_policy(Err("mount failed"), false),

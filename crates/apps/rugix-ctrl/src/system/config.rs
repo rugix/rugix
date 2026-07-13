@@ -108,16 +108,23 @@ mod tests {
     }
 
     #[test]
-    fn data_mount_failure_policy_parses() {
+    fn data_mount_failure_policy_uses_kebab_case_and_defaults_to_false() {
         let config = toml::from_str::<SystemConfig>(indoc! {r#"
             [data-partition]
-            fail-closed-on-mount-error = true
+            fail-on-mount-error = true
         "#})
         .unwrap();
         assert_eq!(
-            config.data_partition.unwrap().fail_closed_on_mount_error,
+            config.data_partition.unwrap().fail_on_mount_error,
             Some(true)
         );
+
+        let default = toml::from_str::<SystemConfig>("[data-partition]").unwrap();
+        assert!(!default
+            .data_partition
+            .unwrap()
+            .fail_on_mount_error
+            .unwrap_or(false));
     }
 
     #[test]

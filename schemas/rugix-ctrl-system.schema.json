@@ -346,7 +346,7 @@
         "protected": {
           "type": "boolean"
         },
-        "fail-closed-on-mount-error": {
+        "fail-on-mount-error": {
           "type": "boolean"
         },
         "driver": {
