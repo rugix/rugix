@@ -5,6 +5,8 @@ variant Event {
     UpdateProgress: UpdateProgressEvent,
     /// Emitted when a component compatibility check is skipped.
     CompatibilityCheckSkipped: CompatibilityCheckSkippedEvent,
+    /// Emitted after an explicit app activation attempt.
+    AppActivationResult: AppActivationResultEvent,
 }
 
 /// Event emitted when the update progress changes.
@@ -19,4 +21,14 @@ record CompatibilityCheckSkippedEvent {
     scope: string,
     /// Human-readable skip reason.
     reason: string,
+}
+
+/// Result of an explicit app activation attempt.
+record AppActivationResultEvent {
+    /// App name.
+    app: string,
+    /// Requested generation.
+    generation: u64,
+    /// One of `activated`, `rolled-back`, `failed`, or `rollback-failed`.
+    outcome: string,
 }
