@@ -474,7 +474,9 @@ impl AppManager {
                         return Err(err);
                     }
                     // Rollback succeeded.
-                    return Ok(());
+                    reportify::bail!(
+                        "activation of generation {to_gen} failed; successfully rolled back to generation {prev}: {err:?}"
+                    );
                 }
             }
             // No previous generation to roll back to.
@@ -881,9 +883,30 @@ impl AppManager {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::config::apps::AppGeneration;
+    use crate::config::apps::AppState;
+    use crate::config::apps::AppStateActive;
     use crate::config::apps::AppsConfig;
 
     use super::AppManager;
+
+    fn setup_generation(manager: &AppManager, app: &str, generation: u64, script: &str) {
+        let dir = manager.generation_dir(app, generation).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("app.toml"), "orchestrator = \"generic\"\n").unwrap();
+        let orchestrator = dir.join("orchestrator");
+        std::fs::write(&orchestrator, script).unwrap();
+        std::fs::set_permissions(&orchestrator, std::fs::Permissions::from_mode(0o755)).unwrap();
+        manager
+            .write_generation_metadata(
+                &dir,
+                &AppGeneration::new(generation, "2026-07-13T00:00:00Z".to_owned()),
+            )
+            .unwrap();
+        AppManager::mark_complete(&dir).unwrap();
+    }
 
     #[test]
     fn invalid_app_names_are_rejected_before_lock_paths_are_created() {
@@ -898,6 +921,73 @@ mod tests {
         assert!(manager.current_generation("../escape").is_err());
         assert!(manager.app_status("../escape").is_err());
         assert!(!tempdir.path().join("escape").exists());
+    }
+
+    #[test]
+    fn failed_activation_returns_error_after_successful_rollback() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(tempdir.path().join("apps"), AppsConfig::new());
+        setup_generation(&manager, "example", 1, "#!/bin/sh\nexit 0\n");
+        setup_generation(
+            &manager,
+            "example",
+            2,
+            "#!/bin/sh\n[ \"$1\" = activate ] && exit 1\nexit 0\n",
+        );
+        manager
+            .write_state("example", &AppState::Active(AppStateActive::new(1)))
+            .unwrap();
+
+        let error = manager
+            .do_switch("example", Some(1), Some(2), false)
+            .unwrap_err();
+        assert!(format!("{error:?}").contains("successfully rolled back"));
+        assert!(matches!(
+            manager.read_state("example").unwrap(),
+            AppState::Active(AppStateActive { generation: 1 })
+        ));
+    }
+
+    #[test]
+    fn successful_activation_returns_success_and_persists_active_state() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(tempdir.path().join("apps"), AppsConfig::new());
+        setup_generation(&manager, "example", 1, "#!/bin/sh\nexit 0\n");
+
+        manager.do_switch("example", None, Some(1), false).unwrap();
+        assert!(matches!(
+            manager.read_state("example").unwrap(),
+            AppState::Active(AppStateActive { generation: 1 })
+        ));
+    }
+
+    #[test]
+    fn failed_activation_and_rollback_persist_error_state() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(tempdir.path().join("apps"), AppsConfig::new());
+        setup_generation(
+            &manager,
+            "example",
+            1,
+            "#!/bin/sh\n[ \"$1\" = activate ] && [ \"$RUGIX_APP_RECOVERY\" = true ] && exit 1\nexit 0\n",
+        );
+        setup_generation(
+            &manager,
+            "example",
+            2,
+            "#!/bin/sh\n[ \"$1\" = activate ] && exit 1\nexit 0\n",
+        );
+        manager
+            .write_state("example", &AppState::Active(AppStateActive::new(1)))
+            .unwrap();
+
+        assert!(manager
+            .do_switch("example", Some(1), Some(2), false)
+            .is_err());
+        assert!(matches!(
+            manager.read_state("example").unwrap(),
+            AppState::Error(_)
+        ));
     }
 }
 
