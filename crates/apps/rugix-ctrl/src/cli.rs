@@ -1227,6 +1227,9 @@ fn install_app_bundle<S: BundleSource>(
             // Extract the tar archive into the generation directory.
             let tar_file = std::fs::File::open(tmp_tar.path())
                 .whatever("unable to reopen archive for extraction")?;
+            validate_app_archive(tar_file)?;
+            let tar_file = std::fs::File::open(tmp_tar.path())
+                .whatever("unable to reopen validated archive for extraction")?;
             let mut archive = tar::Archive::new(tar_file);
             archive
                 .unpack(gen_dir)
@@ -1339,6 +1342,52 @@ fn validate_app_deliveries(deliveries: &[AppPayloadDelivery<'_>]) -> SystemResul
             .whatever("invalid app name in bundle payload")?;
         if let Some(path) = path {
             ValidatedRelativePath::new(path).whatever("invalid app-file path in bundle payload")?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_app_archive(file: File) -> SystemResult<()> {
+    let mut archive = tar::Archive::new(file);
+    let mut paths = Vec::new();
+    let mut link_paths = HashSet::new();
+    let mut unique_paths = HashSet::new();
+    for entry in archive
+        .entries()
+        .whatever("unable to read app archive entries")?
+    {
+        let entry = entry.whatever("unable to read app archive entry")?;
+        let path = entry.path().whatever("unable to read app archive path")?;
+        let path = path
+            .to_str()
+            .ok_or_else(|| whatever!("app archive path is not UTF-8"))?;
+        let path = ValidatedRelativePath::new(path).whatever("invalid path in app archive")?;
+        if !unique_paths.insert(path.as_str().to_owned()) {
+            bail!("duplicate path in app archive: {path}");
+        }
+        if entry.header().entry_type().is_symlink() || entry.header().entry_type().is_hard_link() {
+            let target = entry
+                .link_name()
+                .whatever("unable to read app archive link target")?
+                .ok_or_else(|| whatever!("app archive link has no target"))?;
+            let target = target
+                .to_str()
+                .ok_or_else(|| whatever!("app archive link target is not UTF-8"))?;
+            ValidatedRelativePath::new(target).whatever("invalid link target in app archive")?;
+            link_paths.insert(path.as_str().to_owned());
+        }
+        paths.push(path);
+    }
+
+    for path in &paths {
+        if link_paths.iter().any(|link| {
+            path.as_str() != link
+                && path
+                    .as_str()
+                    .strip_prefix(link)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        }) {
+            bail!("app archive contains a path beneath a symbolic or hard link: {path}");
         }
     }
     Ok(())
@@ -2667,6 +2716,7 @@ mod tests {
 
     use super::clear_target_overlay_with;
     use super::preflight_system_deliveries;
+    use super::validate_app_archive;
     use super::validate_app_deliveries;
     use super::AppPayloadDelivery;
     use super::HashWriter;
@@ -2915,5 +2965,65 @@ mod tests {
             execute: false,
         }];
         assert!(validate_app_deliveries(&system_delivery).is_err());
+    }
+
+    #[test]
+    fn app_archive_validation_rejects_escaping_and_redirected_paths() {
+        fn archive_with<F>(build: F) -> tempfile::NamedTempFile
+        where
+            F: FnOnce(&mut tar::Builder<std::fs::File>),
+        {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            let mut builder = tar::Builder::new(file.as_file().try_clone().unwrap());
+            build(&mut builder);
+            builder.finish().unwrap();
+            drop(builder);
+            file
+        }
+
+        let safe = archive_with(|builder| {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(4);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "directory/file", b"safe".as_slice())
+                .unwrap();
+        });
+        assert!(validate_app_archive(std::fs::File::open(safe.path()).unwrap()).is_ok());
+
+        let escaping_link = archive_with(|builder| {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            header.set_cksum();
+            builder
+                .append_link(&mut header, "redirect", "../outside")
+                .unwrap();
+        });
+        assert!(validate_app_archive(std::fs::File::open(escaping_link.path()).unwrap()).is_err());
+
+        let redirected_write = archive_with(|builder| {
+            let mut link = tar::Header::new_gnu();
+            link.set_entry_type(tar::EntryType::Symlink);
+            link.set_size(0);
+            link.set_mode(0o777);
+            link.set_cksum();
+            builder
+                .append_link(&mut link, "redirect", "directory")
+                .unwrap();
+
+            let mut file = tar::Header::new_gnu();
+            file.set_size(4);
+            file.set_mode(0o644);
+            file.set_cksum();
+            builder
+                .append_data(&mut file, "redirect/file", b"data".as_slice())
+                .unwrap();
+        });
+        assert!(
+            validate_app_archive(std::fs::File::open(redirected_write.path()).unwrap()).is_err()
+        );
     }
 }
