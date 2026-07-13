@@ -1244,8 +1244,11 @@ fn install_app_bundle<S: BundleSource>(
         return Ok(());
     }
 
-    // Phase 2: save payload states, finalize, and activate.
-    for (app_name, (gen_number, gen_dir)) in &app_generations {
+    // Phase 2: finalize every generation before changing any running app.
+    for app_name in &touched_apps {
+        let Some((gen_number, gen_dir)) = app_generations.get(app_name) else {
+            continue;
+        };
         // Persist payload hashes for this generation.
         if let Some(states) = payload_states.get(app_name) {
             crate::apps::manager::AppManager::save_payload_states(gen_dir, states)
@@ -1275,12 +1278,81 @@ fn install_app_bundle<S: BundleSource>(
             .whatever("unable to synchronize app generation")?;
         crate::apps::manager::AppManager::mark_complete(gen_dir)
             .whatever("unable to mark generation as complete")?;
-        let lock = &app_locks[app_name];
-        app_manager
-            .activate_generation(lock, app_name, *gen_number)
-            .whatever("unable to activate app generation")?;
     }
 
+    // Phase 3: activate deterministically and restore every earlier app if one fails.
+    let mut activation_plan = Vec::new();
+    for app_name in &touched_apps {
+        let Some((generation, _)) = app_generations.get(app_name) else {
+            continue;
+        };
+        activation_plan.push(AppActivationPlan {
+            app: app_name.clone(),
+            generation: *generation,
+            previous: app_manager
+                .current_generation(app_name)
+                .whatever("unable to determine active app generation")?,
+        });
+    }
+    if let Err(failure) = run_app_activation_transaction(
+        &activation_plan,
+        |plan| app_manager.activate_generation(&app_locks[&plan.app], &plan.app, plan.generation),
+        |plan| match plan.previous {
+            Some(previous) => {
+                app_manager.activate_generation(&app_locks[&plan.app], &plan.app, previous)
+            }
+            None => match app_manager.current_generation(&plan.app)? {
+                Some(_) => app_manager.deactivate(&app_locks[&plan.app], &plan.app),
+                None => Ok(()),
+            },
+        },
+    ) {
+        bail!(
+            "multi-app activation failed for {:?}: {:?}; rollback outcomes: {:?}",
+            failure.app,
+            failure.error,
+            failure.rollbacks
+        );
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AppActivationPlan {
+    app: String,
+    generation: u64,
+    previous: Option<u64>,
+}
+
+#[derive(Debug)]
+struct AppActivationFailure<E> {
+    app: String,
+    error: E,
+    rollbacks: Vec<(String, Result<(), E>)>,
+}
+
+fn run_app_activation_transaction<E>(
+    plans: &[AppActivationPlan],
+    mut activate: impl FnMut(&AppActivationPlan) -> Result<(), E>,
+    mut rollback: impl FnMut(&AppActivationPlan) -> Result<(), E>,
+) -> Result<(), AppActivationFailure<E>> {
+    let mut activated: Vec<&AppActivationPlan> = Vec::new();
+    for plan in plans {
+        if let Err(error) = activate(plan) {
+            let rollbacks = activated
+                .into_iter()
+                .rev()
+                .map(|activated_plan| (activated_plan.app.clone(), rollback(activated_plan)))
+                .collect();
+            return Err(AppActivationFailure {
+                app: plan.app.clone(),
+                error,
+                rollbacks,
+            });
+        }
+        activated.push(plan);
+    }
     Ok(())
 }
 
@@ -2796,8 +2868,10 @@ mod tests {
     use super::clear_target_overlay_with;
     use super::preflight_system_deliveries;
     use super::requires_bundle_components;
+    use super::run_app_activation_transaction;
     use super::validate_app_archive;
     use super::validate_app_deliveries;
+    use super::AppActivationPlan;
     use super::AppPayloadDelivery;
     use super::HashWriter;
     use super::PayloadDelivery;
@@ -3115,5 +3189,89 @@ mod tests {
         let required: crate::config::config::Config =
             toml::from_str("[compatibility]\nrequireBundleComponents = true\n").unwrap();
         assert!(requires_bundle_components(&required));
+    }
+
+    #[test]
+    fn multi_app_activation_rolls_back_every_earlier_app_in_reverse_order() {
+        use std::cell::RefCell;
+
+        let plans = [
+            AppActivationPlan {
+                app: "a".to_owned(),
+                generation: 2,
+                previous: Some(1),
+            },
+            AppActivationPlan {
+                app: "b".to_owned(),
+                generation: 2,
+                previous: None,
+            },
+            AppActivationPlan {
+                app: "c".to_owned(),
+                generation: 2,
+                previous: Some(1),
+            },
+        ];
+
+        for failure_position in 0..plans.len() {
+            let activated = RefCell::new(Vec::new());
+            let rolled_back = RefCell::new(Vec::new());
+            let result = run_app_activation_transaction(
+                &plans,
+                |plan| {
+                    let position = plans
+                        .iter()
+                        .position(|candidate| candidate == plan)
+                        .unwrap();
+                    if position == failure_position {
+                        return Err("injected activation failure");
+                    }
+                    activated.borrow_mut().push(plan.app.clone());
+                    Ok(())
+                },
+                |plan| {
+                    rolled_back.borrow_mut().push(plan.app.clone());
+                    Ok(())
+                },
+            );
+            let failure = result.unwrap_err();
+            assert_eq!(failure.app, plans[failure_position].app);
+            let expected = plans[..failure_position]
+                .iter()
+                .rev()
+                .map(|plan| plan.app.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(*rolled_back.borrow(), expected);
+        }
+    }
+
+    #[test]
+    fn multi_app_activation_reports_each_rollback_failure() {
+        let plans = [
+            AppActivationPlan {
+                app: "a".to_owned(),
+                generation: 2,
+                previous: Some(1),
+            },
+            AppActivationPlan {
+                app: "b".to_owned(),
+                generation: 2,
+                previous: Some(1),
+            },
+        ];
+        let failure = run_app_activation_transaction(
+            &plans,
+            |plan| {
+                if plan.app == "b" {
+                    Err("activation")
+                } else {
+                    Ok(())
+                }
+            },
+            |_| Err("rollback"),
+        )
+        .unwrap_err();
+        assert_eq!(failure.rollbacks.len(), 1);
+        assert!(failure.rollbacks[0].1.is_err());
     }
 }
