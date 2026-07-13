@@ -929,19 +929,12 @@ fn install_app_bundle<S: BundleSource>(
         rugix_bundle::reader::BundleReader::start(bundle_source, options.bundle_hash.clone())
             .whatever("unable to read app bundle")?;
 
-    let root_cert = options.root_cert.or_else(|| {
-        config.signatures.as_ref().and_then(|c| {
-            if c.roots.len() > 1 {
-                warn!("multiple root certificates in config, using only the first")
-            };
-            c.roots.first().map(Path::new)
-        })
-    });
+    let root_certs = configured_signature_roots(config, options.root_cert);
 
     // If a bundle hash has been specified, then the bundle will be verified against that hash
     // by the reader. Otherwise, try signature verification.
     let bundle_verified =
-        options.bundle_hash.is_some() || verify_bundle_signature(root_cert, &bundle_reader)?;
+        options.bundle_hash.is_some() || verify_bundle_signature(&root_certs, &bundle_reader)?;
     if !bundle_verified && !options.insecure_skip_bundle_verification {
         bail!("bundle verification failed, refusing to install app bundle");
     }
@@ -1507,38 +1500,83 @@ impl StatusSegment for UpdateStatus {
     }
 }
 
+fn configured_signature_roots<'a>(config: &'a Config, explicit: Option<&'a Path>) -> Vec<&'a Path> {
+    if let Some(explicit) = explicit {
+        return vec![explicit];
+    }
+    config
+        .signatures
+        .as_ref()
+        .map(|config| config.roots.iter().map(Path::new).collect())
+        .unwrap_or_default()
+}
+
 fn verify_bundle_signature<S: BundleSource>(
-    root_cert: Option<&Path>,
+    root_certs: &[&Path],
     bundle_reader: &BundleReader<S>,
 ) -> SystemResult<bool> {
-    let Some(root_cert) = root_cert else {
+    if root_certs.is_empty() {
         return Ok(false);
-    };
+    }
     let Some(signatures) = bundle_reader.signatures() else {
-        warn!("root certificate configured but no signatures found");
+        warn!(
+            root_count = root_certs.len(),
+            "root certificates configured but no signatures found"
+        );
         return Ok(false);
     };
-    let cert_pem = std::fs::read(root_cert).whatever("unable to read root certificate")?;
-    let verifier =
-        rugix_pki::CmsVerifier::new(&cert_pem).whatever("unable to create CMS verifier")?;
-    info!("checking bundle signatures");
-    for signature in signatures.cms_signatures.iter() {
-        let result = match verifier.verify(&signature.raw) {
-            Ok(result) => result,
+    let mut verifiers = Vec::new();
+    let mut root_errors = 0usize;
+    for (root_index, root_cert) in root_certs.iter().enumerate() {
+        let verifier: SystemResult<rugix_pki::CmsVerifier> = std::fs::read(root_cert)
+            .whatever("unable to read root certificate")
+            .and_then(|cert_pem| {
+                rugix_pki::CmsVerifier::new(&cert_pem).whatever("unable to create CMS verifier")
+            });
+        match verifier {
+            Ok(verifier) => verifiers.push((root_index, verifier)),
             Err(error) => {
-                info!("signature verification failed: {error}");
-                continue;
+                root_errors += 1;
+                warn!(root_index, error = ?error, "unable to load signature root");
             }
-        };
-        let signed_metadata = decode_slice::<format::SignedMetadata>(&result.content)
-            .whatever("unable to decode signed metadata")?;
-        if signed_metadata.header_hash
-            == bundle_reader.header_hash(signed_metadata.header_hash.algorithm())
-        {
-            info!("found valid signature");
-            return Ok(true);
         }
     }
+    info!(
+        signature_count = signatures.cms_signatures.len(),
+        root_count = verifiers.len(),
+        "checking bundle signatures"
+    );
+    let mut verification_errors = 0usize;
+    for (signature_index, signature) in signatures.cms_signatures.iter().enumerate() {
+        for (root_index, verifier) in &verifiers {
+            let result = match verifier.verify(&signature.raw) {
+                Ok(result) => result,
+                Err(error) => {
+                    verification_errors += 1;
+                    info!(signature_index, root_index, error = %error, "signature did not verify");
+                    continue;
+                }
+            };
+            let signed_metadata = match decode_slice::<format::SignedMetadata>(&result.content) {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    verification_errors += 1;
+                    info!(signature_index, root_index, error = ?error, "signed metadata is invalid");
+                    continue;
+                }
+            };
+            if signed_metadata.header_hash
+                == bundle_reader.header_hash(signed_metadata.header_hash.algorithm())
+            {
+                info!(signature_index, root_index, "found valid signature");
+                return Ok(true);
+            }
+        }
+    }
+    warn!(
+        root_errors,
+        verification_errors, "no configured signature root accepted a bundle signature"
+    );
     Ok(false)
 }
 
@@ -1807,19 +1845,12 @@ fn install_update_bundle<R: BundleSource>(
         rugix_bundle::reader::BundleReader::start(bundle_source, options.bundle_hash.clone())
             .whatever("unable to read bundle")?;
 
-    let root_cert = options.root_cert.or_else(|| {
-        config.signatures.as_ref().and_then(|c| {
-            if c.roots.len() > 1 {
-                warn!("multiple root certificates in config, using only the first")
-            };
-            c.roots.first().map(Path::new)
-        })
-    });
+    let root_certs = configured_signature_roots(config, options.root_cert);
 
     // If a bundle hash has been specified, then the bundle will be verified against that hash
     // by the reader.
     let bundle_verified =
-        options.bundle_hash.is_some() || verify_bundle_signature(root_cert, &bundle_reader)?;
+        options.bundle_hash.is_some() || verify_bundle_signature(&root_certs, &bundle_reader)?;
 
     if !bundle_verified && !options.insecure_skip_bundle_verification {
         bail!("bundle verification failed, refusing to install update");
