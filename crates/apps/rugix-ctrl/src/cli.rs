@@ -608,8 +608,9 @@ pub fn main() -> SystemResult<()> {
                                 }
                             };
                             let metadata = generation.and_then(|gen| {
-                                let gen_dir = manager.generation_dir(app, gen);
-                                crate::apps::manager::AppManager::read_metadata(&gen_dir)
+                                manager.generation_dir(app, gen).ok().and_then(|gen_dir| {
+                                    crate::apps::manager::AppManager::read_metadata(&gen_dir)
+                                })
                             });
                             (
                                 app.clone(),
@@ -638,9 +639,12 @@ pub fn main() -> SystemResult<()> {
                     let gen_entries: Vec<_> = generations
                         .iter()
                         .map(|gen| {
-                            let gen_dir = manager.generation_dir(app, gen.meta.number);
-                            let metadata =
-                                crate::apps::manager::AppManager::read_metadata(&gen_dir);
+                            let metadata = manager
+                                .generation_dir(app, gen.meta.number)
+                                .ok()
+                                .and_then(|gen_dir| {
+                                    crate::apps::manager::AppManager::read_metadata(&gen_dir)
+                                });
                             GenerationInfoOutput::new(
                                 gen.meta.number,
                                 gen.meta.created_at.clone(),
@@ -796,7 +800,9 @@ pub fn main() -> SystemResult<()> {
                             .whatever("unable to read app state")?
                             .ok_or_else(|| whatever!("no active generation for app {app}"))?,
                     };
-                    let gen_dir = manager.generation_dir(app, gen_number);
+                    let gen_dir = manager
+                        .generation_dir(app, gen_number)
+                        .whatever("invalid app name")?;
                     let paths: Vec<String> = match path {
                         Some(p) => vec![p.clone()],
                         None => {
@@ -806,7 +812,9 @@ pub fn main() -> SystemResult<()> {
                         }
                     };
                     for payload_path in &paths {
-                        let data_file = gen_dir.join(payload_path);
+                        let payload_path = ValidatedRelativePath::new(payload_path.clone())
+                            .whatever("invalid app-file path")?;
+                        let data_file = gen_dir.join(&payload_path);
                         if !data_file.exists() {
                             bail!(
                                 "file {payload_path} not found in generation {gen_number} of app {app}"
@@ -815,7 +823,7 @@ pub fn main() -> SystemResult<()> {
                         info!(app = %app, path = %payload_path, "creating block index");
                         payload_db::add_app_file_index(
                             &gen_dir,
-                            payload_path,
+                            payload_path.as_str(),
                             &data_file,
                             chunker,
                             hash_algorithm,
@@ -1016,7 +1024,9 @@ fn install_app_bundle<S: BundleSource>(
                     if !gen.complete {
                         continue;
                     }
-                    let old_gen_dir = app_manager.generation_dir(&app_name, gen.meta.number);
+                    let old_gen_dir = app_manager
+                        .generation_dir(&app_name, gen.meta.number)
+                        .whatever("invalid app name")?;
                     let indices = payload_db::get_app_file_indices(&old_gen_dir, &payload_path)
                         .unwrap_or_default();
                     if !indices.is_empty() {
@@ -1051,7 +1061,9 @@ fn install_app_bundle<S: BundleSource>(
                     if !gen.complete {
                         continue;
                     }
-                    let old_gen_dir = app_manager.generation_dir(&app_name, gen.meta.number);
+                    let old_gen_dir = app_manager
+                        .generation_dir(&app_name, gen.meta.number)
+                        .whatever("invalid app name")?;
                     let old_states =
                         crate::apps::manager::AppManager::load_payload_states(&old_gen_dir);
                     let Some(old_state) = old_states.get(&payload_path) else {
@@ -1521,6 +1533,7 @@ fn check_app_generation_compatibility(
         .whatever("unable to load installed components")?;
     let component_root = app_manager
         .generation_dir(app, generation)
+        .whatever("invalid app name")?
         .join(".rugix/components");
     let output = installed
         .check_app_generation(app, generation, component_root)

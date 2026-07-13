@@ -30,6 +30,10 @@ use rugix_bundle::manifest::AppManifest;
 /// The lock is released when this guard is dropped (via [`nix::fcntl::Flock`]).
 pub type AppLock = nix::fcntl::Flock<fs::File>;
 
+fn validate_app_name(app_name: &str) -> AppsResult<()> {
+    rugix_bundle::manifest::validate_app_name(app_name).whatever("invalid app name")
+}
+
 /// A generation with its completeness status resolved from the filesystem.
 pub struct ResolvedGeneration {
     /// The persisted generation metadata.
@@ -62,7 +66,7 @@ impl AppManager {
     /// returned [`AppLock`] for the duration of the mutating operation. The lock
     /// is released when the guard is dropped.
     pub fn lock_app(&self, app_name: &str) -> AppsResult<AppLock> {
-        rugix_bundle::manifest::validate_app_name(app_name).whatever("invalid app name")?;
+        validate_app_name(app_name)?;
         let lock_dir = self.app_dir(app_name).join(".rugix");
         fs::create_dir_all(&lock_dir).whatever("unable to create app .rugix directory")?;
         let lock_path = lock_dir.join("lock");
@@ -89,7 +93,12 @@ impl AppManager {
     }
 
     /// Path to a specific generation directory.
-    pub fn generation_dir(&self, app_name: &str, number: u64) -> PathBuf {
+    pub fn generation_dir(&self, app_name: &str, number: u64) -> AppsResult<PathBuf> {
+        validate_app_name(app_name)?;
+        Ok(self.generation_dir_unchecked(app_name, number))
+    }
+
+    fn generation_dir_unchecked(&self, app_name: &str, number: u64) -> PathBuf {
         self.generations_dir(app_name).join(number.to_string())
     }
 
@@ -115,6 +124,7 @@ impl AppManager {
 
     /// Read the persisted app state, defaulting to `Inactive` if absent.
     pub fn read_state(&self, app_name: &str) -> AppsResult<AppState> {
+        validate_app_name(app_name)?;
         let path = self.state_path(app_name);
         match fs::read_to_string(&path) {
             Ok(content) => serde_json::from_str(&content).whatever("unable to parse app state"),
@@ -127,6 +137,7 @@ impl AppManager {
     ///
     /// The caller must hold the [`AppLock`] for this app.
     pub fn recover_app(&self, _lock: &AppLock, app_name: &str) -> AppsResult<()> {
+        validate_app_name(app_name)?;
         match self.read_state(app_name)? {
             AppState::Switching(AppStateSwitching { from, to, recovery }) => {
                 if recovery.unwrap_or(false) {
@@ -206,7 +217,7 @@ impl AppManager {
     /// The caller must hold the [`AppLock`] for this app for the duration of the
     /// installation that follows.
     pub fn create_generation(&self, _lock: &AppLock, app_name: &str) -> AppsResult<(u64, PathBuf)> {
-        rugix_bundle::manifest::validate_app_name(app_name).whatever("invalid app name")?;
+        validate_app_name(app_name)?;
         let generations_dir = self.generations_dir(app_name);
         fs::create_dir_all(&generations_dir).whatever("unable to create generations directory")?;
         fs::create_dir_all(self.data_dir(app_name))
@@ -349,7 +360,8 @@ impl AppManager {
         app_name: &str,
         gen_number: u64,
     ) -> AppsResult<()> {
-        let gen_dir = self.generation_dir(app_name, gen_number);
+        validate_app_name(app_name)?;
+        let gen_dir = self.generation_dir_unchecked(app_name, gen_number);
         if !Self::is_complete(&gen_dir) {
             reportify::bail!("generation is not complete (installation may have been interrupted)");
         }
@@ -362,6 +374,7 @@ impl AppManager {
     ///
     /// The caller must hold the [`AppLock`] for this app.
     pub fn deactivate(&self, _lock: &AppLock, app_name: &str) -> AppsResult<()> {
+        validate_app_name(app_name)?;
         let Some(current) = self.current_generation(app_name)? else {
             reportify::bail!("app {app_name} has no active generation");
         };
@@ -432,7 +445,7 @@ impl AppManager {
             }
             // Attempt rollback to the previous generation.
             if let Some(prev) = from {
-                let prev_dir = self.generation_dir(app_name, prev);
+                let prev_dir = self.generation_dir_unchecked(app_name, prev);
                 if prev_dir.exists() && Self::is_complete(&prev_dir) {
                     info!(
                         app = app_name,
@@ -480,7 +493,7 @@ impl AppManager {
 
     /// Run the orchestrator's activate operation.
     fn run_activate(&self, app_name: &str, gen_number: u64, recovery: bool) -> AppsResult<()> {
-        let gen_dir = self.generation_dir(app_name, gen_number);
+        let gen_dir = self.generation_dir_unchecked(app_name, gen_number);
         let manifest = load_manifest(&gen_dir)?;
         let orchestrator = orchestrators::get(manifest.orchestrator.as_str())?;
         let app_dir = self.app_dir(app_name);
@@ -513,7 +526,7 @@ impl AppManager {
 
     /// Run the orchestrator's deactivate operation for a specific generation.
     fn run_deactivate(&self, app_name: &str, gen_number: u64, recovery: bool) -> AppsResult<()> {
-        let gen_dir = self.generation_dir(app_name, gen_number);
+        let gen_dir = self.generation_dir_unchecked(app_name, gen_number);
         if !gen_dir.exists() {
             return Ok(());
         }
@@ -544,6 +557,7 @@ impl AppManager {
     /// interrupted.
     /// The caller must hold the [`AppLock`] for this app.
     pub fn start_app(&self, _lock: &AppLock, app_name: &str) -> AppsResult<()> {
+        validate_app_name(app_name)?;
         let AppState::Active(AppStateActive { generation }) = self.read_state(app_name)? else {
             reportify::bail!("app {app_name} has no active generation");
         };
@@ -570,6 +584,7 @@ impl AppManager {
     /// interrupted.
     /// The caller must hold the [`AppLock`] for this app.
     pub fn stop_app(&self, _lock: &AppLock, app_name: &str) -> AppsResult<()> {
+        validate_app_name(app_name)?;
         let AppState::Active(AppStateActive { generation }) = self.read_state(app_name)? else {
             reportify::bail!("app {app_name} has no active generation");
         };
@@ -591,7 +606,7 @@ impl AppManager {
 
     /// Run the orchestrator's start operation for a specific generation.
     fn run_start(&self, app_name: &str, gen_number: u64, recovery: bool) -> AppsResult<()> {
-        let gen_dir = self.generation_dir(app_name, gen_number);
+        let gen_dir = self.generation_dir_unchecked(app_name, gen_number);
         let manifest = load_manifest(&gen_dir)?;
         let orchestrator = orchestrators::get(manifest.orchestrator.as_str())?;
         let app_dir = self.app_dir(app_name);
@@ -612,7 +627,7 @@ impl AppManager {
 
     /// Run the orchestrator's stop operation for a specific generation.
     fn run_stop(&self, app_name: &str, gen_number: u64, recovery: bool) -> AppsResult<()> {
-        let gen_dir = self.generation_dir(app_name, gen_number);
+        let gen_dir = self.generation_dir_unchecked(app_name, gen_number);
         let manifest = load_manifest(&gen_dir)?;
         let orchestrator = orchestrators::get(manifest.orchestrator.as_str())?;
         let app_dir = self.app_dir(app_name);
@@ -631,6 +646,7 @@ impl AppManager {
 
     /// Get status of the currently active generation.
     pub fn app_status(&self, app_name: &str) -> AppsResult<AppStatus> {
+        validate_app_name(app_name)?;
         let Some(gen_dir) = self.resolve_current(app_name)? else {
             return Ok(AppStatus::Stopped);
         };
@@ -667,7 +683,11 @@ impl AppManager {
                 .is_dir()
             {
                 if let Some(name) = entry.file_name().to_str() {
-                    apps.push(name.to_owned());
+                    if validate_app_name(name).is_ok() {
+                        apps.push(name.to_owned());
+                    } else {
+                        warn!(app = name, "ignoring directory with invalid app name");
+                    }
                 }
             }
         }
@@ -677,6 +697,7 @@ impl AppManager {
 
     /// List generations for a given app.
     pub fn list_generations(&self, app_name: &str) -> AppsResult<Vec<ResolvedGeneration>> {
+        validate_app_name(app_name)?;
         let generations_dir = self.generations_dir(app_name);
         let mut generations = Vec::new();
         if !generations_dir.exists() {
@@ -707,6 +728,7 @@ impl AppManager {
 
     /// Get the currently active generation number, if any.
     pub fn current_generation(&self, app_name: &str) -> AppsResult<Option<u64>> {
+        validate_app_name(app_name)?;
         match self.read_state(app_name)? {
             AppState::Active(AppStateActive { generation })
             | AppState::Starting(AppStateStarting { generation })
@@ -717,6 +739,7 @@ impl AppManager {
 
     /// Find the most recently activated generation (by `lastActivated` timestamp).
     pub fn last_activated_generation(&self, app_name: &str) -> AppsResult<Option<u64>> {
+        validate_app_name(app_name)?;
         let generations = self.list_generations(app_name)?;
         let best = generations
             .iter()
@@ -732,6 +755,7 @@ impl AppManager {
 
     /// Find the generation that [`Self::rollback`] would activate.
     pub fn rollback_target_generation(&self, app_name: &str) -> AppsResult<u64> {
+        validate_app_name(app_name)?;
         let Some(current) = self.current_generation(app_name)? else {
             reportify::bail!("no current generation to rollback from");
         };
@@ -750,6 +774,7 @@ impl AppManager {
     /// previous generation that was successfully activated before.
     /// The caller must hold the [`AppLock`] for this app.
     pub fn rollback(&self, _lock: &AppLock, app_name: &str) -> AppsResult<()> {
+        validate_app_name(app_name)?;
         let Some(current) = self.current_generation(app_name)? else {
             reportify::bail!("no current generation to rollback from");
         };
@@ -768,7 +793,7 @@ impl AppManager {
     /// Removes the complete marker first so that an interrupted removal leaves
     /// the generation in an incomplete state rather than appearing valid.
     fn remove_generation(&self, app_name: &str, gen_number: u64) -> std::io::Result<()> {
-        let gen_dir = self.generation_dir(app_name, gen_number);
+        let gen_dir = self.generation_dir_unchecked(app_name, gen_number);
         let complete_marker = gen_dir.join(".rugix/complete");
         if complete_marker.exists() {
             fs::remove_file(&complete_marker)?;
@@ -784,6 +809,7 @@ impl AppManager {
     /// removed.
     /// The caller must hold the [`AppLock`] for this app.
     pub fn gc(&self, _lock: &AppLock, app_name: &str, keep: usize) -> AppsResult<Vec<u64>> {
+        validate_app_name(app_name)?;
         let current = self.current_generation(app_name)?;
         let mut generations = self.list_generations(app_name)?;
         generations.sort_by_key(|g| g.meta.number);
@@ -830,6 +856,7 @@ impl AppManager {
     ///
     /// The caller must hold the [`AppLock`] for this app.
     pub fn remove_app(&self, _lock: &AppLock, app_name: &str) -> AppsResult<()> {
+        validate_app_name(app_name)?;
         // Deactivate if active (stops workload + cleans up orchestrator resources).
         if self.current_generation(app_name)?.is_some() {
             self.deactivate(_lock, app_name)?;
@@ -847,7 +874,7 @@ impl AppManager {
         let Some(gen) = self.current_generation(app_name)? else {
             return Ok(None);
         };
-        let dir = self.generation_dir(app_name, gen);
+        let dir = self.generation_dir_unchecked(app_name, gen);
         Ok(dir.exists().then_some(dir))
     }
 }
@@ -865,6 +892,11 @@ mod tests {
         let manager = AppManager::new(apps_dir, AppsConfig::new());
 
         assert!(manager.lock_app("../escape").is_err());
+        assert!(manager.generation_dir("../escape", 1).is_err());
+        assert!(manager.read_state("../escape").is_err());
+        assert!(manager.list_generations("../escape").is_err());
+        assert!(manager.current_generation("../escape").is_err());
+        assert!(manager.app_status("../escape").is_err());
         assert!(!tempdir.path().join("escape").exists());
     }
 }

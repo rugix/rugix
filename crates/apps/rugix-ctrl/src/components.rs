@@ -240,6 +240,7 @@ impl InstalledComponents {
             };
             let root_path = manager
                 .generation_dir(&app, generation)
+                .whatever("invalid app name")?
                 .join(".rugix/components");
             self.load_root(ComponentLocation::app(app, generation, root_path))?;
         }
