@@ -503,17 +503,16 @@ fn bootstrap(root: &SystemRoot, system_config: &SystemConfig) -> SystemResult<()
                     }
                 }
                 SystemLayoutConfig::Default(_) => {
-                    if data_partition_idx as usize >= old_table.partitions.len() {
+                    format_data_partition_if_new(&old_table, data_partition_idx, || {
                         let block_device = root.resolve_partition(data_partition_idx).unwrap();
                         let driver = resolve_driver(&data_partition_config);
                         let ctx = DriverContext::new(
                             block_device.path().to_path_buf(),
                             Path::new(MOUNT_POINT_DATA).to_path_buf(),
                         );
-                        driver
-                            .format(&ctx)
-                            .whatever("unable to format data partition")?;
-                    }
+                        driver.format(&ctx)
+                    })
+                    .whatever("unable to format data partition")?;
                 }
                 SystemLayoutConfig::None => unreachable!(),
             }
@@ -523,6 +522,32 @@ fn bootstrap(root: &SystemRoot, system_config: &SystemConfig) -> SystemResult<()
             .whatever("unable to run `bootstrap/post-layout` hooks")?;
     }
 
+    Ok(())
+}
+
+/// Returns whether the configured data partition was added during repartitioning.
+///
+/// Partition numbers are one-based and are not required to be contiguous, so the number
+/// of entries in the old table cannot be used to determine whether a particular partition
+/// existed.
+fn data_partition_is_new(old_table: &PartitionTable, data_partition_idx: u32) -> bool {
+    old_table
+        .partitions
+        .iter()
+        .all(|partition| u32::from(partition.number) != data_partition_idx)
+}
+
+fn format_data_partition_if_new<F>(
+    old_table: &PartitionTable,
+    data_partition_idx: u32,
+    format: F,
+) -> SystemResult<()>
+where
+    F: FnOnce() -> SystemResult<()>,
+{
+    if data_partition_is_new(old_table, data_partition_idx) {
+        format()?;
+    }
     Ok(())
 }
 
@@ -957,5 +982,126 @@ where
             warn!(error = ?error, "{}", context);
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::path::PathBuf;
+
+    use rugix_common::disk::gpt::gpt_types;
+    use rugix_common::disk::mbr::mbr_types;
+    use rugix_common::disk::mbr::MbrId;
+    use rugix_common::disk::DiskId;
+    use rugix_common::disk::NumBlocks;
+    use rugix_common::disk::Partition;
+    use rugix_common::disk::PartitionTable;
+
+    use crate::system::data_partition::DataPartitionDriver;
+    use crate::system::data_partition::DriverContext;
+    use crate::system::SystemResult;
+
+    use super::data_partition_is_new;
+    use super::format_data_partition_if_new;
+
+    #[derive(Default)]
+    struct RecordingDriver {
+        formats: Cell<usize>,
+    }
+
+    impl DataPartitionDriver for RecordingDriver {
+        fn format(&self, _ctx: &DriverContext) -> SystemResult<()> {
+            self.formats.set(self.formats.get() + 1);
+            Ok(())
+        }
+
+        fn mount(&self, _ctx: &DriverContext) -> SystemResult<()> {
+            unreachable!("mount is not used by bootstrap format tests")
+        }
+
+        fn wipe(&self, _ctx: &DriverContext) -> SystemResult<()> {
+            unreachable!("wipe is not used by bootstrap format tests")
+        }
+    }
+
+    fn driver_context() -> DriverContext {
+        DriverContext::new(PathBuf::from("/dev/test-data"), PathBuf::from("/mnt/data"))
+    }
+
+    fn partition(number: u8, ty: rugix_common::disk::PartitionType) -> Partition {
+        Partition {
+            number,
+            start: NumBlocks::from_raw(u64::from(number) * 2048),
+            size: NumBlocks::from_raw(1024),
+            ty,
+            name: None,
+            gpt_id: None,
+            gpt_attrs: None,
+            bootable: false,
+        }
+    }
+
+    #[test]
+    fn new_default_gpt_data_partition_is_detected() {
+        let mut table = PartitionTable::new(DiskId::random_gpt(), NumBlocks::from_raw(1_000_000));
+        table.partitions = (1..=5)
+            .map(|number| partition(number, gpt_types::LINUX))
+            .collect();
+
+        let driver = RecordingDriver::default();
+        let ctx = driver_context();
+        format_data_partition_if_new(&table, 6, || driver.format(&ctx)).unwrap();
+
+        assert!(data_partition_is_new(&table, 6));
+        assert_eq!(driver.formats.get(), 1);
+    }
+
+    #[test]
+    fn existing_default_gpt_data_partition_is_not_new() {
+        let mut table = PartitionTable::new(DiskId::random_gpt(), NumBlocks::from_raw(1_000_000));
+        table.partitions = (1..=6)
+            .map(|number| partition(number, gpt_types::LINUX))
+            .collect();
+
+        let driver = RecordingDriver::default();
+        let ctx = driver_context();
+        format_data_partition_if_new(&table, 6, || driver.format(&ctx)).unwrap();
+
+        assert!(!data_partition_is_new(&table, 6));
+        assert_eq!(driver.formats.get(), 0);
+    }
+
+    #[test]
+    fn configured_data_partition_is_found_by_number_across_gaps() {
+        let mut table = PartitionTable::new(DiskId::random_gpt(), NumBlocks::from_raw(1_000_000));
+        table.partitions = [1, 2, 4, 8]
+            .map(|number| partition(number, gpt_types::LINUX))
+            .into();
+
+        assert!(!data_partition_is_new(&table, 8));
+        assert!(data_partition_is_new(&table, 6));
+    }
+
+    #[test]
+    fn default_mbr_data_partition_is_detected_by_number() {
+        let mut table = PartitionTable::new(
+            DiskId::Mbr(MbrId::new(0x12345678)),
+            NumBlocks::from_raw(1_000_000),
+        );
+        table.partitions = (1..=7)
+            .map(|number| partition(number, mbr_types::LINUX))
+            .collect();
+
+        let driver = RecordingDriver::default();
+        let ctx = driver_context();
+        format_data_partition_if_new(&table, 7, || driver.format(&ctx)).unwrap();
+        assert!(!data_partition_is_new(&table, 7));
+        assert_eq!(driver.formats.get(), 0);
+
+        table.partitions.retain(|partition| partition.number != 7);
+        format_data_partition_if_new(&table, 7, || driver.format(&ctx)).unwrap();
+        assert!(data_partition_is_new(&table, 7));
+        assert_eq!(driver.formats.get(), 1);
     }
 }
