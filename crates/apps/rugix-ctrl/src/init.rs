@@ -249,12 +249,25 @@ fn setup_state_and_exec_init(
         data_partition.path().to_path_buf(),
         Path::new(MOUNT_POINT_DATA).to_path_buf(),
     );
-    // Mount failures are non-fatal here: pre-init falls through with an
-    // empty data tmpfs (the system comes up looking like a factory reset).
-    // Encrypting drivers wanting a hard halt can return success only
-    // after verifying the partition is actually usable.
     if let Err(error) = data_driver.mount(&driver_ctx) {
-        warn!(error = ?error, "mounting of the data partition failed");
+        warn!(
+            error = ?error,
+            policy = if data_partition_config.fail_closed_on_mount_error.unwrap_or(false) {
+                "fail-closed"
+            } else {
+                "ephemeral-fallback"
+            },
+            "DATA PARTITION MOUNT FAILED; PERSISTENT STATE IS UNAVAILABLE"
+        );
+        write_data_mount_diagnostic(system, &format!("{error:?}"));
+        if data_partition_config
+            .fail_closed_on_mount_error
+            .unwrap_or(false)
+        {
+            return Err(error).whatever(
+                "mounting the data partition failed and fail-closed policy is configured",
+            );
+        }
         log_ignored_error(
             fs::create_dir_all(Path::new(MOUNT_POINT_DATA).join(".rugix")),
             "unable to create data error log directory",
@@ -266,6 +279,8 @@ fn setup_state_and_exec_init(
             ),
             "unable to write data mount error log",
         );
+    } else {
+        clear_data_mount_diagnostic(system);
     }
 
     let state_config = load_state_config()?;
@@ -348,6 +363,34 @@ fn setup_state_and_exec_init(
     exec_chroot_init(&root_dir, requires_commit)?;
 
     Ok(())
+}
+
+fn write_data_mount_diagnostic(system: &System, diagnostic: &str) {
+    let Some(config_partition) = system.config_partition() else {
+        return;
+    };
+    let path = config_partition.path().join(".rugix/data-mount-error.log");
+    log_ignored_error(
+        config_partition
+            .ensure_writable(|| rugix_common::fsutils::atomic_write(&path, diagnostic.as_bytes())),
+        "unable to make config partition writable for data mount diagnostic",
+    )
+    .and_then(|result| log_ignored_error(result, "unable to persist data mount diagnostic"));
+}
+
+fn clear_data_mount_diagnostic(system: &System) {
+    let Some(config_partition) = system.config_partition() else {
+        return;
+    };
+    let path = config_partition.path().join(".rugix/data-mount-error.log");
+    if !path.exists() {
+        return;
+    }
+    log_ignored_error(
+        config_partition.ensure_writable(|| clear_flag(&path)),
+        "unable to make config partition writable to clear data mount diagnostic",
+    )
+    .and_then(|result| log_ignored_error(result, "unable to clear data mount diagnostic"));
 }
 
 fn maybe_exec_underlying_init(
