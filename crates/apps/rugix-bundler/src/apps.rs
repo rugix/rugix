@@ -137,6 +137,14 @@ fn tar_append_app_toml(
 
 /// Append included files/directories to a tar archive.
 fn tar_append_includes(archive: &mut tar::Builder<File>, includes: &[PathBuf]) -> BundleResult<()> {
+    const RESERVED_PATHS: &[&str] = &[
+        "app.toml",
+        "app-meta.json",
+        "orchestrator",
+        "systemd.service",
+        "docker-compose.yml",
+    ];
+    let mut names = HashSet::new();
     for include in includes {
         let Some(name) = include.file_name().and_then(|n| n.to_str()) else {
             bail!(
@@ -144,6 +152,12 @@ fn tar_append_includes(archive: &mut tar::Builder<File>, includes: &[PathBuf]) -
                 include.display()
             );
         };
+        if RESERVED_PATHS.contains(&name) {
+            bail!("include path {name:?} is reserved by the app archive format");
+        }
+        if !names.insert(name.to_owned()) {
+            bail!("duplicate app archive include path {name:?}");
+        }
         if include.is_dir() {
             tar_append_dir(archive, name, include)?;
         } else {
@@ -446,6 +460,25 @@ mod tests {
     use rugix_bundle::reader::BundleReader;
     use rugix_bundle::source::ReaderSource;
     use rugix_bundle::source::SkipSeek;
+
+    #[test]
+    fn app_archive_includes_reject_reserved_and_duplicate_paths() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let first = tempdir.path().join("first");
+        let second = tempdir.path().join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("same"), b"one").unwrap();
+        fs::write(second.join("same"), b"two").unwrap();
+        fs::write(first.join("app.toml"), b"reserved").unwrap();
+
+        let archive = tempfile::tempfile().unwrap();
+        let mut builder = tar::Builder::new(archive);
+        assert!(tar_append_includes(&mut builder, &[first.join("app.toml")]).is_err());
+        assert!(
+            tar_append_includes(&mut builder, &[first.join("same"), second.join("same")],).is_err()
+        );
+    }
 
     #[test]
     fn app_bundle_includes_component_files() {

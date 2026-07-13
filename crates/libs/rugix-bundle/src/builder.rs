@@ -1,7 +1,5 @@
 use std::io::BufRead;
 use std::io::BufReader;
-use std::io::BufWriter;
-use std::io::Write;
 use std::path::Component as PathComponent;
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,6 +13,7 @@ use si_crypto_hashes::HashDigest;
 
 use crate::BUNDLE_HEADER_SIZE_LIMIT;
 use crate::BundleResult;
+use crate::atomic_output;
 use crate::block_encoding::encode_payload_file;
 use crate::format::BundleComponentFile;
 use crate::format::Bytes;
@@ -28,6 +27,7 @@ use crate::manifest::BundleManifest;
 use crate::manifest::HashAlgorithm;
 use crate::manifest::UpdateType;
 use crate::manifest::{self};
+use crate::paths_refer_to_same_file;
 
 const COMPONENTS_DIR: &str = "components";
 const COMPONENTS_SIZE_LIMIT: u64 = 64 * 1024;
@@ -43,15 +43,21 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
         .hash_algorithm
         .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256);
     let mut bundle_header = format::BundleHeader {
-        manifest: Some(serde_json::to_string(&manifest).unwrap()),
+        manifest: Some(
+            serde_json::to_string(&manifest).whatever("unable to serialize bundle manifest")?,
+        ),
         is_incremental: matches!(manifest.update_type, UpdateType::Incremental),
         hash_algorithm,
         components: load_bundle_components(path)?,
         payload_index: Vec::new(),
     };
     let mut prepared_payloads = Vec::new();
-    for (idx, payload) in manifest.payloads.iter().enumerate() {
+    let mut prepared_tempfiles = Vec::new();
+    for payload in &manifest.payloads {
         let payload_file = path.join("payloads").join(&payload.filename);
+        if paths_refer_to_same_file(&payload_file, dst)? {
+            bail!("bundle output must not overwrite an input payload");
+        }
         let payload_file_hash =
             hash_file(hash_algorithm, &payload_file).whatever("unable to hash payload file")?;
         let mut payload_data = payload_file.clone();
@@ -59,12 +65,15 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
             block_encoding: None,
         };
         if let Some(block_encoding) = &payload.block_encoding {
-            payload_data = path.join(format!(".payload{idx}.data"));
+            let temporary = tempfile::NamedTempFile::new()
+                .whatever("unable to create temporary encoded payload file")?;
+            payload_data = temporary.path().to_owned();
             payload_header.block_encoding = Some(encode_payload_file(
                 block_encoding,
                 &payload_file,
                 &payload_data,
             )?);
+            prepared_tempfiles.push(temporary);
         }
         let payload_header = format::encode::to_vec(&payload_header, format::tags::PAYLOAD_HEADER);
         bundle_header.payload_index.push(PayloadEntry {
@@ -131,9 +140,6 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
             payload_data,
         })
     }
-    let mut bundle_file =
-        BufWriter::new(std::fs::File::create(dst).whatever("unable to create bundle file")?);
-    write_segment_start(&mut bundle_file, format::tags::BUNDLE).unwrap();
     let bundle_header = format::encode::to_vec(&bundle_header, format::tags::BUNDLE_HEADER);
     if bundle_header.len() as u64 > BUNDLE_HEADER_SIZE_LIMIT.raw {
         bail!(
@@ -143,27 +149,43 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
         );
     }
     let header_hash = hash_algorithm.hash(&bundle_header);
-    bundle_file.write_all(&bundle_header).unwrap();
-    write_segment_start(&mut bundle_file, format::tags::PAYLOADS).unwrap();
-    for prepared in prepared_payloads.into_iter() {
-        write_segment_start(&mut bundle_file, format::tags::PAYLOAD).unwrap();
-        bundle_file.write_all(&prepared.payload_header).unwrap();
-        let data_size = std::fs::metadata(&prepared.payload_data).unwrap().len();
-        write_atom_head(
-            &mut bundle_file,
-            format::stlv::AtomHead::Value {
-                tag: format::tags::PAYLOAD_DATA,
-                length: NumBytes::new(data_size),
-            },
-        )
-        .unwrap();
-        let mut payload_data = std::fs::File::open(&prepared.payload_data).unwrap();
-        std::io::copy(&mut payload_data, &mut bundle_file).unwrap();
-        write_segment_end(&mut bundle_file, format::tags::PAYLOAD).unwrap();
-    }
-    write_segment_end(&mut bundle_file, format::tags::PAYLOADS).unwrap();
-    write_segment_end(&mut bundle_file, format::tags::BUNDLE).unwrap();
-    Ok(header_hash)
+    atomic_output(dst, |bundle_file| {
+        write_segment_start(bundle_file, format::tags::BUNDLE)
+            .whatever("unable to write bundle root")?;
+        bundle_file
+            .write_all(&bundle_header)
+            .whatever("unable to write bundle header")?;
+        write_segment_start(bundle_file, format::tags::PAYLOADS)
+            .whatever("unable to write payload section")?;
+        for prepared in prepared_payloads {
+            write_segment_start(bundle_file, format::tags::PAYLOAD)
+                .whatever("unable to write payload segment")?;
+            bundle_file
+                .write_all(&prepared.payload_header)
+                .whatever("unable to write payload header")?;
+            let data_size = std::fs::metadata(&prepared.payload_data)
+                .whatever("unable to inspect prepared payload")?
+                .len();
+            write_atom_head(
+                bundle_file,
+                format::stlv::AtomHead::Value {
+                    tag: format::tags::PAYLOAD_DATA,
+                    length: NumBytes::new(data_size),
+                },
+            )
+            .whatever("unable to write payload data header")?;
+            let mut payload_data = std::fs::File::open(&prepared.payload_data)
+                .whatever("unable to open prepared payload")?;
+            std::io::copy(&mut payload_data, bundle_file)
+                .whatever("unable to write payload data")?;
+            write_segment_end(bundle_file, format::tags::PAYLOAD)
+                .whatever("unable to finish payload segment")?;
+        }
+        write_segment_end(bundle_file, format::tags::PAYLOADS)
+            .whatever("unable to finish payload section")?;
+        write_segment_end(bundle_file, format::tags::BUNDLE).whatever("unable to finish bundle")?;
+        Ok(header_hash)
+    })
 }
 
 struct PreparedPayload {
