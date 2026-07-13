@@ -118,6 +118,9 @@ impl File {
         let mut remaining = limit;
         loop {
             check_canceled();
+            if remaining.is_some_and(|remaining| remaining.raw == 0) {
+                break;
+            }
             // Ensure that there is spare capacity in the buffer.
             buffer.reserve(4096);
             // Read into the vector without initializing the memory.
@@ -141,7 +144,7 @@ impl File {
                     // SAFETY: The memory has been properly initialized by `read`.
                     unsafe { buffer.set_len(buffer.len() + result as usize) }
                     if let Some(remaining) = &mut remaining {
-                        *remaining += u64::try_from(result).expect("must not overflow `u64`");
+                        *remaining -= u64::try_from(result).expect("must not overflow `u64`");
                     }
                 }
             }
@@ -487,10 +490,20 @@ impl Copier {
                         self.buffer.clear();
                         chunk_read
                     };
-                    chunk_remaining -= chunk_read as i64;
-                    remaining -= chunk_read as i64;
-                    dst_offset += chunk_read as i64;
-                    src_offset += chunk_read as i64;
+                    if chunk_read == 0 {
+                        return Err(whatever!(
+                            "source ended before the requested range was copied"
+                        ));
+                    }
+                    let chunk_read = i64::try_from(chunk_read)
+                        .whatever("copied byte count does not fit in i64")?;
+                    if chunk_read > chunk_remaining || chunk_read > remaining {
+                        return Err(whatever!("copy operation exceeded the requested range"));
+                    }
+                    chunk_remaining -= chunk_read;
+                    remaining -= chunk_read;
+                    dst_offset += chunk_read;
+                    src_offset += chunk_read;
                 }
                 if remaining > 0 {
                     src_offset = match lseek64(src_raw_fd, next_hole, Whence::SeekData) {
@@ -504,7 +517,10 @@ impl Copier {
                         }
                         error => error.whatever("unable to seek in src")?,
                     };
-                    let hole_size = src_offset - next_hole;
+                    let hole_size = (src_offset - next_hole).min(remaining);
+                    if hole_size < 0 {
+                        return Err(whatever!("invalid sparse-file hole range"));
+                    }
                     dst.punch_hole(
                         NumBytes::new(dst_offset as u64),
                         NumBytes::new(hole_size as u64),
@@ -526,8 +542,17 @@ impl Copier {
                 check_canceled();
                 const CHUNK_SIZE: NumBytes = NumBytes::kibibytes(8);
                 src.read_into_vec(&mut self.buffer, Some(remaining.min(CHUNK_SIZE)))?;
+                if self.buffer.is_empty() {
+                    return Err(whatever!(
+                        "source ended before the requested range was copied"
+                    ));
+                }
                 dst.write(&self.buffer)?;
-                remaining -= self.buffer.byte_len();
+                let copied = self.buffer.byte_len();
+                if copied > remaining {
+                    return Err(whatever!("copy operation exceeded the requested range"));
+                }
+                remaining -= copied;
                 self.buffer.clear();
             }
             Ok(())
@@ -571,5 +596,32 @@ impl Drop for TempDir {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use byte_calc::NumBytes;
+
+    use super::File;
+
+    #[test]
+    fn bounded_reads_respect_zero_smaller_equal_and_larger_limits() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("source");
+        std::fs::write(&path, b"abcdef").unwrap();
+
+        for (limit, expected) in [
+            (0, b"".as_slice()),
+            (3, b"abc".as_slice()),
+            (6, b"abcdef".as_slice()),
+            (10, b"abcdef".as_slice()),
+        ] {
+            let mut file = File::open_read(&path).unwrap();
+            assert_eq!(
+                file.read_to_vec(Some(NumBytes::new(limit))).unwrap(),
+                expected
+            );
+        }
     }
 }
