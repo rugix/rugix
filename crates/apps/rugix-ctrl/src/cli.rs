@@ -1615,6 +1615,23 @@ fn preflight_system_deliveries(
     Ok(destinations)
 }
 
+fn clear_target_overlay(path: &Path) -> SystemResult<()> {
+    clear_target_overlay_with(path, |path| fs::remove_dir_all(path))
+}
+
+fn clear_target_overlay_with<F>(path: &Path, remove: F) -> SystemResult<()>
+where
+    F: FnOnce(&Path) -> io::Result<()>,
+{
+    match remove(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error
+            .whatever("unable to clear target boot-group overlay")
+            .field("path", path.display().to_string())),
+    }
+}
+
 fn install_update_bundle<R: BundleSource>(
     system: &System,
     config: &Config,
@@ -1670,7 +1687,7 @@ fn install_update_bundle<R: BundleSource>(
     if !keep_overlay {
         if let Some(boot_group) = &boot_group {
             let spare_overlay_dir = overlay_dir(boot_group.1);
-            fs::remove_dir_all(spare_overlay_dir).ok();
+            clear_target_overlay(&spare_overlay_dir)?;
         }
     }
 
@@ -2526,6 +2543,7 @@ mod tests {
     use crate::system::boot_groups::BootGroups;
     use crate::system::slots::SystemSlots;
 
+    use super::clear_target_overlay_with;
     use super::preflight_system_deliveries;
     use super::PayloadDelivery;
     use super::SystemPayloadDestination;
@@ -2664,5 +2682,18 @@ mod tests {
         assert!(
             preflight_system_deliveries(false, &[execute_delivery()], &slots, Some(group)).is_err()
         );
+    }
+
+    #[test]
+    fn overlay_cleanup_ignores_only_missing_directories() {
+        let path = std::path::Path::new("/test/overlay");
+        assert!(clear_target_overlay_with(path, |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        })
+        .is_ok());
+        assert!(clear_target_overlay_with(path, |_| {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        })
+        .is_err());
     }
 }
