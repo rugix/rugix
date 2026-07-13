@@ -8,6 +8,9 @@ use std::path::PathBuf;
 use bytes::BufMut;
 use bytes::Bytes;
 use bytes::BytesMut;
+use reportify::bail;
+use reportify::ResultExt;
+use rugix_bundle::BundleResult;
 use tar::EntryType;
 
 use si_crypto_hashes::HashAlgorithm;
@@ -110,43 +113,51 @@ impl ChunkCollector {
     }
 
     /// Flushes the current group.
-    pub fn flush(&mut self) {
+    pub fn flush(&mut self) -> BundleResult<()> {
         if !self.pending_data.is_empty() {
             let data = std::mem::take(&mut self.pending_data);
-            let compressed = compress_bytes(&data);
+            let compressed = compress_bytes(&data)?;
             self.groups.push(ChunkGroup { data, compressed });
             self.current_chunks = 0;
         }
+        Ok(())
     }
 
     /// Add a chunk.
-    pub fn add_chunk(&mut self, hash: &HashDigest, chunk: &[u8]) -> ChunkAddress {
+    pub fn add_chunk(&mut self, hash: &HashDigest, chunk: &[u8]) -> BundleResult<ChunkAddress> {
         if let Some(addr) = self.table.get(hash) {
-            return *addr;
+            return Ok(*addr);
         }
-        let group_number = u32::try_from(self.groups.len()).unwrap();
+        let group_number = u32::try_from(self.groups.len())
+            .whatever("simulation produced too many chunk groups")?;
         let chunk_number = self.current_chunks;
         // We write the size of the chunk into the group such that we can later identify
         // the individual chunks after decoding the group.
-        self.pending_data
-            .extend_from_slice(&u32::try_from(chunk.len()).unwrap().to_be_bytes());
+        self.pending_data.extend_from_slice(
+            &u32::try_from(chunk.len())
+                .whatever("simulation chunk is larger than 4 GiB")?
+                .to_be_bytes(),
+        );
         self.pending_data.extend_from_slice(chunk);
-        self.current_chunks += 1;
+        self.current_chunks = self
+            .current_chunks
+            .checked_add(1)
+            .ok_or_else(|| reportify::whatever!("simulation chunk group has too many chunks"))?;
         if self.pending_data.len() > self.group_size_limit {
-            self.flush();
+            self.flush()?;
         }
         let addr = ChunkAddress {
             group_number,
             chunk_number,
         };
         self.table.insert(hash.clone(), addr);
-        addr
+        Ok(addr)
     }
 
     /// Finalize the chunk collector and return the individual chunk groups.
-    pub fn finalize(mut self) -> Vec<ChunkGroup> {
-        self.flush();
-        self.groups
+    pub fn finalize(mut self) -> BundleResult<Vec<ChunkGroup>> {
+        self.flush()?;
+        Ok(self.groups)
     }
 }
 
@@ -155,14 +166,14 @@ pub fn compute_plan<R: Read>(
     group_size_limit: usize,
     chunker_algorithm: &ChunkerAlgorithm,
     mut archive: tar::Archive<R>,
-) -> (Vec<Instruction>, Vec<ChunkGroup>) {
+) -> BundleResult<(Vec<Instruction>, Vec<ChunkGroup>)> {
     let mut chunk_collector = ChunkCollector::new(group_size_limit);
     let mut plan = Vec::new();
     let mut current_path = PathBuf::new();
     let mut current_mode = None;
     let mut current_owner = None;
-    for entry in archive.entries().unwrap() {
-        let mut entry = entry.unwrap();
+    for entry in archive.entries().whatever("unable to read tar archive")? {
+        let mut entry = entry.whatever("unable to read tar entry")?;
         if !matches!(
             entry.header().entry_type(),
             EntryType::Regular
@@ -173,10 +184,12 @@ pub fn compute_plan<R: Read>(
         ) {
             continue;
         }
-        let path = entry.path().unwrap();
+        let path = entry.path().whatever("invalid tar entry path")?;
         let mut path = path.as_ref();
         if path.is_absolute() {
-            path = path.strip_prefix("/").unwrap();
+            path = path
+                .strip_prefix("/")
+                .whatever("unable to normalize absolute tar entry path")?;
         }
         let path = loop {
             if let Ok(path) = path.strip_prefix(&current_path) {
@@ -188,8 +201,10 @@ pub fn compute_plan<R: Read>(
         current_path.push(path);
         plan.push(Instruction::Push { path: path.into() });
         let entry_owner = (
-            entry.header().uid().unwrap() as u32,
-            entry.header().gid().unwrap() as u32,
+            u32::try_from(entry.header().uid().whatever("invalid tar entry uid")?)
+                .whatever("tar entry uid does not fit into u32")?,
+            u32::try_from(entry.header().gid().whatever("invalid tar entry gid")?)
+                .whatever("tar entry gid does not fit into u32")?,
         );
         if Some(entry_owner) != current_owner {
             current_owner = Some(entry_owner);
@@ -198,7 +213,7 @@ pub fn compute_plan<R: Read>(
                 gid: entry_owner.1,
             });
         }
-        let entry_mode = entry.header().mode().unwrap();
+        let entry_mode = entry.header().mode().whatever("invalid tar entry mode")?;
         if Some(entry_mode) != current_mode {
             current_mode = Some(entry_mode);
             plan.push(Instruction::Mode { mode: entry_mode });
@@ -206,49 +221,75 @@ pub fn compute_plan<R: Read>(
         match entry.header().entry_type() {
             EntryType::Regular => {
                 let mut data = Vec::new();
-                entry.read_to_end(&mut data).unwrap();
+                entry
+                    .read_to_end(&mut data)
+                    .whatever("unable to read tar file entry")?;
                 let mut chunks = Vec::new();
-                for chunk in chunker_algorithm.chunker().unwrap().chunks(&data) {
+                for chunk in chunker_algorithm
+                    .chunker()
+                    .whatever("invalid chunker configuration")?
+                    .chunks(&data)
+                {
                     let hash = HashAlgorithm::Sha256.hash(chunk);
-                    let address = chunk_collector.add_chunk(&hash, chunk);
+                    let address = chunk_collector.add_chunk(&hash, chunk)?;
                     chunks.push(FileChunk { hash, address })
                 }
                 plan.push(Instruction::File { chunks })
             }
             EntryType::Symlink => {
-                let target = entry.link_name().unwrap().unwrap();
+                let target = entry
+                    .link_name()
+                    .whatever("invalid tar link target")?
+                    .ok_or_else(|| reportify::whatever!("tar symbolic link has no target"))?;
                 plan.push(Instruction::Link {
                     target: target.into(),
                 })
             }
             EntryType::Char => {
-                let major = entry.header().device_major().unwrap().unwrap();
-                let minor = entry.header().device_minor().unwrap().unwrap();
+                let major = entry
+                    .header()
+                    .device_major()
+                    .whatever("invalid character device major number")?
+                    .ok_or_else(|| reportify::whatever!("character device has no major number"))?;
+                let minor = entry
+                    .header()
+                    .device_minor()
+                    .whatever("invalid character device minor number")?
+                    .ok_or_else(|| reportify::whatever!("character device has no minor number"))?;
                 plan.push(Instruction::CharacterDevice { major, minor });
             }
             EntryType::Block => {
-                let major = entry.header().device_major().unwrap().unwrap();
-                let minor = entry.header().device_minor().unwrap().unwrap();
+                let major = entry
+                    .header()
+                    .device_major()
+                    .whatever("invalid block device major number")?
+                    .ok_or_else(|| reportify::whatever!("block device has no major number"))?;
+                let minor = entry
+                    .header()
+                    .device_minor()
+                    .whatever("invalid block device minor number")?
+                    .ok_or_else(|| reportify::whatever!("block device has no minor number"))?;
                 plan.push(Instruction::BlockDevice { major, minor });
             }
             EntryType::Directory => {
                 plan.push(Instruction::Directory);
             }
-            _ => unreachable!(),
+            _ => bail!("unsupported tar entry type after validation"),
         }
     }
-    (plan, chunk_collector.finalize())
+    Ok((plan, chunk_collector.finalize()?))
 }
 
 /// Serialize a plan into a byte vector.
-pub fn serialize_plan(plan: &[Instruction]) -> Bytes {
+pub fn serialize_plan(plan: &[Instruction]) -> BundleResult<Bytes> {
     let mut serialized = BytesMut::new();
     for instr in plan {
         match instr {
             Instruction::Push { path } => {
                 serialized.put_u8(1);
                 let path = path.as_encoded_bytes();
-                serialized.put_u8(u8::try_from(path.len()).unwrap());
+                serialized
+                    .put_u8(u8::try_from(path.len()).whatever("plan path fragment is too long")?);
                 serialized.extend_from_slice(path);
             }
             Instruction::Pop => {
@@ -265,7 +306,9 @@ pub fn serialize_plan(plan: &[Instruction]) -> Bytes {
             }
             Instruction::File { chunks, .. } => {
                 serialized.put_u8(5);
-                serialized.put_u16(u16::try_from(chunks.len()).unwrap());
+                serialized.put_u16(
+                    u16::try_from(chunks.len()).whatever("plan file has too many chunks")?,
+                );
                 for chunk in chunks {
                     serialized.extend_from_slice(chunk.hash.as_ref());
                     serialized.put_u32(chunk.address.group_number);
@@ -288,10 +331,38 @@ pub fn serialize_plan(plan: &[Instruction]) -> Bytes {
             Instruction::Link { target } => {
                 serialized.put_u8(9);
                 let target = target.as_os_str().as_encoded_bytes();
-                serialized.put_u16(u16::try_from(target.len()).unwrap());
+                serialized
+                    .put_u16(u16::try_from(target.len()).whatever("plan link target is too long")?);
                 serialized.extend_from_slice(target);
             }
         }
     }
-    serialized.freeze()
+    Ok(serialized.freeze())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::compute_plan;
+    use super::serialize_plan;
+    use super::Instruction;
+    use rugix_chunker::ChunkerAlgorithm;
+
+    #[test]
+    fn malformed_archives_and_oversized_plan_fields_return_errors() {
+        let archive = tar::Archive::new(b"not a tar archive".as_slice());
+        assert!(compute_plan(
+            32 * 1024,
+            &ChunkerAlgorithm::Fixed { block_size_kib: 4 },
+            archive,
+        )
+        .is_err());
+
+        let oversized_path = OsString::from("x".repeat(256));
+        assert!(serialize_plan(&[Instruction::Push {
+            path: oversized_path
+        }])
+        .is_err());
+    }
 }
