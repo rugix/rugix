@@ -6,7 +6,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Subcommand;
+use reportify::bail;
+use reportify::ResultExt;
 use rugix_bundle::xdelta::xdelta_compress;
+use rugix_bundle::BundleResult;
 use rugix_chunker::Chunker;
 use rugix_chunker::ChunkerAlgorithm;
 use serde::Serialize;
@@ -22,7 +25,7 @@ mod utils;
 pub mod deltar;
 
 /// Run a simulation command.
-pub fn run(cmd: &SimulationCmd) {
+pub fn run(cmd: &SimulationCmd) -> BundleResult<()> {
     match &cmd {
         SimulationCmd::BlockBased(cmd) => match cmd {
             BlockBasedCmd::Simulate {
@@ -32,16 +35,20 @@ pub fn run(cmd: &SimulationCmd) {
                 group_overhead,
                 group_size,
             } => {
-                let old = std::fs::read(old).unwrap();
+                let old = std::fs::read(old).whatever("unable to read old simulation input")?;
                 let mut table = HashSet::new();
                 let mut old_blocks = 0;
-                for chunk in chunker.chunker().unwrap().chunks(&old) {
+                for chunk in chunker
+                    .chunker()
+                    .whatever("invalid chunker configuration")?
+                    .chunks(&old)
+                {
                     let hash = HashAlgorithm::Sha256.hash::<Arc<[u8]>>(chunk);
                     table.insert(hash);
                     old_blocks += 1;
                 }
                 drop(old);
-                let new = std::fs::read(new).unwrap();
+                let new = std::fs::read(new).whatever("unable to read new simulation input")?;
                 let mut new_blocks = 0;
                 let mut downloaded_uncompressed = 0;
                 let mut downloaded_compressed = 0;
@@ -49,19 +56,28 @@ pub fn run(cmd: &SimulationCmd) {
                 let mut index_data = Vec::new();
                 let mut sizes_data = Vec::new();
                 let mut downloaded_blocks_set = HashSet::new();
-                for (number, chunk) in chunker.chunker().unwrap().chunks(&new).enumerate() {
+                for (number, chunk) in chunker
+                    .chunker()
+                    .whatever("invalid chunker configuration")?
+                    .chunks(&new)
+                    .enumerate()
+                {
                     let hash = HashAlgorithm::Sha256.hash(chunk);
                     index_data.extend_from_slice(hash.as_ref());
                     if table.insert(hash) {
                         if let Some(download_block_size) = *group_size {
                             let number = number as u64;
                             let chunk_block_size = match chunker {
-                                ChunkerAlgorithm::Casync { .. } => panic!("unsupported option"),
+                                ChunkerAlgorithm::Casync { .. } => {
+                                    bail!("group-size requires a fixed chunker")
+                                }
                                 ChunkerAlgorithm::Fixed { block_size_kib } => {
                                     (*block_size_kib as u64) * 1024
                                 }
                             };
-                            assert!(download_block_size > chunk_block_size);
+                            if download_block_size <= chunk_block_size {
+                                bail!("group-size must be larger than the fixed chunk size");
+                            }
                             let chunk_block = (number * chunk_block_size) / download_block_size;
                             if downloaded_blocks_set.insert(chunk_block) {
                                 let chunk_block_start =
@@ -71,27 +87,31 @@ pub fn run(cmd: &SimulationCmd) {
                                     as usize;
                                 let chunk_block = &new[chunk_block_start..chunk_block_end];
                                 downloaded_uncompressed += chunk_block.len();
-                                let compressed_len = compress_bytes(chunk_block).len();
+                                let compressed_len = compress_bytes(chunk_block)?.len();
                                 downloaded_compressed += compressed_len;
                                 sizes_data.extend_from_slice(
-                                    &u32::try_from(compressed_len).unwrap().to_be_bytes(),
+                                    &u32::try_from(compressed_len)
+                                        .whatever("compressed group is larger than 4 GiB")?
+                                        .to_be_bytes(),
                                 );
                                 downloaded_blocks += 1;
                             }
                         } else {
                             downloaded_uncompressed += chunk.len();
-                            let compressed_len = compress_bytes(chunk).len();
+                            let compressed_len = compress_bytes(chunk)?.len();
                             downloaded_compressed += compressed_len;
                             sizes_data.extend_from_slice(
-                                &u32::try_from(compressed_len).unwrap().to_be_bytes(),
+                                &u32::try_from(compressed_len)
+                                    .whatever("compressed chunk is larger than 4 GiB")?
+                                    .to_be_bytes(),
                             );
                             downloaded_blocks += 1;
                         }
                     }
                     new_blocks += 1;
                 }
-                let index_compressed = compress_bytes(&index_data).len();
-                let sizes_compressed = compress_bytes(&sizes_data).len();
+                let index_compressed = compress_bytes(&index_data)?.len();
+                let sizes_compressed = compress_bytes(&sizes_data)?.len();
                 let sizes_uncompressed = if chunker.is_fixed() {
                     0
                 } else {
@@ -134,7 +154,7 @@ pub fn run(cmd: &SimulationCmd) {
                         uncompressed: total_uncompressed,
                     },
                 )
-                .unwrap();
+                .whatever("unable to write block simulation result")?;
             }
         },
         SimulationCmd::Deltar(cmd) => match cmd {
@@ -143,9 +163,10 @@ pub fn run(cmd: &SimulationCmd) {
                 group_size: group_size_limit,
                 chunker,
             } => {
-                let archive =
-                    tar::Archive::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
-                let (plan, _) = deltar::compute_plan(*group_size_limit, chunker, archive);
+                let archive = tar::Archive::new(std::io::BufReader::new(
+                    std::fs::File::open(path).whatever("unable to open tar archive")?,
+                ));
+                let (plan, _) = deltar::compute_plan(*group_size_limit, chunker, archive)?;
                 for instr in plan {
                     match instr {
                         deltar::Instruction::Push { path } => {
@@ -185,22 +206,33 @@ pub fn run(cmd: &SimulationCmd) {
                 group_overhead,
                 chunker,
             } => {
-                let archive_new =
-                    tar::Archive::new(std::io::BufReader::new(std::fs::File::open(new).unwrap()));
-                let (plan, groups) = deltar::compute_plan(*group_size, chunker, archive_new);
-                let serialized_plan = deltar::serialize_plan(&plan);
-                let compressed_plan = utils::compress_bytes(&serialized_plan);
+                let archive_new = tar::Archive::new(std::io::BufReader::new(
+                    std::fs::File::open(new).whatever("unable to open new tar archive")?,
+                ));
+                let (plan, groups) = deltar::compute_plan(*group_size, chunker, archive_new)?;
+                let serialized_plan = deltar::serialize_plan(&plan)?;
+                let compressed_plan = utils::compress_bytes(&serialized_plan)?;
                 let mut local_blocks = HashSet::new();
-                let mut archive_old =
-                    tar::Archive::new(std::io::BufReader::new(std::fs::File::open(old).unwrap()));
-                for entry in archive_old.entries().unwrap() {
-                    let mut entry = entry.unwrap();
+                let mut archive_old = tar::Archive::new(std::io::BufReader::new(
+                    std::fs::File::open(old).whatever("unable to open old tar archive")?,
+                ));
+                for entry in archive_old
+                    .entries()
+                    .whatever("unable to read old tar archive")?
+                {
+                    let mut entry = entry.whatever("unable to read old tar entry")?;
                     if !matches!(entry.header().entry_type(), tar::EntryType::Regular) {
                         continue;
                     }
                     let mut data = Vec::new();
-                    entry.read_to_end(&mut data).unwrap();
-                    for chunk in chunker.chunker().unwrap().chunks(&data) {
+                    entry
+                        .read_to_end(&mut data)
+                        .whatever("unable to read old tar file entry")?;
+                    for chunk in chunker
+                        .chunker()
+                        .whatever("invalid chunker configuration")?
+                        .chunks(&data)
+                    {
                         let hash: HashDigest = HashAlgorithm::Sha256.hash(chunk);
                         local_blocks.insert(hash);
                     }
@@ -221,7 +253,9 @@ pub fn run(cmd: &SimulationCmd) {
                             // We already downloaded this group.
                             continue;
                         }
-                        let group = &groups[chunk.address.group_number as usize];
+                        let group = groups
+                            .get(chunk.address.group_number as usize)
+                            .ok_or_else(|| reportify::whatever!("invalid chunk group address"))?;
                         downloaded_size += group.compressed.len() as u64;
                         downloaded_size += group_overhead;
                     }
@@ -248,15 +282,18 @@ pub fn run(cmd: &SimulationCmd) {
                         data: downloaded_size,
                     },
                 )
-                .unwrap();
+                .whatever("unable to write deltar simulation result")?;
             }
         },
         SimulationCmd::Xdelta(cmd) => match cmd {
             XdeltaCmd::Simulate { old, new } => {
-                let tempdir = tempfile::tempdir().unwrap();
+                let tempdir = tempfile::tempdir().whatever("unable to create xdelta workspace")?;
                 let patch = tempdir.path().join("patch.xdelta");
-                xdelta_compress(old, new, &patch).unwrap();
-                let size = patch.metadata().unwrap().len();
+                xdelta_compress(old, new, &patch)?;
+                let size = patch
+                    .metadata()
+                    .whatever("unable to inspect xdelta patch")?
+                    .len();
                 println!("Xdelta Size: {size}");
 
                 #[derive(Serialize)]
@@ -264,10 +301,12 @@ pub fn run(cmd: &SimulationCmd) {
                     patch: u64,
                 }
 
-                serde_json::to_writer_pretty(&std::io::stdout(), &Output { patch: size }).unwrap();
+                serde_json::to_writer_pretty(&std::io::stdout(), &Output { patch: size })
+                    .whatever("unable to write xdelta simulation result")?;
             }
         },
     }
+    Ok(())
 }
 
 /// Simulation command.

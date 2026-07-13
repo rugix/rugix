@@ -562,7 +562,7 @@ fn main() -> BundleResult<()> {
             rugix_bundle::builder::pack(new_dir.path(), &cmd.out)?;
         }
         Cmd::Simulator(cmd) => {
-            simulation::run(&cmd);
+            simulation::run(&cmd)?;
         }
         Cmd::Signatures(cmd) => match cmd {
             SignaturesCmd::Add {
