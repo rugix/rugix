@@ -377,15 +377,33 @@ pub fn skip(source: &mut dyn BundleSource, head: AtomHead) -> BundleResult<()> {
             source.skip(length)?;
             Ok(())
         }
-        AtomHead::Start { tag: open_tag } => loop {
-            match read_atom_head(source)? {
-                None => bail!("unexpected end of bundle while reading segment {open_tag}"),
-                Some(AtomHead::End { tag: close_tag }) if open_tag == close_tag => {
-                    return Ok(());
+        AtomHead::Start { tag: open_tag } => {
+            const MAX_NESTING_DEPTH: usize = 64;
+            let mut open_segments = vec![open_tag];
+            while let Some(head) = read_atom_head(source)? {
+                match head {
+                    AtomHead::Value { length, .. } => source.skip(length)?,
+                    AtomHead::Start { tag } => {
+                        if open_segments.len() >= MAX_NESTING_DEPTH {
+                            bail!("STLV nesting depth exceeds {MAX_NESTING_DEPTH}");
+                        }
+                        open_segments.push(tag);
+                    }
+                    AtomHead::End { tag } => {
+                        let expected = open_segments
+                            .pop()
+                            .expect("the initial open segment remains until completion");
+                        if tag != expected {
+                            bail!("unbalanced segment end {tag}; expected {expected}");
+                        }
+                        if open_segments.is_empty() {
+                            return Ok(());
+                        }
+                    }
                 }
-                Some(head) => skip(source, head)?,
             }
-        },
+            bail!("unexpected end of bundle while reading segment {open_tag}")
+        }
         AtomHead::End { tag } => {
             bail!("cannot skip unbalanced closing segment atom with tag {tag}")
         }
@@ -646,5 +664,29 @@ mod tests {
         assert_eq!(read_atom_head(&mut from_slice(&[])).unwrap(), None);
         // Truncated buffer.
         assert!(read_atom_head(&mut from_slice(&[0x99, 0x88])).is_err());
+    }
+
+    #[test]
+    fn skip_rejects_unbalanced_and_excessively_nested_segments() {
+        const ROOT: Tag = Tag::from_bytes([1, 2, 3, 4]);
+        const OTHER: Tag = Tag::from_bytes([4, 3, 2, 1]);
+
+        let mut unbalanced = Vec::new();
+        write_segment_start(&mut unbalanced, ROOT).unwrap();
+        write_segment_end(&mut unbalanced, OTHER).unwrap();
+        let mut source = from_slice(&unbalanced);
+        let head = read_atom_head(&mut source).unwrap().unwrap();
+        assert!(skip(&mut source, head).is_err());
+
+        let mut nested = Vec::new();
+        for _ in 0..65 {
+            write_segment_start(&mut nested, ROOT).unwrap();
+        }
+        for _ in 0..65 {
+            write_segment_end(&mut nested, ROOT).unwrap();
+        }
+        let mut source = from_slice(&nested);
+        let head = read_atom_head(&mut source).unwrap().unwrap();
+        assert!(skip(&mut source, head).is_err());
     }
 }
