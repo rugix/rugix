@@ -2,6 +2,7 @@
 
 use std::path::Component;
 use std::path::Path;
+use std::path::PathBuf;
 
 use thiserror::Error;
 
@@ -38,6 +39,35 @@ impl std::fmt::Display for ValidatedRelativePath {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
     }
+}
+
+/// Ensure that no existing component beneath `root` is a symbolic link.
+///
+/// Missing components are allowed so callers can validate immediately before creating
+/// them.
+pub fn ensure_no_symlink_components(
+    root: &Path,
+    relative: &ValidatedRelativePath,
+) -> std::io::Result<()> {
+    let mut current = PathBuf::from(root);
+    for component in relative.as_path().components() {
+        let Component::Normal(component) = component else {
+            unreachable!("relative path was validated");
+        };
+        current.push(component);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(std::io::Error::other(format!(
+                    "path component is a symbolic link: {}",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// Error returned for an unsafe or non-portable relative path.
@@ -107,6 +137,7 @@ fn validate_relative_path(path: &str) -> Result<(), InvalidRelativePath> {
 
 #[cfg(test)]
 mod tests {
+    use super::ensure_no_symlink_components;
     use super::ValidatedRelativePath;
 
     #[test]
@@ -134,5 +165,23 @@ mod tests {
         ] {
             assert!(ValidatedRelativePath::new(path).is_err(), "{path:?}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_nested_existing_symlink_components() {
+        use std::os::unix::fs::symlink;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let root = tempdir.path().join("root");
+        let outside = tempdir.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, root.join("redirect")).unwrap();
+
+        let safe = ValidatedRelativePath::new("directory/file").unwrap();
+        let escaped = ValidatedRelativePath::new("redirect/file").unwrap();
+        assert!(ensure_no_symlink_components(&root, &safe).is_ok());
+        assert!(ensure_no_symlink_components(&root, &escaped).is_err());
     }
 }
