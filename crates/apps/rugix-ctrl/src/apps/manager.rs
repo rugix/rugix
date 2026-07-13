@@ -62,6 +62,7 @@ impl AppManager {
     /// returned [`AppLock`] for the duration of the mutating operation. The lock
     /// is released when the guard is dropped.
     pub fn lock_app(&self, app_name: &str) -> AppsResult<AppLock> {
+        rugix_bundle::manifest::validate_app_name(app_name).whatever("invalid app name")?;
         let lock_dir = self.app_dir(app_name).join(".rugix");
         fs::create_dir_all(&lock_dir).whatever("unable to create app .rugix directory")?;
         let lock_path = lock_dir.join("lock");
@@ -848,6 +849,23 @@ impl AppManager {
         };
         let dir = self.generation_dir(app_name, gen);
         Ok(dir.exists().then_some(dir))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::apps::AppsConfig;
+
+    use super::AppManager;
+
+    #[test]
+    fn invalid_app_names_are_rejected_before_lock_paths_are_created() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let apps_dir = tempdir.path().join("apps");
+        let manager = AppManager::new(apps_dir, AppsConfig::new());
+
+        assert!(manager.lock_app("../escape").is_err());
+        assert!(!tempdir.path().join("escape").exists());
     }
 }
 
