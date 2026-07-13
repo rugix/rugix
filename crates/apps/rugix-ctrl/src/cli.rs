@@ -32,6 +32,7 @@ use rugix_cli::StatusSegment;
 use rugix_common::disk::blkdev::find_block_device;
 use rugix_common::disk::blkdev::BlockDevice;
 use rugix_common::mount::is_mount_point;
+use rugix_common::path::ensure_no_symlink_components;
 use rugix_common::path::ValidatedRelativePath;
 use rugix_common::pipe::buffered_pipe;
 use rugix_common::pipe::PipeWriter;
@@ -988,7 +989,8 @@ fn install_app_bundle<S: BundleSource>(
         let payload_entry = payload.entry();
         if let Some(type_app_file) = &payload_entry.type_app_file {
             let app_name = type_app_file.app.clone();
-            let payload_path = type_app_file.path.clone();
+            let payload_path = ValidatedRelativePath::new(type_app_file.path.clone())
+                .whatever("invalid app-file path")?;
             let file_mode = type_app_file.mode;
             let delta_encoding = payload_entry.delta_encoding.clone();
             if !app_generations.contains_key(&app_name) {
@@ -1002,6 +1004,8 @@ fn install_app_bundle<S: BundleSource>(
             }
             let (_, gen_dir) = &app_generations[&app_name];
             let gen_dir = gen_dir.clone();
+            ensure_no_symlink_components(&gen_dir, &payload_path)
+                .whatever("app-file path contains a symbolic link")?;
             let file_path = gen_dir.join(&payload_path);
             if let Some(parent) = file_path.parent() {
                 fs::create_dir_all(parent).whatever("unable to create parent directory")?;
@@ -1027,8 +1031,9 @@ fn install_app_bundle<S: BundleSource>(
                     let old_gen_dir = app_manager
                         .generation_dir(&app_name, gen.meta.number)
                         .whatever("invalid app name")?;
-                    let indices = payload_db::get_app_file_indices(&old_gen_dir, &payload_path)
-                        .unwrap_or_default();
+                    let indices =
+                        payload_db::get_app_file_indices(&old_gen_dir, payload_path.as_str())
+                            .unwrap_or_default();
                     if !indices.is_empty() {
                         let data_file = old_gen_dir.join(&payload_path);
                         if data_file.exists() {
@@ -1046,7 +1051,7 @@ fn install_app_bundle<S: BundleSource>(
             let decoded_payload_info = if let Some(delta_encoding) = delta_encoding {
                 info!(
                     app = app_name,
-                    path = payload_path,
+                    path = %payload_path,
                     "installing delta app file payload {}",
                     payload.idx()
                 );
@@ -1066,7 +1071,7 @@ fn install_app_bundle<S: BundleSource>(
                         .whatever("invalid app name")?;
                     let old_states =
                         crate::apps::manager::AppManager::load_payload_states(&old_gen_dir);
-                    let Some(old_state) = old_states.get(&payload_path) else {
+                    let Some(old_state) = old_states.get(payload_path.as_str()) else {
                         continue;
                     };
                     for input_hash in &input.hashes {
@@ -1126,7 +1131,7 @@ fn install_app_bundle<S: BundleSource>(
             } else {
                 info!(
                     app = app_name,
-                    path = payload_path,
+                    path = %payload_path,
                     "extracting app file payload {}",
                     payload.idx()
                 );
@@ -1158,7 +1163,7 @@ fn install_app_bundle<S: BundleSource>(
 
             // Save payload hash for this app-file.
             payload_states.entry(app_name.clone()).or_default().insert(
-                payload_path.clone(),
+                payload_path.as_str().to_owned(),
                 payload_db::PayloadState {
                     hashes: [(
                         decoded_payload_info.hash.algorithm(),
