@@ -95,6 +95,32 @@ fn grub_default_group<'a>(
     })
 }
 
+fn uboot_default_group<'a>(
+    boot_order: impl IntoIterator<Item = &'a str>,
+    boot_env: &HashMap<String, String>,
+    configured_names: &[&str],
+) -> Option<&'a str> {
+    boot_order.into_iter().find(|group| {
+        configured_names.contains(group)
+            && boot_env
+                .get(&format!("BOOT_{group}_LEFT"))
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .unwrap_or(0)
+                > 0
+    })
+}
+
+fn prioritize_boot_group(boot_order: &str, group: &str) -> String {
+    std::iter::once(group)
+        .chain(
+            boot_order
+                .split_whitespace()
+                .filter(|candidate| *candidate != group),
+        )
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Debug)]
 pub struct RaucUboot {
     inner: RaucBootFlow,
@@ -128,19 +154,16 @@ impl BootFlow for RaucUboot {
             let Some(rauc_group) = self.inner.groups.get(&group) else {
                 bail!("invalid boot group");
             };
-            let Some(mut boot_order) = boot_env.get("BOOT_ORDER").map(|v| v.trim()).map(|v| {
-                v.split_whitespace()
-                    .map(|e| e.to_owned())
-                    .collect::<Vec<_>>()
-            }) else {
+            let Some(boot_order) = boot_env.get("BOOT_ORDER").map(|v| v.trim()) else {
                 bail!("unable to determine the boot order");
             };
-            boot_order.retain(|e| e != &rauc_group.name);
-            boot_order.insert(0, rauc_group.name.clone());
             let mut env = HashMap::new();
             // Allow booting into the selected slot once.
             env.insert(format!("BOOT_{}_LEFT", rauc_group.name), "1".to_owned());
-            env.insert("BOOT_ORDER".to_owned(), boot_order.join(" "));
+            env.insert(
+                "BOOT_ORDER".to_owned(),
+                prioritize_boot_group(boot_order, &rauc_group.name),
+            );
             set_vars(&env)?;
         }
         Ok(())
@@ -155,15 +178,20 @@ impl BootFlow for RaucUboot {
         else {
             bail!("unable to determine the boot order");
         };
-        for group in boot_order {
-            let left = boot_env
-                .get(&format!("BOOT_{group}_LEFT"))
-                .and_then(|v| v.trim().parse::<u32>().ok())
-                .unwrap_or(0);
-            for rauc_group in self.inner.groups.values() {
-                if group == rauc_group.name && left > 0 {
-                    return Ok(rauc_group.idx);
-                }
+        let configured_names = self
+            .inner
+            .groups
+            .values()
+            .map(|group| group.name.as_str())
+            .collect::<Vec<_>>();
+        if let Some(group) = uboot_default_group(boot_order, &boot_env, &configured_names) {
+            if let Some(group) = self
+                .inner
+                .groups
+                .values()
+                .find(|candidate| candidate.name == group)
+            {
+                return Ok(group.idx);
             }
         }
         bail!("unable to determine the default boot group");
@@ -177,19 +205,16 @@ impl BootFlow for RaucUboot {
         let Some(rauc_group) = self.inner.groups.get(&group) else {
             bail!("invalid boot group");
         };
-        let Some(mut boot_order) = boot_env.get("BOOT_ORDER").map(|v| v.trim()).map(|v| {
-            v.split_whitespace()
-                .map(|e| e.to_owned())
-                .collect::<Vec<_>>()
-        }) else {
+        let Some(boot_order) = boot_env.get("BOOT_ORDER").map(|v| v.trim()) else {
             bail!("unable to determine the boot order");
         };
-        boot_order.retain(|e| e != &rauc_group.name);
-        boot_order.insert(0, rauc_group.name.clone());
         let mut env = HashMap::new();
         // Allow booting into the selected slot once.
         env.insert(format!("BOOT_{}_LEFT", rauc_group.name), "3".to_owned());
-        env.insert("BOOT_ORDER".to_owned(), boot_order.join(" "));
+        env.insert(
+            "BOOT_ORDER".to_owned(),
+            prioritize_boot_group(boot_order, &rauc_group.name),
+        );
         set_vars(&env)?;
         Ok(())
     }
@@ -255,19 +280,16 @@ impl BootFlow for RaucGrub {
             let Some(rauc_group) = self.inner.groups.get(&group) else {
                 bail!("invalid boot group");
             };
-            let Some(mut boot_order) = boot_env.get("BOOT_ORDER").map(|v| v.trim()).map(|v| {
-                v.split_whitespace()
-                    .map(|e| e.to_owned())
-                    .collect::<Vec<_>>()
-            }) else {
+            let Some(boot_order) = boot_env.get("BOOT_ORDER").map(|v| v.trim()) else {
                 bail!("unable to determine the boot order");
             };
-            boot_order.retain(|e| e != &rauc_group.name);
-            boot_order.insert(0, rauc_group.name.clone());
             let mut env = HashMap::new();
             env.insert(format!("{}_OK", rauc_group.name), "1".to_owned());
             env.insert(format!("{}_TRY", rauc_group.name), "0".to_owned());
-            env.insert("BOOT_ORDER".to_owned(), boot_order.join(" "));
+            env.insert(
+                "BOOT_ORDER".to_owned(),
+                prioritize_boot_group(boot_order, &rauc_group.name),
+            );
             set_vars(&env)?;
         }
         Ok(())
@@ -289,13 +311,14 @@ impl BootFlow for RaucGrub {
             .map(|group| group.name.as_str())
             .collect::<Vec<_>>();
         if let Some(group) = grub_default_group(boot_order, &boot_env, &configured_names) {
-            return Ok(self
+            if let Some(group) = self
                 .inner
                 .groups
                 .values()
-                .find(|rauc_group| rauc_group.name == group)
-                .expect("validated RAUC group name")
-                .idx);
+                .find(|candidate| candidate.name == group)
+            {
+                return Ok(group.idx);
+            }
         }
         bail!("unable to determine the default boot group");
     }
@@ -308,20 +331,17 @@ impl BootFlow for RaucGrub {
         let Some(rauc_group) = self.inner.groups.get(&group) else {
             bail!("invalid boot group");
         };
-        let Some(mut boot_order) = boot_env.get("BOOT_ORDER").map(|v| v.trim()).map(|v| {
-            v.split_whitespace()
-                .map(|e| e.to_owned())
-                .collect::<Vec<_>>()
-        }) else {
+        let Some(boot_order) = boot_env.get("BOOT_ORDER").map(|v| v.trim()) else {
             bail!("unable to determine the boot order");
         };
-        boot_order.retain(|e| e != &rauc_group.name);
-        boot_order.insert(0, rauc_group.name.clone());
         let mut env = HashMap::new();
         // Allow booting into the selected slot once.
         env.insert(format!("{}_OK", rauc_group.name), "1".to_owned());
         env.insert(format!("{}_TRY", rauc_group.name), "0".to_owned());
-        env.insert("BOOT_ORDER".to_owned(), boot_order.join(" "));
+        env.insert(
+            "BOOT_ORDER".to_owned(),
+            prioritize_boot_group(boot_order, &rauc_group.name),
+        );
         set_vars(&env)?;
         Ok(())
     }
@@ -361,6 +381,8 @@ mod tests {
     use hashbrown::HashMap;
 
     use super::grub_default_group;
+    use super::prioritize_boot_group;
+    use super::uboot_default_group;
     use super::validate_group_names;
 
     fn grub_env(values: &[(&str, &str)]) -> HashMap<String, String> {
@@ -391,6 +413,48 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn uboot_default_covers_stable_trial_commit_rollback_and_invalid_states() {
+        let cases = [
+            (
+                "A B",
+                vec![("BOOT_A_LEFT", "3"), ("BOOT_B_LEFT", "0")],
+                Some("A"),
+            ),
+            (
+                "B A",
+                vec![("BOOT_A_LEFT", "3"), ("BOOT_B_LEFT", "1")],
+                Some("B"),
+            ),
+            (
+                "B A",
+                vec![("BOOT_A_LEFT", "3"), ("BOOT_B_LEFT", "3")],
+                Some("B"),
+            ),
+            (
+                "B A",
+                vec![("BOOT_A_LEFT", "3"), ("BOOT_B_LEFT", "0")],
+                Some("A"),
+            ),
+            ("UNKNOWN", vec![("BOOT_UNKNOWN_LEFT", "3")], None),
+        ];
+
+        for (order, values, expected) in cases {
+            let env = grub_env(&values);
+            assert_eq!(
+                uboot_default_group(order.split_whitespace(), &env, &["A", "B"]),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn selecting_and_committing_prioritizes_the_requested_group_once() {
+        assert_eq!(prioritize_boot_group("A B", "B"), "B A");
+        assert_eq!(prioritize_boot_group("B A", "B"), "B A");
+        assert_eq!(prioritize_boot_group("A B C", "B"), "B A C");
     }
 
     #[test]
