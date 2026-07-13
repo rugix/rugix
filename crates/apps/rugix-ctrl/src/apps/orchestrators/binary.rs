@@ -81,7 +81,7 @@ impl Orchestrator for Binary {
         info!(app = ctx.app_name, unit = ?runtime_path, "installed runtime unit");
 
         systemd::daemon_reload()?;
-        systemd::enable_runtime(&service_name);
+        systemd::enable_runtime(&service_name)?;
         systemd::start(&service_name)?;
         info!(app = ctx.app_name, service = %service_name, "enabled and started");
 
@@ -106,15 +106,15 @@ impl Orchestrator for Binary {
 
         let service = Self::service_name(ctx.app_name);
 
-        let _ = systemd::stop(&service);
-        systemd::disable_runtime(&service);
+        systemd::stop(&service)?;
+        systemd::disable_runtime(&service)?;
         info!(app = ctx.app_name, service = %service, "stopped and disabled");
 
         let runtime_path = Self::runtime_unit_path(ctx.app_name);
         if runtime_path.exists() {
             info!(app = ctx.app_name, unit = ?runtime_path, "removing runtime unit");
-            let _ = fs::remove_file(&runtime_path);
-            let _ = systemd::daemon_reload();
+            fs::remove_file(&runtime_path).whatever("unable to remove runtime unit")?;
+            systemd::daemon_reload()?;
         }
         Ok(())
     }

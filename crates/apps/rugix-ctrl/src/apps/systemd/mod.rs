@@ -16,14 +16,14 @@ pub fn daemon_reload() -> AppsResult<()> {
     run(&["daemon-reload"])
 }
 
-/// Enable a unit with `--runtime` (best-effort, ignores failures).
-pub fn enable_runtime(unit: &str) {
-    let _ = run(&["enable", "--runtime", unit]);
+/// Enable a unit with `--runtime`.
+pub fn enable_runtime(unit: &str) -> AppsResult<()> {
+    run(&["enable", "--runtime", unit])
 }
 
-/// Disable a unit with `--runtime` (best-effort, ignores failures).
-pub fn disable_runtime(unit: &str) {
-    let _ = run(&["disable", "--runtime", unit]);
+/// Disable a unit with `--runtime`.
+pub fn disable_runtime(unit: &str) -> AppsResult<()> {
+    run(&["disable", "--runtime", unit])
 }
 
 /// Start a unit, waiting for it to finish.
@@ -54,12 +54,39 @@ pub fn is_active(unit: &str) -> AppsResult<String> {
 
 /// Run `systemctl` with the given arguments.
 fn run(args: &[&str]) -> AppsResult<()> {
-    let status = Command::new("systemctl")
-        .args(args)
-        .status()
-        .whatever(format!("unable to run systemctl {}", args.join(" ")))?;
-    if !status.success() {
+    run_with(args, |args| {
+        Command::new("systemctl")
+            .args(args)
+            .status()
+            .whatever(format!("unable to run systemctl {}", args.join(" ")))
+    })
+}
+
+fn run_with(
+    args: &[&str],
+    execute: impl FnOnce(&[&str]) -> AppsResult<std::process::ExitStatus>,
+) -> AppsResult<()> {
+    if !execute(args)?.success() {
         reportify::bail!("systemctl {} failed", args.join(" "));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::process::ExitStatusExt;
+
+    use super::run_with;
+
+    #[test]
+    fn systemctl_failures_are_not_reported_as_success() {
+        assert!(run_with(&["enable", "--runtime", "app.service"], |_| {
+            Ok(std::process::ExitStatus::from_raw(1 << 8))
+        })
+        .is_err());
+        assert!(run_with(&["enable", "--runtime", "app.service"], |_| {
+            Ok(std::process::ExitStatus::from_raw(0))
+        })
+        .is_ok());
+    }
 }
