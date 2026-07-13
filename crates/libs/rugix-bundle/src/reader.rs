@@ -451,6 +451,12 @@ impl PayloadTarget for File {
             .whatever("unable to seek")?;
         Ok(())
     }
+
+    fn finalize(mut self) -> BundleResult<()> {
+        self.flush().whatever("unable to flush payload target")?;
+        self.sync_all()
+            .whatever("unable to synchronize payload target")
+    }
 }
 
 /// Read next segment or value into vector.

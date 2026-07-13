@@ -276,9 +276,10 @@ impl AppManager {
         file.sync_all().whatever("unable to sync complete marker")?;
         drop(file);
         // Fsync the directory so the new entry is durable.
-        if let Ok(dir) = fs::File::open(&rugix_dir) {
-            let _ = dir.sync_all();
-        }
+        fs::File::open(&rugix_dir)
+            .whatever("unable to open generation metadata directory")?
+            .sync_all()
+            .whatever("unable to sync generation metadata directory")?;
         Ok(())
     }
 
