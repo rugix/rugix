@@ -116,6 +116,14 @@ pub fn repart(
                 has_changed = true;
             }
             new.size = size;
+            if schema.ty == PartitionTableType::Gpt {
+                if let Some(name) = &partition.name {
+                    if new.name.as_ref() != Some(name) {
+                        has_changed = true;
+                        new.name = Some(name.clone());
+                    }
+                }
+            }
         } else {
             has_changed = true;
             new_table.partitions.push(Partition {
@@ -123,8 +131,14 @@ pub fn repart(
                 start,
                 size,
                 ty,
-                name: None,
+                name: if schema.ty == PartitionTableType::Gpt {
+                    partition.name.clone()
+                } else {
+                    None
+                },
                 gpt_id: None,
+                gpt_attrs: None,
+                bootable: false,
             })
         }
         if ty.is_extended() {
@@ -178,6 +192,12 @@ fn check_new_table(
         }
         if old.gpt_id != new.gpt_id {
             bail!("BUG: GPT UUID of partition must not be changed.");
+        }
+        if old.gpt_attrs != new.gpt_attrs {
+            bail!("BUG: GPT attributes of partition must not be changed.");
+        }
+        if old.bootable != new.bootable {
+            bail!("BUG: Bootable flag of partition must not be changed.");
         }
     }
     Ok(())
@@ -309,6 +329,8 @@ mod tests {
                 ty: mbr_types::FAT32_LBA,
                 name: None,
                 gpt_id: None,
+                gpt_attrs: None,
+                bootable: false,
             })
         }
         old_table.partitions.push(Partition {
@@ -318,6 +340,8 @@ mod tests {
             ty: mbr_types::EXTENDED,
             name: None,
             gpt_id: None,
+            gpt_attrs: None,
+            bootable: false,
         });
         old_table.partitions.push(Partition {
             number: 5,
@@ -326,6 +350,8 @@ mod tests {
             ty: mbr_types::LINUX,
             name: None,
             gpt_id: None,
+            gpt_attrs: None,
+            bootable: false,
         });
         old_table.validate().unwrap();
         repart(
@@ -356,6 +382,8 @@ mod tests {
                 },
                 name: None,
                 gpt_id: None,
+                gpt_attrs: None,
+                bootable: false,
             })
         }
         old_table.partitions.push(Partition {
@@ -365,12 +393,22 @@ mod tests {
             ty: gpt_types::LINUX,
             name: None,
             gpt_id: None,
+            gpt_attrs: None,
+            bootable: false,
         });
+        old_table.partitions[0].gpt_attrs = Some("GUID:63".to_owned());
+        old_table.partitions[0].bootable = true;
         old_table.validate().unwrap();
-        repart(
-            &old_table,
-            &generic_efi_partition_schema(parse_size("4G").unwrap()),
-        )
-        .unwrap();
+        let mut schema = generic_efi_partition_schema(parse_size("4G").unwrap());
+        schema.partitions[0].name = Some("efi-system".to_owned());
+        schema.partitions[4].name = Some("system-b".to_owned());
+        let new_table = repart(&old_table, &schema).unwrap().unwrap();
+        assert_eq!(new_table.partitions[0].name.as_deref(), Some("efi-system"));
+        assert_eq!(new_table.partitions[4].name.as_deref(), Some("system-b"));
+        assert_eq!(
+            new_table.partitions[0].gpt_attrs.as_deref(),
+            Some("GUID:63")
+        );
+        assert!(new_table.partitions[0].bootable);
     }
 }

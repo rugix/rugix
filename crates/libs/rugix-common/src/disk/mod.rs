@@ -72,6 +72,12 @@ pub struct PartitionTable {
     pub disk_size: NumBlocks,
     /// Block size of the disk.
     pub block_size: NumBytes,
+    /// First usable block recorded in a GPT header.
+    pub gpt_first_usable: Option<NumBlocks>,
+    /// Last usable block recorded in a GPT header.
+    pub gpt_last_usable: Option<NumBlocks>,
+    /// Number of entries in a non-default GPT partition-entry array.
+    pub gpt_table_length: Option<u64>,
     /// Partitions of the disk.
     pub partitions: Vec<Partition>,
 }
@@ -83,6 +89,9 @@ impl PartitionTable {
             disk_id: id,
             disk_size: size,
             block_size: NumBytes::from_raw(DEFAULT_BLOCK_SIZE),
+            gpt_first_usable: None,
+            gpt_last_usable: None,
+            gpt_table_length: None,
             partitions: Vec::new(),
         }
     }
@@ -127,7 +136,12 @@ impl PartitionTable {
 
     /// The first usable block.
     pub fn first_usable_block(&self) -> NumBlocks {
-        GPT_TABLE_BLOCKS + NumBlocks::ONE
+        match self.disk_id {
+            DiskId::Mbr(_) => GPT_TABLE_BLOCKS + NumBlocks::ONE,
+            DiskId::Gpt(_) => self
+                .gpt_first_usable
+                .unwrap_or(GPT_TABLE_BLOCKS + NumBlocks::ONE),
+        }
     }
 
     /// The last usable block.
@@ -136,7 +150,9 @@ impl PartitionTable {
             DiskId::Mbr(_) => {
                 (self.disk_size - NumBlocks::ONE).min(NumBlocks::from_raw(u32::MAX.into()))
             }
-            DiskId::Gpt(_) => self.disk_size - GPT_TABLE_BLOCKS - NumBlocks::ONE,
+            DiskId::Gpt(_) => self
+                .gpt_last_usable
+                .unwrap_or(self.disk_size - GPT_TABLE_BLOCKS - NumBlocks::ONE),
         }
     }
 
@@ -216,10 +232,14 @@ pub struct Partition {
     pub size: NumBlocks,
     /// Type of the partition.
     pub ty: PartitionType,
-    /// Optional name of the partition.
+    /// Optional GPT name of the partition.
     pub name: Option<String>,
     /// Optional unique identifier of the partition.
     pub gpt_id: Option<gpt::Guid>,
+    /// Optional GPT partition attributes.
+    pub gpt_attrs: Option<String>,
+    /// Whether the partition has its bootable flag set.
+    pub bootable: bool,
 }
 
 impl Partition {

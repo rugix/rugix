@@ -62,6 +62,18 @@ pub(crate) fn sfdisk_read(dev: &Path) -> Result<PartitionTable, Report<DiskError
             )
         })?),
     };
+    let gpt_table_length = json_table
+        .table_length
+        .as_deref()
+        .map(|length| {
+            length.parse().map_err(|_| {
+                whatever!(
+                    "invalid GPT table length {:?} returned from `sfdisk`",
+                    length
+                )
+            })
+        })
+        .transpose()?;
     let mut partitions = json_table
         .partitions
         .into_iter()
@@ -103,8 +115,10 @@ pub(crate) fn sfdisk_read(dev: &Path) -> Result<PartitionTable, Report<DiskError
                 start: NumBlocks::from_raw(partition.start),
                 size: NumBlocks::from_raw(partition.size),
                 ty,
-                name: Some(partition.node),
+                name: partition.name,
                 gpt_id,
+                gpt_attrs: partition.attrs,
+                bootable: partition.bootable,
             })
         })
         .collect::<Result<Vec<_>, Report<DiskError>>>()?;
@@ -113,17 +127,43 @@ pub(crate) fn sfdisk_read(dev: &Path) -> Result<PartitionTable, Report<DiskError
         disk_id: id,
         disk_size: size,
         block_size: NumBytes::from_raw(json_table.sector_size),
+        gpt_first_usable: json_table.first_lba.map(NumBlocks::from_raw),
+        gpt_last_usable: json_table.last_lba.map(NumBlocks::from_raw),
+        gpt_table_length,
         partitions,
     })
 }
 
 pub(crate) fn sfdisk_write(table: &PartitionTable, dev: &Path) -> Result<(), Report<DiskError>> {
+    let script = sfdisk_script(table);
+
+    println!("{script}");
+
+    run!(["sfdisk", "--no-reread", dev].with_stdin(script))
+        .whatever("unable to write partition table")?;
+    Ok(())
+}
+
+fn sfdisk_script(table: &PartitionTable) -> String {
     let mut script = String::new();
     match table.disk_id {
         DiskId::Mbr(_) => script.push_str("label: dos\n"),
         DiskId::Gpt(_) => script.push_str("label: gpt\n"),
     }
     writeln!(&mut script, "label-id: {}", table.disk_id).unwrap();
+    script.push_str("unit: sectors\n");
+    writeln!(&mut script, "sector-size: {}", table.block_size.into_raw()).unwrap();
+    if table.is_gpt() {
+        if let Some(first_usable) = table.gpt_first_usable {
+            writeln!(&mut script, "first-lba: {}", first_usable.into_raw()).unwrap();
+        }
+        if let Some(last_usable) = table.gpt_last_usable {
+            writeln!(&mut script, "last-lba: {}", last_usable.into_raw()).unwrap();
+        }
+        if let Some(table_length) = table.gpt_table_length {
+            writeln!(&mut script, "table-length: {table_length}").unwrap();
+        }
+    }
     for partition in &table.partitions {
         write!(&mut script, "{}: ", partition.number).unwrap();
         write!(
@@ -137,14 +177,35 @@ pub(crate) fn sfdisk_write(table: &PartitionTable, dev: &Path) -> Result<(), Rep
         if let Some(gpt_id) = partition.gpt_id {
             write!(&mut script, ",uuid={}", gpt_id).unwrap();
         }
+        if table.is_gpt() {
+            if let Some(name) = &partition.name {
+                script.push_str(",name=");
+                write_sfdisk_quoted(&mut script, name);
+            }
+            if let Some(attrs) = &partition.gpt_attrs {
+                script.push_str(",attrs=");
+                write_sfdisk_quoted(&mut script, attrs);
+            }
+        }
+        if partition.bootable {
+            script.push_str(",bootable");
+        }
         script.push('\n');
     }
+    script
+}
 
-    println!("{script}");
-
-    run!(["sfdisk", "--no-reread", dev].with_stdin(script))
-        .whatever("unable to write partition table")?;
-    Ok(())
+/// Write a string using the escaping used by util-linux's `sfdisk --dump`.
+fn write_sfdisk_quoted(output: &mut String, value: &str) {
+    output.push('"');
+    for byte in value.bytes() {
+        if matches!(byte, b'"' | b'\\' | b'`' | b'$') || !(b' '..=b'~').contains(&byte) {
+            write!(output, "\\x{byte:02x}").unwrap();
+        } else {
+            output.push(char::from(byte));
+        }
+    }
+    output.push('"');
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -163,6 +224,12 @@ struct SfdiskJsonTable {
     unit: String,
     #[serde(rename = "sectorsize")]
     sector_size: u64,
+    #[serde(rename = "firstlba")]
+    first_lba: Option<u64>,
+    #[serde(rename = "lastlba")]
+    last_lba: Option<u64>,
+    #[serde(rename = "table-length")]
+    table_length: Option<String>,
     // This field is missing if there are no partitions.
     #[serde(default)]
     partitions: Vec<SfdiskJsonPartition>,
@@ -185,4 +252,112 @@ pub struct SfdiskJsonPartition {
     #[serde(rename = "type")]
     ty: String,
     uuid: Option<String>,
+    name: Option<String>,
+    attrs: Option<String>,
+    #[serde(default)]
+    bootable: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::disk::gpt::gpt_types;
+    use crate::disk::mbr::mbr_types;
+    use crate::disk::mbr::MbrId;
+
+    #[test]
+    fn deserialize_partition_name() {
+        let partition: SfdiskJsonPartition = serde_json::from_str(
+            r#"{
+                "node": "/dev/loop0p1",
+                "start": 2048,
+                "size": 4096,
+                "type": "0FC63DAF-8483-4772-8E79-3D69D8477DE4",
+                "uuid": "B921B045-1DF0-41C3-AF44-4C6F280D3FAE",
+                "name": "boot-a",
+                "attrs": "GUID:63",
+                "bootable": true
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(partition.name.as_deref(), Some("boot-a"));
+        assert_eq!(partition.attrs.as_deref(), Some("GUID:63"));
+        assert!(partition.bootable);
+    }
+
+    #[test]
+    fn deserialize_gpt_geometry() {
+        let json: SfdiskJson = serde_json::from_str(
+            r#"{
+                "partitiontable": {
+                    "label": "gpt",
+                    "id": "B921B045-1DF0-41C3-AF44-4C6F280D3FAE",
+                    "device": "/dev/loop0",
+                    "unit": "sectors",
+                    "firstlba": 64,
+                    "lastlba": 8127,
+                    "table-length": "256",
+                    "sectorsize": 4096
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let table = json.partition_table;
+        assert_eq!(table.first_lba, Some(64));
+        assert_eq!(table.last_lba, Some(8127));
+        assert_eq!(table.table_length.as_deref(), Some("256"));
+        assert_eq!(table.sector_size, 4096);
+    }
+
+    #[test]
+    fn write_gpt_partition_name() {
+        let mut table = PartitionTable::new(
+            DiskId::Gpt(Guid::from_random_bytes([0; 16])),
+            NumBlocks::from_raw(8192),
+        );
+        table.block_size = NumBytes::from_raw(4096);
+        table.gpt_first_usable = Some(NumBlocks::from_raw(64));
+        table.gpt_last_usable = Some(NumBlocks::from_raw(8127));
+        table.gpt_table_length = Some(256);
+        table.partitions.push(Partition {
+            number: 1,
+            start: NumBlocks::from_raw(2048),
+            size: NumBlocks::from_raw(4096),
+            ty: gpt_types::LINUX,
+            name: Some("boot A `$` é".to_owned()),
+            gpt_id: None,
+            gpt_attrs: Some("GUID:63".to_owned()),
+            bootable: true,
+        });
+
+        let script = sfdisk_script(&table);
+        assert!(script.contains("unit: sectors\n"));
+        assert!(script.contains("sector-size: 4096\n"));
+        assert!(script.contains("first-lba: 64\n"));
+        assert!(script.contains("last-lba: 8127\n"));
+        assert!(script.contains("table-length: 256\n"));
+        assert!(script.contains(r#",name="boot A \x60\x24\x60 \xc3\xa9",attrs="GUID:63",bootable"#));
+    }
+
+    #[test]
+    fn write_mbr_bootable_flag() {
+        let mut table = PartitionTable::new(
+            DiskId::Mbr(MbrId::new(0x12345678)),
+            NumBlocks::from_raw(8192),
+        );
+        table.partitions.push(Partition {
+            number: 1,
+            start: NumBlocks::from_raw(2048),
+            size: NumBlocks::from_raw(4096),
+            ty: mbr_types::FAT32_LBA,
+            name: None,
+            gpt_id: None,
+            gpt_attrs: None,
+            bootable: true,
+        });
+
+        assert!(sfdisk_script(&table).contains(",bootable\n"));
+    }
 }
