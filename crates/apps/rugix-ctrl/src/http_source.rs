@@ -331,6 +331,9 @@ impl BundleSource for HttpSource {
             if self.current_response.is_none() {
                 // We need to issue a new request for a new chunk.
                 if !self.use_range_queries {
+                    if self.content_length == Some(self.current_position) {
+                        return Ok(0);
+                    }
                     bail!("response is not available but range queries are not supported");
                 }
                 // Compute the end of the next chunk using the provided hint, if any.
