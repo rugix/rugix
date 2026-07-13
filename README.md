@@ -41,6 +41,9 @@ Works with Yocto, Buildroot, and other Linux build systems.
 
 [For details, check out Rugix Ctrl's documentation.](https://rugix.org/docs/ctrl)
 
+For the precise update durability boundaries, interruption behavior, and operator recovery
+expectations implemented by this repository, see [Update Reliability and Recovery](docs/update-reliability.md).
+
 ## Rugix Bakery
 
 Robust over-the-air updates require system images built to support atomic updates. Traditional tools like Yocto are powerful but complex to set up and maintain, often taking teams months to build a production-ready pipeline. This complexity also creates risk: often only one person at a company truly understands the setup.
