@@ -43,6 +43,7 @@ pub struct BundleReader<S> {
     header_raw: Vec<u8>,
     signatures: Option<Signatures>,
     next_payload: usize,
+    finished: bool,
 }
 
 impl<S: BundleSource> BundleReader<S> {
@@ -70,6 +71,7 @@ impl<S: BundleSource> BundleReader<S> {
             signatures,
             header_raw: bundle_header,
             next_payload: 0,
+            finished: false,
         })
     }
 
@@ -91,6 +93,7 @@ impl<S: BundleSource> BundleReader<S> {
 
     pub fn next_payload(&mut self) -> BundleResult<Option<PayloadReader<'_, S>>> {
         if self.next_payload >= self.header.payload_index.len() {
+            self.finish_payloads()?;
             return Ok(None);
         }
         let this_payload = self.next_payload;
@@ -121,6 +124,19 @@ impl<S: BundleSource> BundleReader<S> {
             header: decode_slice(&header_bytes)?,
             remaining_data,
         }))
+    }
+
+    fn finish_payloads(&mut self) -> BundleResult<()> {
+        if self.finished {
+            return Ok(());
+        }
+        skip_until_end(&mut self.source, tags::PAYLOADS)?;
+        skip_until_end(&mut self.source, tags::BUNDLE)?;
+        if read_atom_head(&mut self.source)?.is_some() {
+            bail!("bundle contains trailing atoms after the root segment");
+        }
+        self.finished = true;
+        Ok(())
     }
 }
 
@@ -175,6 +191,9 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
     pub fn skip(self) -> BundleResult<()> {
         self.reader.source.skip(self.remaining_data)?;
         skip_until_end(&mut self.reader.source, tags::PAYLOAD)?;
+        if self.reader.next_payload >= self.reader.header.payload_index.len() {
+            self.reader.finish_payloads()?;
+        }
         Ok(())
     }
 
@@ -396,6 +415,9 @@ impl<'r, S: BundleSource> PayloadReader<'r, S> {
         }
         target.finalize()?;
         skip_until_end(&mut self.reader.source, tags::PAYLOAD)?;
+        if self.reader.next_payload >= self.reader.header.payload_index.len() {
+            self.reader.finish_payloads()?;
+        }
         Ok(DecodedPayloadInfo {
             hash: payload_hash,
             size: bytes_written,
@@ -466,6 +488,20 @@ pub fn read_into_vec(
     head: AtomHead,
     limit: NumBytes,
 ) -> BundleResult<()> {
+    read_into_vec_at_depth(source, output, head, limit, 0)
+}
+
+fn read_into_vec_at_depth(
+    source: &mut dyn BundleSource,
+    output: &mut Vec<u8>,
+    head: AtomHead,
+    limit: NumBytes,
+    depth: usize,
+) -> BundleResult<()> {
+    const MAX_NESTING_DEPTH: usize = 64;
+    if depth > MAX_NESTING_DEPTH {
+        bail!("STLV nesting depth exceeds {MAX_NESTING_DEPTH}");
+    }
     write_atom_head(output, head).unwrap();
     match head {
         AtomHead::Value { length, .. } => {
@@ -488,7 +524,7 @@ pub fn read_into_vec(
                     break;
                 }
                 atom => {
-                    read_into_vec(source, output, atom, limit)?;
+                    read_into_vec_at_depth(source, output, atom, limit, depth + 1)?;
                 }
             }
         },
@@ -592,17 +628,49 @@ fn validate_block_metadata_lengths(
 }
 
 fn uncompress_bytes(format: CompressionFormat, bytes: &[u8]) -> BundleResult<Vec<u8>> {
+    uncompress_bytes_with_limit(format, bytes, PAYLOAD_HEADER_SIZE_LIMIT.raw as usize)
+}
+
+fn uncompress_bytes_with_limit(
+    format: CompressionFormat,
+    bytes: &[u8],
+    limit: usize,
+) -> BundleResult<Vec<u8>> {
+    struct BoundedVecWriter {
+        bytes: Vec<u8>,
+        limit: usize,
+    }
+
+    impl Write for BoundedVecWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+                return Err(std::io::Error::other(
+                    "decompressed bundle metadata exceeds size limit",
+                ));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
     match format {
         CompressionFormat::Xz => {
             let mut decoder = rugix_compression::XzDecoder::new();
-            let mut output = Vec::new();
+            let mut output = BoundedVecWriter {
+                bytes: Vec::new(),
+                limit,
+            };
             decoder
                 .process(bytes, &mut output)
                 .whatever("unable to decompress bundle metadata")?;
             decoder
                 .finalize(&mut output)
                 .whatever("unable to finalize bundle metadata decompression")?;
-            Ok(output)
+            Ok(output.bytes)
         }
     }
 }
@@ -615,12 +683,14 @@ mod tests {
     use crate::format;
     use crate::format::stlv::AtomHead;
     use crate::format::stlv::write_atom_head;
+    use crate::format::stlv::write_segment_end;
     use crate::format::stlv::write_segment_start;
     use crate::format::tags;
     use crate::source::from_slice;
 
     use super::BundleReader;
     use super::uncompress_bytes;
+    use super::uncompress_bytes_with_limit;
     use super::validate_block_metadata_lengths;
 
     fn empty_header() -> format::BundleHeader {
@@ -685,6 +755,7 @@ mod tests {
             header_raw: Vec::new(),
             signatures: None,
             next_payload: 0,
+            finished: false,
         };
 
         assert!(reader.next_payload().is_err());
@@ -700,5 +771,62 @@ mod tests {
         assert!(validate_block_metadata_lengths(64, 32, Some(8)).is_ok());
         assert!(validate_block_metadata_lengths(63, 32, Some(8)).is_err());
         assert!(validate_block_metadata_lengths(64, 32, Some(7)).is_err());
+    }
+
+    #[test]
+    fn bundle_reader_rejects_more_payloads_than_the_header_declares() {
+        let mut bytes = Vec::new();
+        write_segment_start(&mut bytes, tags::BUNDLE).unwrap();
+        bytes.extend(format::encode::to_vec(&empty_header(), tags::BUNDLE_HEADER));
+        write_segment_start(&mut bytes, tags::PAYLOADS).unwrap();
+        write_segment_start(&mut bytes, tags::PAYLOAD).unwrap();
+        write_segment_end(&mut bytes, tags::PAYLOAD).unwrap();
+        write_segment_end(&mut bytes, tags::PAYLOADS).unwrap();
+        write_segment_end(&mut bytes, tags::BUNDLE).unwrap();
+
+        let mut reader = BundleReader::start(from_slice(&bytes), None).unwrap();
+        assert!(reader.next_payload().is_err());
+    }
+
+    #[test]
+    fn optional_tags_are_skipped_but_unknown_required_tags_are_rejected() {
+        fn bundle_with_metadata(tag: crate::format::stlv::Tag) -> Vec<u8> {
+            let mut bytes = Vec::new();
+            write_segment_start(&mut bytes, tags::BUNDLE).unwrap();
+            bytes.extend(format::encode::to_vec(&empty_header(), tags::BUNDLE_HEADER));
+            write_atom_head(
+                &mut bytes,
+                AtomHead::Value {
+                    tag,
+                    length: NumBytes::ZERO,
+                },
+            )
+            .unwrap();
+            write_segment_start(&mut bytes, tags::PAYLOADS).unwrap();
+            write_segment_end(&mut bytes, tags::PAYLOADS).unwrap();
+            write_segment_end(&mut bytes, tags::BUNDLE).unwrap();
+            bytes
+        }
+
+        let optional = crate::format::stlv::Tag::from_bytes([0x80, 1, 2, 3]);
+        let required = crate::format::stlv::Tag::from_bytes([0x01, 1, 2, 3]);
+        let bytes = bundle_with_metadata(optional);
+        assert!(BundleReader::start(from_slice(&bytes), None).is_ok());
+        let bytes = bundle_with_metadata(required);
+        assert!(BundleReader::start(from_slice(&bytes), None).is_err());
+    }
+
+    #[test]
+    fn decompressed_metadata_has_a_hard_size_limit() {
+        use rugix_compression::ByteProcessor;
+
+        let mut compressed = Vec::new();
+        let mut encoder = rugix_compression::XzEncoder::new(1);
+        encoder.process(&[0; 128], &mut compressed).unwrap();
+        encoder.finalize(&mut compressed).unwrap();
+        assert!(
+            uncompress_bytes_with_limit(rugix_compression::CompressionFormat::Xz, &compressed, 64,)
+                .is_err()
+        );
     }
 }
