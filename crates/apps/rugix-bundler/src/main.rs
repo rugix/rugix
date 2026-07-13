@@ -313,7 +313,9 @@ fn main() -> BundleResult<()> {
             unpack(&cmd.src, &cmd.out)?;
         }
         Cmd::Extract(unpack_cmd) => {
-            let source = FileSource::from_unbuffered(File::open(&unpack_cmd.bundle).unwrap());
+            let source = FileSource::from_unbuffered(
+                File::open(&unpack_cmd.bundle).whatever("unable to open bundle")?,
+            );
             let mut reader = BundleReader::start(source, unpack_cmd.bundle_hash)?;
             let mut did_read = false;
             while let Some(payload_reader) = reader.next_payload()? {
@@ -338,15 +340,21 @@ fn main() -> BundleResult<()> {
             }
         }
         Cmd::PrintStructure(print_cmd) => {
-            let mut source = FileSource::from_unbuffered(File::open(&print_cmd.bundle).unwrap());
-            rugix_bundle::format::stlv::pretty_print(&mut source, Some(&TagNameResolver)).unwrap();
+            let mut source = FileSource::from_unbuffered(
+                File::open(&print_cmd.bundle).whatever("unable to open bundle")?,
+            );
+            rugix_bundle::format::stlv::pretty_print(&mut source, Some(&TagNameResolver))
+                .whatever("unable to print bundle structure")?;
         }
         Cmd::Hash(hash_cmd) => {
-            let hash = rugix_bundle::bundle_hash(&hash_cmd.bundle).unwrap();
+            let hash = rugix_bundle::bundle_hash(&hash_cmd.bundle)
+                .whatever("unable to hash bundle header")?;
             println!("{hash}");
         }
         Cmd::Inspect(inspect_cmd) => {
-            let source = FileSource::from_unbuffered(File::open(&inspect_cmd.bundle).unwrap());
+            let source = FileSource::from_unbuffered(
+                File::open(&inspect_cmd.bundle).whatever("unable to open bundle")?,
+            );
             let reader = BundleReader::start(source, inspect_cmd.bundle_hash)?;
             println!("Payloads:");
             for (idx, entry) in reader.header().payload_index.iter().enumerate() {
@@ -563,15 +571,7 @@ fn main() -> BundleResult<()> {
                 out,
             } => {
                 let signature = std::fs::read(&signature).whatever("unable to read signature")?;
-                let content_info = cms::content_info::ContentInfo::from_der(&signature)
-                    .expect("invalid signature");
-                if content_info.content_type != ID_SIGNED_DATA {
-                    bail!("invalid signature content type");
-                }
-                let signed_data = content_info
-                    .content
-                    .decode_as::<cms::signed_data::SignedData>()
-                    .expect("invalid signature");
+                let signed_data = decode_cms_signed_data(&signature)?;
                 println!("CMS Version: {:?}", signed_data.version);
                 println!(
                     "Embedded Certificates: {}",
@@ -589,7 +589,9 @@ fn main() -> BundleResult<()> {
                 add_bundle_signature(&bundle, signature, &out)?;
             }
             SignaturesCmd::List { bundle } => {
-                let source = FileSource::from_unbuffered(File::open(&bundle).unwrap());
+                let source = FileSource::from_unbuffered(
+                    File::open(&bundle).whatever("unable to open bundle")?,
+                );
                 let reader = BundleReader::start(source, None)?;
                 if let Some(signatures) = reader.signatures() {
                     for (idx, signature) in signatures.cms_signatures.iter().enumerate() {
@@ -628,7 +630,9 @@ fn main() -> BundleResult<()> {
                 add_bundle_signature(&bundle, signature, &out)?;
             }
             SignaturesCmd::Verify { bundle, cert } => {
-                let source = FileSource::from_unbuffered(File::open(&bundle).unwrap());
+                let source = FileSource::from_unbuffered(
+                    File::open(&bundle).whatever("unable to open bundle")?,
+                );
                 let reader = BundleReader::start(source, None)?;
                 let Some(signatures) = reader.signatures() else {
                     bail!("no signatures found");
@@ -662,6 +666,18 @@ fn main() -> BundleResult<()> {
         },
     }
     Ok(())
+}
+
+fn decode_cms_signed_data(signature: &[u8]) -> BundleResult<cms::signed_data::SignedData> {
+    let content_info =
+        cms::content_info::ContentInfo::from_der(signature).whatever("invalid CMS signature")?;
+    if content_info.content_type != ID_SIGNED_DATA {
+        bail!("invalid signature content type");
+    }
+    content_info
+        .content
+        .decode_as::<cms::signed_data::SignedData>()
+        .whatever("invalid CMS signed-data content")
 }
 
 fn delta_payload_filenames(
@@ -766,6 +782,7 @@ mod tests {
     use rugix_bundle::manifest::SlotDeliveryConfig;
     use rugix_bundle::manifest::UpdateType;
 
+    use super::decode_cms_signed_data;
     use super::delta_payload_filenames;
     use super::slot_payload_index;
     use super::unpack;
@@ -796,6 +813,11 @@ mod tests {
         assert_eq!(slot_payload_index(&old, "a"), Some(0));
         assert_eq!(slot_payload_index(&new, "a"), Some(1));
         assert_eq!(slot_payload_index(&old, "missing"), None);
+    }
+
+    #[test]
+    fn malformed_cms_signature_returns_an_error() {
+        assert!(decode_cms_signed_data(b"not DER").is_err());
     }
 
     #[cfg(unix)]
