@@ -43,11 +43,13 @@ use si_crypto_hashes::HashAlgorithm;
 use si_crypto_hashes::HashDigest;
 use si_crypto_hashes::Hasher;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
 
 use crate::config::config::Config;
+use crate::config::events::AppActivationResultEvent;
 use crate::config::events::CompatibilityCheckSkippedEvent;
 use crate::config::events::Event;
 use crate::config::events::UpdateProgressEvent;
@@ -686,9 +688,13 @@ pub fn main() -> SystemResult<()> {
                     } else {
                         warn!("skipping app compatibility check");
                     }
-                    manager
-                        .activate_generation(&lock, app, gen)
-                        .whatever("unable to activate generation")?;
+                    let activation = manager.activate_generation(&lock, app, gen);
+                    let state = manager
+                        .read_state(app)
+                        .whatever("unable to read activation result")?;
+                    let outcome = app_activation_outcome(gen, activation.is_ok(), &state);
+                    report_app_activation_result(app, gen, outcome);
+                    activation.whatever("unable to activate generation")?;
                 }
                 AppsCommand::Deactivate {
                     app,
@@ -1734,6 +1740,48 @@ fn report_compatibility_skip(scope: &str, reason: &str) {
         });
     if let Err(error) = result {
         warn!(%error, "unable to emit compatibility-skip JSON event");
+    }
+}
+
+fn app_activation_outcome(
+    requested: u64,
+    succeeded: bool,
+    state: &crate::config::apps::AppState,
+) -> &'static str {
+    if succeeded {
+        return "activated";
+    }
+    match state {
+        crate::config::apps::AppState::Active(active) if active.generation != requested => {
+            "rolled-back"
+        }
+        crate::config::apps::AppState::Error(error) if error.from.is_some() => "rollback-failed",
+        _ => "failed",
+    }
+}
+
+fn report_app_activation_result(app: &str, generation: u64, outcome: &str) {
+    if outcome == "activated" {
+        info!(app, generation, outcome, "app activation completed");
+    } else {
+        error!(app, generation, outcome, "app activation did not complete");
+    }
+    if !rugix_cli::stdout_is_piped() {
+        return;
+    }
+    let event = Event::AppActivationResult(AppActivationResultEvent {
+        app: app.to_owned(),
+        generation,
+        outcome: outcome.to_owned(),
+    });
+    let result = serde_json::to_vec(&event)
+        .map_err(io::Error::other)
+        .and_then(|mut bytes| {
+            bytes.push(b'\n');
+            std::io::stdout().write_all(&bytes)
+        });
+    if let Err(error) = result {
+        warn!(%error, "unable to emit app activation JSON event");
     }
 }
 
@@ -2902,6 +2950,7 @@ mod tests {
     use crate::system::boot_groups::BootGroups;
     use crate::system::slots::SystemSlots;
 
+    use super::app_activation_outcome;
     use super::clear_target_overlay_with;
     use super::preflight_system_deliveries;
     use super::prepare_system_update;
@@ -3381,5 +3430,37 @@ mod tests {
         .unwrap_err();
         assert_eq!(failure.rollbacks.len(), 1);
         assert!(failure.rollbacks[0].1.is_err());
+    }
+
+    #[test]
+    fn app_activation_outcomes_distinguish_rollback_states() {
+        use crate::config::apps::AppState;
+        use crate::config::apps::AppStateActive;
+        use crate::config::apps::AppStateError;
+
+        assert_eq!(
+            app_activation_outcome(2, true, &AppState::Active(AppStateActive::new(2))),
+            "activated"
+        );
+        assert_eq!(
+            app_activation_outcome(2, false, &AppState::Active(AppStateActive::new(1))),
+            "rolled-back"
+        );
+        assert_eq!(
+            app_activation_outcome(
+                2,
+                false,
+                &AppState::Error(AppStateError::new(2, "failed".to_owned()).with_from(Some(1))),
+            ),
+            "rollback-failed"
+        );
+        assert_eq!(
+            app_activation_outcome(
+                2,
+                false,
+                &AppState::Error(AppStateError::new(2, "failed".to_owned())),
+            ),
+            "failed"
+        );
     }
 }
