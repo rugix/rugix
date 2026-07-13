@@ -997,4 +997,50 @@ mod tests {
             AppState::Error(_)
         ));
     }
+
+    #[test]
+    fn interrupted_switch_is_recovered_to_the_requested_generation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(tempdir.path().join("apps"), AppsConfig::new());
+        setup_generation(&manager, "example", 1, "#!/bin/sh\nexit 0\n");
+        setup_generation(&manager, "example", 2, "#!/bin/sh\nexit 0\n");
+        manager
+            .write_state(
+                "example",
+                &AppState::Switching(
+                    crate::config::apps::AppStateSwitching::new()
+                        .with_from(Some(1))
+                        .with_to(Some(2)),
+                ),
+            )
+            .unwrap();
+
+        let lock = manager.lock_app("example").unwrap();
+        manager.recover_app(&lock, "example").unwrap();
+        assert!(matches!(
+            manager.read_state("example").unwrap(),
+            AppState::Active(AppStateActive { generation: 2 })
+        ));
+    }
+
+    #[test]
+    fn garbage_collection_preserves_current_and_recent_rollback_generation() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(tempdir.path().join("apps"), AppsConfig::new());
+        for generation in 1..=4 {
+            setup_generation(&manager, "example", generation, "#!/bin/sh\nexit 0\n");
+        }
+        for generation in 1..=3 {
+            AppManager::mark_activated(&manager.generation_dir("example", generation).unwrap())
+                .unwrap();
+        }
+        manager
+            .write_state("example", &AppState::Active(AppStateActive::new(3)))
+            .unwrap();
+
+        let lock = manager.lock_app("example").unwrap();
+        assert_eq!(manager.gc(&lock, "example", 1).unwrap(), vec![1, 4]);
+        assert!(manager.generation_dir("example", 2).unwrap().exists());
+        assert!(manager.generation_dir("example", 3).unwrap().exists());
+    }
 }
