@@ -18,7 +18,7 @@
       "$id": "rugix_ctrl.config.CompatibilityConfig",
       "type": "object",
       "properties": {
-        "requireBundleComponents": {
+        "require-bundle-components": {
           "type": "boolean"
         }
       },

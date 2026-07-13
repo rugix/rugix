@@ -1,4 +1,5 @@
 /// Rugix Ctrl configuration.
+#[json(rename_all = "kebab-case")]
 record Config {
     /// Signature check configuration.
     signatures?: SignaturesConfig,
@@ -6,12 +7,14 @@ record Config {
     compatibility?: CompatibilityConfig,
 }
 
+#[json(rename_all = "kebab-case")]
 record SignaturesConfig {
     /// Paths to root certificates.
     /// 
     roots: [string],
 }
 
+#[json(rename_all = "kebab-case")]
 record CompatibilityConfig {
     /// Require update bundles to carry component metadata.
     require_bundle_components?: bool,

@@ -3450,8 +3450,11 @@ mod tests {
         assert!(!requires_bundle_components(&default));
 
         let required: crate::config::config::Config =
-            toml::from_str("[compatibility]\nrequireBundleComponents = true\n").unwrap();
+            toml::from_str("[compatibility]\nrequire-bundle-components = true\n").unwrap();
         assert!(requires_bundle_components(&required));
+        assert!(toml::to_string(&required)
+            .unwrap()
+            .contains("require-bundle-components = true"));
         assert!(enforce_bundle_component_policy(&default, false, "system").is_ok());
         assert!(enforce_bundle_component_policy(&required, true, "system").is_ok());
         assert!(enforce_bundle_component_policy(&required, false, "system").is_err());
