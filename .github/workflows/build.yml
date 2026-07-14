@@ -38,11 +38,19 @@ jobs:
         with:
           fetch-tags: true
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v4
         with:
-          targets: ${{ matrix.target }}
+          version: 2026.7.5
+          install: false
+          cache: true
+      - name: Install Rust Toolchain
+        run: |
+          rustup show active-toolchain
+          rustup target add ${{ matrix.target }}
+      - name: Install Locked Tools
+        run: mise install --locked github:cross-rs/cross github:CycloneDX/cyclonedx-rust-cargo
       - name: Build Binaries
-        run: ./scripts/build-binaries.sh ${{ matrix.target }}
+        run: mise run --skip-tools build ${{ matrix.target }}
       - name: Upload Artifact
         uses: actions/upload-artifact@v7
         with:
@@ -65,18 +73,17 @@ jobs:
         with:
           fetch-tags: true
           fetch-depth: 0
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v4
         with:
-          target: ${{ matrix.target }}
+          version: 2026.7.5
+          install: false
+          cache: true
+      - name: Install Rust Toolchain
+        run: |
+          rustup show active-toolchain
+          rustup target add ${{ matrix.target }}
       - name: Build Binaries
-        run: |
-          export RUGIX_GIT_VERSION=$(git describe --tags --always)
-          cargo build --release --target ${{ matrix.target }} --bin rugix-bundler -F xz2/static
-      - name: Create Artifact
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar -cf ../../../binaries-${{ matrix.target }}.tar rugix-bundler
+        run: mise run --skip-tools build:mac ${{ matrix.target }}
       - name: Upload Artifact
         uses: actions/upload-artifact@v7
         with:
@@ -122,13 +129,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd tests
-          ./generate-test-keys.sh
           export RUGIX_BAKERY_IMAGE="ghcr.io/rugix/rugix-bakery:branch-main"
-          export RUGIX_BINARIES_DIR="$(pwd)/../build/binaries"
+          export RUGIX_BINARIES_DIR="$(pwd)/build/binaries"
           podman pull "$RUGIX_BAKERY_IMAGE"
-          mise install
-          mise run check
+          mise install --locked python uv
+          mise run --skip-tools test:system
       - name: Upload Test Outputs
         if: always()
         uses: actions/upload-artifact@v7
@@ -158,6 +163,10 @@ jobs:
         with:
           fetch-tags: true
           fetch-depth: 0
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.7.5
+          install: false
       - name: Download Binaries
         uses: actions/download-artifact@v8
         with:
@@ -170,7 +179,7 @@ jobs:
           tar -xf binaries-${{ matrix.target }}.tar -C ${{ matrix.target }}
           rm -f binaries-${{ matrix.target }}.tar
       - name: Build Debian Packages
-        run: ./scripts/build-debs.sh ${{ matrix.target }}
+        run: mise run --skip-tools package:deb ${{ matrix.target }}
       - name: Upload Artifact
         uses: actions/upload-artifact@v7
         with:
@@ -187,8 +196,12 @@ jobs:
         with:
           fetch-tags: true
           fetch-depth: 0
+      - uses: jdx/mise-action@v4
+        with:
+          version: 2026.7.5
+          install: false
       - name: Build Source Package
-        run: ./scripts/build-source-package.sh
+        run: mise run --skip-tools package:source
       - name: Upload Artifact
         uses: actions/upload-artifact@v7
         with:

@@ -1438,7 +1438,7 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "uuid",
- "xscript 0.4.0",
+ "xscript",
  "xz2",
 ]
 
@@ -1494,7 +1494,7 @@ dependencies = [
  "tracing",
  "ureq",
  "uuid",
- "xscript 0.4.0",
+ "xscript",
 ]
 
 [[package]]
@@ -1517,7 +1517,7 @@ dependencies = [
  "reportify",
  "rugix-tasks",
  "tracing",
- "xscript 0.4.0",
+ "xscript",
 ]
 
 [[package]]
@@ -1562,7 +1562,7 @@ dependencies = [
  "rugix-common",
  "serde",
  "serde_json",
- "xscript 0.4.0",
+ "xscript",
 ]
 
 [[package]]
@@ -2793,26 +2793,11 @@ dependencies = [
 
 [[package]]
 name = "xscript"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5cb5aba94ee9fd4d8bd891ed0a84cc06b3c78f37c5e477a1053a9e2c561b383"
-
-[[package]]
-name = "xscript"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "691d1125cc400bd90e915242a5bea0592df6ad613e99f3a226d1d5c6d6112adb"
 dependencies = [
  "tokio",
-]
-
-[[package]]
-name = "xtask"
-version = "0.0.0"
-dependencies = [
- "clap",
- "reportify",
- "xscript 0.2.0",
 ]
 
 [[package]]
