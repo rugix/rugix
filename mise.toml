@@ -94,7 +94,7 @@ run = '''
 set -euo pipefail
 target="$usage_target"
 export RUGIX_GIT_VERSION="$(git describe --tags --always)"
-cargo build --frozen --release --target "$target" --bin rugix-bundler -F xz2/static
+cargo build --locked --release --target "$target" --bin rugix-bundler -F xz2/static
 tar -cf "binaries-${target}.tar" -C "target/${target}/release" rugix-bundler
 '''
 

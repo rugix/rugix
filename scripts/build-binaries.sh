@@ -36,7 +36,7 @@ build_target() {
 
     # Cross must be run from the project directory — it maps the working
     # directory into the Docker container rather than using --manifest-path.
-    (cd "${PROJECT_DIR}" && "${CROSS_BIN}" build --frozen --release --target "${target}")
+    (cd "${PROJECT_DIR}" && "${CROSS_BIN}" build --locked --release --target "${target}")
 
     # Determine the target directory (respect CARGO_TARGET_DIR).
     local target_dir="${CARGO_TARGET_DIR:-${PROJECT_DIR}/target}"
