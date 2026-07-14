@@ -89,9 +89,10 @@ run = './scripts/build-binaries.sh "$@"'
 
 [tasks."build:mac"]
 description = "Build Rugix Bundler for a macOS Rust target."
+usage = 'arg "<target>" help="Rust target triple to build"'
 run = '''
 set -euo pipefail
-target="${1:?usage: mise run build:mac TARGET}"
+target="$usage_target"
 export RUGIX_GIT_VERSION="$(git describe --tags --always)"
 cargo build --frozen --release --target "$target" --bin rugix-bundler -F xz2/static
 tar -cf "binaries-${target}.tar" -C "target/${target}/release" rugix-bundler
