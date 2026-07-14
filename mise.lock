@@ -70,6 +70,66 @@ url_api = "https://api.github.com/repos/cross-rs/cross/releases/assets/94307578"
 url = "https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-pc-windows-msvc.tar.gz"
 url_api = "https://api.github.com/repos/cross-rs/cross/releases/assets/94307577"
 
+[[tools."github:google/osv-scanner"]]
+version = "2.4.0"
+backend = "github:google/osv-scanner"
+
+[tools."github:google/osv-scanner"."platforms.linux-arm64"]
+checksum = "sha256:44e580752910f0ff36ec99aff59af20f65df1e859aa31e5605a8f0d055b496e9"
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_linux_arm64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/451242338"
+
+[tools."github:google/osv-scanner"."platforms.linux-arm64".provenance.slsa]
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/multiple.intoto.jsonl"
+
+[tools."github:google/osv-scanner"."platforms.linux-arm64-musl"]
+checksum = "sha256:44e580752910f0ff36ec99aff59af20f65df1e859aa31e5605a8f0d055b496e9"
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_linux_arm64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/451242338"
+
+[tools."github:google/osv-scanner"."platforms.linux-arm64-musl".provenance.slsa]
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/multiple.intoto.jsonl"
+
+[tools."github:google/osv-scanner"."platforms.linux-x64"]
+checksum = "sha256:15314940c10d26af9c6649f150b8a47c1262e8fc7e17b1d1029b0e479e8ed8a0"
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_linux_amd64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/451242336"
+
+[tools."github:google/osv-scanner"."platforms.linux-x64".provenance.slsa]
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/multiple.intoto.jsonl"
+
+[tools."github:google/osv-scanner"."platforms.linux-x64-musl"]
+checksum = "sha256:15314940c10d26af9c6649f150b8a47c1262e8fc7e17b1d1029b0e479e8ed8a0"
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_linux_amd64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/451242336"
+
+[tools."github:google/osv-scanner"."platforms.linux-x64-musl".provenance.slsa]
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/multiple.intoto.jsonl"
+
+[tools."github:google/osv-scanner"."platforms.macos-arm64"]
+checksum = "sha256:9ca3185ad63e9ab54f7cb90f46a7362be02d80e37f0123d095a54355ea202f5d"
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_darwin_arm64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/451242387"
+
+[tools."github:google/osv-scanner"."platforms.macos-arm64".provenance.slsa]
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/multiple.intoto.jsonl"
+
+[tools."github:google/osv-scanner"."platforms.macos-x64"]
+checksum = "sha256:088119325156321c34c456ac3703d6013538fd71cbac82b891ab34db491e4d66"
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_darwin_amd64"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/451242389"
+
+[tools."github:google/osv-scanner"."platforms.macos-x64".provenance.slsa]
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/multiple.intoto.jsonl"
+
+[tools."github:google/osv-scanner"."platforms.windows-x64"]
+checksum = "sha256:0cdd113610126d5dfd5e12ad0e0b4f3e879291ff19bb43b0c52ed2f2c2df1a37"
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_windows_amd64.exe"
+url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/451242340"
+
+[tools."github:google/osv-scanner"."platforms.windows-x64".provenance.slsa]
+url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/multiple.intoto.jsonl"
+
 [[tools."github:silitics/sidex"]]
 version = "0.2.6"
 backend = "github:silitics/sidex"

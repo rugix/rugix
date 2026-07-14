@@ -77,7 +77,7 @@ mise tasks
 Common workflows are:
 
 ```bash
-mise run check                         # formatting, Clippy, cargo-deny, and unit tests
+mise run check                         # formatting, Clippy, dependency policy/advisories, and unit tests
 mise run fmt
 mise run codegen
 mise run build x86_64-unknown-linux-musl

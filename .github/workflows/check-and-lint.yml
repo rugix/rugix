@@ -19,6 +19,6 @@ jobs:
       - name: Install Rust Toolchain
         run: rustup show active-toolchain
       - name: Install Locked Tools
-        run: mise install --locked cargo:cargo-deny
+        run: mise install --locked cargo:cargo-deny github:google/osv-scanner
       - name: Check
         run: mise run --skip-tools check

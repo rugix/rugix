@@ -8,6 +8,7 @@ python = "3.11"
 uv = "latest"
 "github:silitics/sidex" = { version = "latest", exe = "sidex" }
 "cargo:cargo-deny" = "latest"
+"github:google/osv-scanner" = { version = "latest", exe = "osv-scanner" }
 "github:cross-rs/cross" = { version = "latest", exe = "cross", os = ["linux/x64"] }
 "github:CycloneDX/cyclonedx-rust-cargo" = { version = "latest", exe = "cargo-cyclonedx" }
 
@@ -52,7 +53,7 @@ run = "cargo fmt"
 
 [tasks.check]
 description = "Run the same formatting, lint, policy, and unit-test checks as CI."
-depends = ["check:fmt", "check:clippy", "check:deny", "test:unit"]
+depends = ["check:fmt", "check:clippy", "check:deny", "check:advisories", "test:unit"]
 
 [tasks."check:fmt"]
 description = "Verify that every Rust file is formatted by Rustfmt nightly."
@@ -65,6 +66,10 @@ run = "cargo clippy --workspace --all-targets --all-features -- -D warnings"
 [tasks."check:deny"]
 description = "Check dependency licenses, advisories, bans, and sources."
 run = "cargo deny check"
+
+[tasks."check:advisories"]
+description = "Check Cargo.lock against the OSV vulnerability database."
+run = "osv-scanner scan source --lockfile Cargo.lock"
 
 [tasks.test]
 description = "Run unit tests."
