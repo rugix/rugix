@@ -58,11 +58,62 @@ Robust over-the-air updates require system images built to support atomic update
 
 Rugix empowers teams to **ship robust products fast and without compromising on best practices** like read-only root filesystems, atomic OTA updates, reliable application deployment, and reproducible builds.
 
+
+## Development
+
+Rugix uses [mise](https://mise.jdx.dev/) for development tools and tasks. Tool
+specifications stay intentionally loose where mise can resolve them; `mise.lock` records
+the exact versions and checksums used by developers and CI. Rust is managed separately
+by rustup through `rust-toolchain.toml`, so Cargo, rust-analyzer, and editors use the same
+dated nightly without requiring mise activation.
+
+Install the locked toolchain and inspect the available commands:
+
+```bash
+mise install
+mise tasks
+```
+
+Common workflows are:
+
+```bash
+mise run check                         # formatting, Clippy, cargo-deny, and unit tests
+mise run fmt
+mise run codegen
+mise run build x86_64-unknown-linux-musl
+mise run package:deb x86_64-unknown-linux-musl
+mise run test:system
+```
+
+Run `mise run doctor` to check host dependencies. Development requires rustup; entering
+the repository or running Cargo installs the configured Rust toolchain as needed. Native
+builds also require a C compiler, `pkg-config`, OpenSSL, and liblzma development files.
+Cross-builds require Docker or Podman. The system tests additionally require QEMU and
+OVMF.
+
+To deliberately update the non-Rust toolchain, update the loose specifications if needed
+and run `mise lock`; commit `mise.toml` and `mise.lock` together. Update Rust by changing
+the dated channel in `rust-toolchain.toml`.
+
+## Run Directly from Git with Nix
+
+The Nix flake exposes each Rugix command as both a package and an app, so no checkout is
+required:
+
+```bash
+nix run github:rugix/rugix#rugix-ctrl -- --help
+nix run github:rugix/rugix#rugix-bundler -- --help
+nix run github:rugix/rugix#rugix-util -- --help
+```
+
+Replace the flake reference with a tag or commit when a specific revision is required,
+for example `github:rugix/rugix/v0.8.17#rugix-ctrl`.
+
 ## Commercial Support
 
 Rugix has been created and is maintained by [Silitics](https://silitics.com). Looking for commercial support? [We're here to help.](https://rugix.org/commercial-support) Need a fleet management solution? Check out [Nexigon](https://nexigon.cloud), by the creators of Rugix.
 
-## ⚖️ Licensing
+## Licensing
 
 This project is licensed under either [MIT](https://github.com/rugix/rugix/blob/main/LICENSE-MIT) or [Apache 2.0](https://github.com/rugix/rugix/blob/main/LICENSE-APACHE) at your option.
 

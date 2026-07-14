@@ -8,44 +8,21 @@ set -euo pipefail
 # The binaries are placed in build/binaries/<target>/ and a tarball
 # <target>.tar is created in build/binaries/.
 #
-# Cross is downloaded automatically if not already cached in build/cross/.
+# Cross and cargo-cyclonedx are provided by the repository's mise toolchain.
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="${PROJECT_DIR}/build/binaries"
 
-CROSS_VERSION="0.2.5"
-CARGO_CYCLONEDX_VERSION="0.5.7"
-TOOLS_DIR="${PROJECT_DIR}/build/tools"
-CROSS_BIN="${TOOLS_DIR}/cross-${CROSS_VERSION}"
-CARGO_CYCLONEDX_BIN="${TOOLS_DIR}/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}"
+CROSS_BIN="${CROSS_BIN:-$(command -v cross || true)}"
+CARGO_CYCLONEDX_BIN="${CARGO_CYCLONEDX_BIN:-$(command -v cargo-cyclonedx || true)}"
 
-# Download Cross if not already cached.
-ensure_cross() {
-    if [ -x "${CROSS_BIN}" ]; then
-        return
+require_tool() {
+    local name="$1"
+    local path="$2"
+    if [ -z "${path}" ]; then
+        echo "error: ${name} is not available; run 'mise install' first" >&2
+        exit 1
     fi
-    echo "==> Downloading Cross ${CROSS_VERSION}"
-    mkdir -p "${TOOLS_DIR}"
-    local url="https://github.com/cross-rs/cross/releases/download/v${CROSS_VERSION}/cross-x86_64-unknown-linux-musl.tar.gz"
-    curl -fsSL "${url}" | tar -xz -C "${TOOLS_DIR}"
-    mv "${TOOLS_DIR}/cross" "${CROSS_BIN}"
-    echo "==> Cross ${CROSS_VERSION} installed to ${CROSS_BIN}"
-}
-
-# Download cargo-cyclonedx if not already cached.
-ensure_cargo_cyclonedx() {
-    if [ -x "${CARGO_CYCLONEDX_BIN}" ]; then
-        return
-    fi
-    echo "==> Downloading cargo-cyclonedx ${CARGO_CYCLONEDX_VERSION}"
-    mkdir -p "${TOOLS_DIR}"
-    local url="https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-${CARGO_CYCLONEDX_VERSION}/cargo-cyclonedx-x86_64-unknown-linux-musl.tar.xz"
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    curl -fsSL "${url}" | tar -xJ -C "${tmp_dir}"
-    mv "${tmp_dir}"/cargo-cyclonedx-x86_64-unknown-linux-musl/cargo-cyclonedx "${CARGO_CYCLONEDX_BIN}"
-    rm -rf "${tmp_dir}"
-    echo "==> cargo-cyclonedx ${CARGO_CYCLONEDX_VERSION} installed to ${CARGO_CYCLONEDX_BIN}"
 }
 
 build_target() {
@@ -100,8 +77,8 @@ main() {
         exit 1
     fi
 
-    ensure_cross
-    ensure_cargo_cyclonedx
+    require_tool cross "${CROSS_BIN}"
+    require_tool cargo-cyclonedx "${CARGO_CYCLONEDX_BIN}"
     mkdir -p "${OUTPUT_DIR}"
 
     for target in "$@"; do

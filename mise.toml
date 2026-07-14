@@ -1,6 +1,18 @@
+min_version = "2026.6.0"
+
+[settings]
+lockfile = true
+
 [tools]
-rust = { version = "nightly", profile = "default", components = "rustfmt,clippy" }
-"github:silitics/sidex" = { version = "0.2.6", exe = "sidex" }
+python = "3.11"
+uv = "latest"
+"github:silitics/sidex" = { version = "latest", exe = "sidex" }
+"cargo:cargo-deny" = "latest"
+"github:cross-rs/cross" = { version = "latest", exe = "cross", os = ["linux/x64"] }
+"github:CycloneDX/cyclonedx-rust-cargo" = { version = "latest", exe = "cargo-cyclonedx" }
+
+[env]
+RUST_BACKTRACE = "1"
 
 [tasks.codegen]
 description = "Regenerate Sidex-generated JSON schemas."
@@ -27,25 +39,93 @@ sidex generate json-schema generated/
 cp generated/rugix_bundle.manifest.BundleManifest.schema.json ../../../schemas/rugix-bundle-manifest.schema.json
 popd
 
-cargo +nightly fmt
+cargo fmt
 """
+
+[tasks.doc]
+description = "Build documentation for all workspace crates."
+run = "cargo doc --workspace --all-features --document-private-items"
 
 [tasks.fmt]
 description = "Format all Rust code."
-run = "cargo +nightly fmt"
+run = "cargo fmt"
 
 [tasks.check]
-description = "Run all CI checks (formatting + clippy)."
-depends = ["check:fmt", "check:clippy"]
+description = "Run the same formatting, lint, policy, and unit-test checks as CI."
+depends = ["check:fmt", "check:clippy", "check:deny", "test:unit"]
 
 [tasks."check:fmt"]
 description = "Verify that every Rust file is formatted by Rustfmt nightly."
-run = "cargo +nightly fmt --check"
+run = "cargo fmt --check"
 
 [tasks."check:clippy"]
 description = "Run Clippy across the workspace with warnings denied."
-run = "cargo clippy --workspace --all-targets -- -D warnings"
+run = "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+
+[tasks."check:deny"]
+description = "Check dependency licenses, advisories, bans, and sources."
+run = "cargo deny check"
 
 [tasks.test]
-description = "Run all tests."
-run = "cargo test"
+description = "Run unit tests."
+depends = ["test:unit"]
+
+[tasks."test:unit"]
+description = "Run all Rust unit tests with every feature enabled."
+run = "cargo test --workspace --all-features"
+
+[tasks."test:system"]
+description = "Run the QEMU-based system test suite (requires a container runtime, QEMU, and OVMF)."
+dir = "tests"
+run = '''
+./generate-test-keys.sh
+uv sync --group dev
+./scripts/run-pytest.sh "$@"
+'''
+
+[tasks.build]
+description = "Cross-build release binaries for one or more Rust targets."
+run = './scripts/build-binaries.sh "$@"'
+
+[tasks."build:mac"]
+description = "Build Rugix Bundler for a macOS Rust target."
+run = '''
+set -euo pipefail
+target="${1:?usage: mise run build:mac TARGET}"
+export RUGIX_GIT_VERSION="$(git describe --tags --always)"
+cargo build --frozen --release --target "$target" --bin rugix-bundler -F xz2/static
+tar -cf "binaries-${target}.tar" -C "target/${target}/release" rugix-bundler
+'''
+
+[tasks."package:deb"]
+description = "Package previously built binaries as Debian packages."
+run = './scripts/build-debs.sh "$@"'
+
+[tasks."package:source"]
+description = "Build the metadata-only Debian source package."
+run = "./scripts/build-source-package.sh"
+
+[tasks.doctor]
+description = "Check host capabilities that mise cannot install."
+run = '''
+set -euo pipefail
+
+missing=0
+for tool in git rustup cc pkg-config openssl; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "missing required host tool: $tool" >&2
+        missing=1
+    fi
+done
+
+if ! command -v podman >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
+    echo "missing container runtime: install podman or docker (required for cross-builds and system tests)" >&2
+    missing=1
+fi
+
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    echo "optional system-test dependency not found: qemu-system-x86_64" >&2
+fi
+
+exit "$missing"
+'''

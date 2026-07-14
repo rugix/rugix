@@ -1,4 +1,6 @@
 {
+  description = "Rugix system update tools";
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -29,7 +31,8 @@
         buildRugixPackage =
           name:
           pkgs.rustPlatform.buildRustPackage {
-            inherit name;
+            pname = name;
+            inherit version;
             src = ./.;
             cargoBuildFlags = [
               "--bin"
@@ -43,6 +46,12 @@
             buildInputs = [ pkgs.xz ];
             env.RUGIX_GIT_VERSION = version;
             doCheck = false;
+            meta = {
+              description = "Rugix system update tool: ${name}";
+              homepage = "https://rugix.org";
+              license = with pkgs.lib.licenses; [ mit asl20 ];
+              mainProgram = name;
+            };
           };
 
         wrapWithXdelta =
@@ -61,6 +70,33 @@
           rugix-bundler = wrapWithXdelta (buildRugixPackage "rugix-bundler");
           rugix-util = buildRugixPackage "rugix-util";
           default = self.packages.${system}.rugix-ctrl;
+        };
+
+        apps = {
+          rugix-ctrl = {
+            type = "app";
+            program = "${self.packages.${system}.rugix-ctrl}/bin/rugix-ctrl";
+            meta.description = "Run Rugix Ctrl";
+          };
+          rugix-bundler = {
+            type = "app";
+            program = "${self.packages.${system}.rugix-bundler}/bin/rugix-bundler";
+            meta.description = "Run Rugix Bundler";
+          };
+          rugix-util = {
+            type = "app";
+            program = "${self.packages.${system}.rugix-util}/bin/rugix-util";
+            meta.description = "Run Rugix Util";
+          };
+          default = self.apps.${system}.rugix-ctrl;
+        };
+
+        checks = {
+          inherit (self.packages.${system})
+            rugix-ctrl
+            rugix-bundler
+            rugix-util
+            ;
         };
       }
     );
