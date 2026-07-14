@@ -17,7 +17,6 @@ use crate::config::output::StateInfoOutput;
 use crate::config::output::SystemInfoOutput;
 
 pub fn state_from_system(system: &System) -> SystemResult<SystemInfoOutput> {
-    let boot_flow = system.boot_flow().name().to_owned();
     let slots = system
         .slots()
         .iter()
@@ -47,19 +46,29 @@ pub fn state_from_system(system: &System) -> SystemResult<SystemInfoOutput> {
             )
         })
         .collect();
-    let active_boot_group = system
-        .active_boot_entry()
-        .map(|idx| system.boot_entries()[idx].name().to_owned());
-    let default = system
-        .boot_flow()
-        .get_default(system)
-        .whatever("unable to determine default boot group")?;
-    let default_boot_group = Some(system.boot_entries()[default].name().to_owned());
-    let boot_groups = system
-        .boot_entries()
-        .iter()
-        .map(|(_, group)| (group.name().to_owned(), BootGroupInfoOutput {}))
-        .collect();
+    let boot = if system.has_boot_flow() {
+        let active_boot_group = system
+            .active_boot_entry()
+            .map(|idx| system.boot_entries()[idx].name().to_owned());
+        let default = system
+            .boot_flow()
+            .get_default(system)
+            .whatever("unable to determine default boot group")?;
+        let default_boot_group = Some(system.boot_entries()[default].name().to_owned());
+        let boot_groups = system
+            .boot_entries()
+            .iter()
+            .map(|(_, group)| (group.name().to_owned(), BootGroupInfoOutput {}))
+            .collect();
+        Some(BootInfoOutput {
+            boot_flow: system.boot_flow().name().to_owned(),
+            active_group: active_boot_group,
+            default_group: default_boot_group,
+            groups: boot_groups,
+        })
+    } else {
+        None
+    };
     let state = state_status(
         Path::new("/run/rugix/state").exists(),
         Path::new("/run/rugix/state/.rugix/overlay-fallback-error.log").exists(),
@@ -71,14 +80,7 @@ pub fn state_from_system(system: &System) -> SystemResult<SystemInfoOutput> {
             .flatten()
             .map(|dev| dev.path().to_string_lossy().into_owned()),
     );
-    Ok(
-        SystemInfoOutput::new(slots, state).with_boot(Some(BootInfoOutput {
-            boot_flow,
-            active_group: active_boot_group,
-            default_group: default_boot_group,
-            groups: boot_groups,
-        })),
-    )
+    Ok(SystemInfoOutput::new(slots, state).with_boot(boot))
 }
 
 fn state_status(
@@ -102,6 +104,14 @@ fn state_status(
 mod tests {
     use super::state_status;
     use crate::config::output::StateInfoOutput;
+    use crate::config::output::SystemInfoOutput;
+
+    #[test]
+    fn system_info_without_boot_omits_boot_field() {
+        let output = SystemInfoOutput::new(Default::default(), StateInfoOutput::Disabled);
+        let json = serde_json::to_value(output).unwrap();
+        assert!(json.get("boot").is_none());
+    }
 
     #[test]
     fn state_status_exposes_data_mount_fallback() {

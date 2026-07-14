@@ -168,6 +168,10 @@ impl System {
         &*self.boot_flow
     }
 
+    pub fn has_boot_flow(&self) -> bool {
+        self.boot_flow.is_configured()
+    }
+
     pub fn config_partition(&self) -> Option<&ConfigPartition> {
         self.config_partition.as_ref()
     }

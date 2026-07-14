@@ -55,6 +55,11 @@ pub type BootFlowResult<T> = Result<T, Report<BootFlowError>>;
 
 /// Implementation of a boot flow.
 pub trait BootFlow: Debug {
+    /// Whether a boot flow is configured for the system.
+    fn is_configured(&self) -> bool {
+        true
+    }
+
     /// Name of the boot flow.
     fn name(&self) -> &str;
 
@@ -120,6 +125,32 @@ pub trait BootFlow: Debug {
     }
 }
 
+/// Placeholder used on systems without atomic system updates.
+#[derive(Debug)]
+struct NoBootFlow;
+
+impl BootFlow for NoBootFlow {
+    fn is_configured(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &str {
+        "none"
+    }
+
+    fn set_try_next(&self, _system: &System, _group: BootGroupIdx) -> BootFlowResult<()> {
+        bail!("no boot flow is configured")
+    }
+
+    fn get_default(&self, _system: &System) -> BootFlowResult<BootGroupIdx> {
+        bail!("no boot flow is configured")
+    }
+
+    fn commit(&self, _system: &System) -> BootFlowResult<()> {
+        bail!("no boot flow is configured")
+    }
+}
+
 /// Boot group status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum BootGroupStatus {
@@ -166,27 +197,32 @@ pub fn from_config(
             BootFlowConfig::RaucGrub(config) => Box::new(RaucGrub::new(boot_entries, config)?),
         });
     }
-    let inner = rugix_boot_flow(boot_entries)?;
     let Some(config_partition) = config_partition else {
-        bail!("boot flow auto-detection requires a config partition; set boot-flow type explicitly or configure a config partition");
+        return Ok(Box::new(NoBootFlow));
     };
     if config_partition.path().join("autoboot.txt").exists() {
-        Ok(Box::new(RpiTryboot { inner }))
+        Ok(Box::new(RpiTryboot {
+            inner: rugix_boot_flow(boot_entries)?,
+        }))
     } else if config_partition
         .path()
         .join("bootpart.default.env")
         .exists()
     {
-        Ok(Box::new(RpiUboot { inner }))
+        Ok(Box::new(RpiUboot {
+            inner: rugix_boot_flow(boot_entries)?,
+        }))
     } else if config_partition
         .path()
         .join("rugpi/primary.grubenv")
         .exists()
         && config_partition.path().join("EFI").is_dir()
     {
-        Ok(Box::new(GrubEfi { inner }))
+        Ok(Box::new(GrubEfi {
+            inner: rugix_boot_flow(boot_entries)?,
+        }))
     } else {
-        bail!("unable to detect boot flow");
+        Ok(Box::new(NoBootFlow))
     }
 }
 
@@ -664,16 +700,20 @@ mod tests {
     use rugix_common::disk::PartitionTable;
     use rugix_common::disk::PartitionType;
 
+    use super::from_config;
     use super::require_gpt_partition_uuid;
     use super::rugix_boot_flow;
     use super::rugix_boot_partition;
     use super::rugix_group_from_boot_partition;
     use super::rugix_should_set_spare;
+    use crate::config::system::BootFlowConfig;
     use crate::config::system::BootGroupConfig;
     use crate::config::system::FileSlotConfig;
+    use crate::config::system::PartitionConfig;
     use crate::config::system::SlotConfig;
     use crate::system::boot_groups::BootGroups;
     use crate::system::slots::SystemSlots;
+    use crate::system::ConfigPartition;
 
     fn test_groups(count: usize) -> (SystemSlots, BootGroups) {
         let slot_config = (0..count)
@@ -712,6 +752,27 @@ mod tests {
         assert!(rugix_boot_flow(&one).is_err());
         assert!(rugix_boot_flow(&two).is_ok());
         assert!(rugix_boot_flow(&three).is_err());
+    }
+
+    #[test]
+    fn absent_boot_flow_is_not_an_error() {
+        let (_, groups) = test_groups(1);
+        let flow = from_config(None, None, &groups).unwrap();
+        assert!(!flow.is_configured());
+
+        let directory = tempfile::tempdir().unwrap();
+        let partition = ConfigPartition::from_config(
+            &PartitionConfig::new().with_path(Some(directory.path().display().to_string())),
+        )
+        .unwrap();
+        let flow = from_config(None, Some(&partition), &groups).unwrap();
+        assert!(!flow.is_configured());
+    }
+
+    #[test]
+    fn invalid_explicit_boot_flow_is_still_an_error() {
+        let (_, groups) = test_groups(1);
+        assert!(from_config(Some(&BootFlowConfig::RpiTryboot), None, &groups).is_err());
     }
 
     #[test]
