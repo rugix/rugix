@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use boot_flows::BootFlow;
 use boot_groups::BootGroup;
 use boot_groups::BootGroupIdx;
@@ -70,33 +72,17 @@ impl System {
         )
         .whatever("unable to create boot flow from config")?;
         // Determine the active boot group. Check the kernel cmdline first
-        // (rugix.boot_group=<name>), then ask the boot flow, then fall back
-        // to block device matching.
+        // (rugix.boot_group=<name>), then ask the boot flow, then match the mounted
+        // system device and its backing devices against the configured block slots.
         let mut active_boot_entry = get_active_from_cmdline(&boot_entries);
         if active_boot_entry.is_none() {
             active_boot_entry = boot_flow
                 .get_active(&boot_entries)
                 .whatever("unable to determine active boot group from boot flow")?;
         }
-        // Fall back to matching block devices against the system device.
-        // Absent (optional) slots are skipped — they have no resolved
-        // device to compare against, so they can never be "the one we
-        // booted from".
         if active_boot_entry.is_none() {
-            for (idx, entry) in boot_entries.iter() {
-                for (_, slot) in entry.slots() {
-                    if let SlotKind::Block(raw) = &slots[slot].kind() {
-                        if raw.device().is_some() && raw.device() == system_device.as_ref() {
-                            entry.mark_active();
-                            break;
-                        }
-                    }
-                }
-                if entry.active() {
-                    active_boot_entry = Some(idx);
-                    break;
-                }
-            }
+            active_boot_entry =
+                get_active_from_block_devices(&boot_entries, &slots, system_device.as_ref());
         }
         // Mark all slots in the active group as active.
         if let Some(active_idx) = active_boot_entry {
@@ -216,6 +202,48 @@ impl System {
 
 fn require_active_boot_entry(active: Option<BootGroupIdx>) -> SystemResult<BootGroupIdx> {
     active.ok_or_else(|| Report::whatever("unable to determine the active boot group"))
+}
+
+/// Match the mounted system device and its backing devices to one unambiguous boot group.
+fn get_active_from_block_devices(
+    boot_entries: &BootGroups,
+    slots: &SystemSlots,
+    system_device: Option<&BlockDevice>,
+) -> Option<BootGroupIdx> {
+    let system_device = system_device?;
+    let mut system_devices = HashSet::from([system_device.clone()]);
+    match system_device.find_backing_devices() {
+        Ok(backing_devices) => system_devices.extend(backing_devices),
+        Err(error) => {
+            warn!("unable to determine devices backing the system device: {error}");
+        }
+    }
+
+    let matching_entries = boot_entries
+        .iter()
+        .filter(|(_, entry)| {
+            entry.slots().any(|(_, slot)| {
+                let SlotKind::Block(raw) = slots[slot].kind() else {
+                    return false;
+                };
+                raw.device()
+                    .is_some_and(|device| system_devices.contains(device))
+            })
+        })
+        .collect::<Vec<_>>();
+
+    match matching_entries.as_slice() {
+        [(idx, _)] => Some(*idx),
+        [] => None,
+        entries => {
+            let names = entries
+                .iter()
+                .map(|(_, entry)| entry.name())
+                .collect::<Vec<_>>();
+            warn!(?names, "multiple boot groups match the system device");
+            None
+        }
+    }
 }
 
 /// Read `rugix.boot_group=<name>` from the kernel cmdline and resolve

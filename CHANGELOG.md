@@ -4,6 +4,7 @@
 
 Rugix Ctrl:
 
+- Detect the active boot group through transitive backing devices for device-mapper system roots.
 - Log Rugix init errors that were previously ignored or only printed to stderr.
 - Add opt-in `rugix.init.shell_on_error[=<seconds>]` kernel cmdline option for opening a debug shell after init errors. This is intentionally disabled by default to avoid exposing a root shell to someone with console access.
 - Add `overlay-fallback: in-memory` state configuration to retry root overlay setup with an in-memory overlay when the configured overlay fails.

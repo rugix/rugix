@@ -2,6 +2,7 @@
 
 // cspell:ignore IFMT, IFBLK, rdev
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
@@ -148,20 +149,29 @@ impl BlockDevice {
                 return Self::from_sysfs_path(parent).map(Some);
             }
         }
-        // For virtual block devices (e.g., dm-verity, dm-crypt), there is
-        // no parent in the sysfs hierarchy. Resolve through the backing
-        // device listed in /sys/block/<name>/slaves/ instead.
-        let slaves = PathBuf::from(format!("/sys/block/{}/slaves", self.name()));
-        if slaves.is_dir() {
-            for entry in fs::read_dir(&slaves)? {
-                let entry = entry?;
-                let slave = Self::new(format!("/dev/{}", entry.file_name().to_string_lossy()))?;
-                if let Some(parent) = slave.find_parent()? {
-                    return Ok(Some(parent));
-                }
+        // Virtual block devices have no parent in the sysfs hierarchy. Continue the
+        // parent lookup from each directly backing device instead.
+        for backing_device in self.direct_backing_devices()? {
+            if let Some(parent) = backing_device.find_parent()? {
+                return Ok(Some(parent));
             }
         }
         Ok(None)
+    }
+
+    /// Find all block devices transitively backing this block device.
+    ///
+    /// The returned set does not include this block device itself.
+    pub fn find_backing_devices(&self) -> io::Result<HashSet<Self>> {
+        let mut backing_devices = HashSet::new();
+        let mut pending_devices = self.direct_backing_devices()?;
+        while let Some(device) = pending_devices.pop() {
+            if device == *self || !backing_devices.insert(device.clone()) {
+                continue;
+            }
+            pending_devices.extend(device.direct_backing_devices()?);
+        }
+        Ok(backing_devices)
     }
 
     /// Get a block device for the given partition of the device, if it exits.
@@ -185,6 +195,17 @@ impl BlockDevice {
     /// Canonical path of the block device in `/sys`.
     fn sysfs_path(&self) -> io::Result<PathBuf> {
         sysfs_device_number_to_path(self.dev).canonicalize()
+    }
+
+    /// Find the block devices listed in this device's sysfs `slaves` directory.
+    fn direct_backing_devices(&self) -> io::Result<Vec<Self>> {
+        let slaves = self.sysfs_path()?.join("slaves");
+        if !slaves.is_dir() {
+            return Ok(Vec::new());
+        }
+        fs::read_dir(slaves)?
+            .map(|entry| entry.and_then(|entry| Self::from_sysfs_path(entry.path())))
+            .collect()
     }
 }
 
