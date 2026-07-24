@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Behavior Changes:
+
+- Rugix Admin now has its own repository, installer, and release artifacts. It is no longer built or distributed from the Rugix Ctrl repository.
+- Data partition mount failures now fall back to ephemeral state by default. Set `data-partition.fail-on-mount-error = true` when booting without persistent data must fail.
+
+Security and Reliability:
+
+- Harden bundle parsing with strict framing, bounded reads, compressed-block metadata validation, and error propagation for malformed or truncated input.
+- Accept bundle signatures from any configured certificate root, broaden CMS signature interoperability, and continue checking other signatures and roots when one candidate is invalid.
+- Confine bundle, application, and persistent-state paths; validate application archives before extraction; and reject unsafe names, traversal paths, and symlinked application-file destinations.
+- Write bundles atomically, preserve update state across synchronization failures, synchronize payloads before completion, and retain deferred reboot targets.
+- Make multi-application activation transactional, recover interrupted application updates, and report rolled-back or failed activations as failures.
+- Validate generic, Mender, RAUC, and systemd boot-flow state mappings and preserve GPT and partition metadata when modifying disks.
+- Replace remaining panic paths in bundle decoding, update installation, simulation, boot-flow handling, and application service management with reported errors.
+
 Rugix Ctrl:
 
 - Detect the active boot group through transitive backing devices for device-mapper system roots.
@@ -20,7 +35,8 @@ Rugix Bundler:
 
 Libraries:
 
-- Add `rugix-versioning` for parsing and comparing version strings and `rugix-component-set` for evaluating component capabilities, requirements, and conflicts.
+- Add `rugix-component-set` for evaluating component capabilities, requirements, and conflicts, and use the published `anyver`, `byte-calc`, and `reportify` crates.
+- Refresh dependencies to resolve the `crossbeam-epoch` security advisory.
 
 ## Version 1.2.0
 
