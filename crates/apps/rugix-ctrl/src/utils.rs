@@ -43,6 +43,21 @@ pub fn reboot() -> SystemResult<()> {
     Ok(())
 }
 
+/// Acquire the exclusive lock for operations that mutate system update state.
+pub(crate) fn lock_update() -> SystemResult<nix::fcntl::Flock<fs::File>> {
+    fs::create_dir_all("/run/rugix").whatever("unable to create `/run/rugix`")?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open("/run/rugix/update-lock")
+        .whatever("unable to open update lock file")?;
+    nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusiveNonblock)
+        .map_err(|(_file, errno)| errno)
+        .whatever("another update is already in progress")
+}
+
 pub fn set_flag(path: impl AsRef<Path>) -> SystemResult<()> {
     set_flag_data(path, &[])
 }

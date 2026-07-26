@@ -6,6 +6,7 @@ pub mod config;
 pub mod http;
 pub mod http_source;
 pub mod init;
+pub mod operations;
 pub mod overlay;
 pub mod payload_db;
 pub mod state;

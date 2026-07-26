@@ -1,18 +1,21 @@
 use std::io::Read;
 use std::time::Duration;
 
-use crate::system::SystemResult;
 use byte_calc::NumBytes;
 use reportify::bail;
 use reportify::ResultExt;
 use rugix_bundle::source::BundleSource;
+use serde::Deserialize;
+use serde::Serialize;
 use tracing::error;
 use tracing::warn;
 use ureq::http::Response;
 use ureq::Body;
 
+use crate::system::SystemResult;
+
 /// Configuration for HTTP retry/reconnect behavior.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryConfig {
     /// Maximum number of consecutive retry attempts before giving up.
     pub max_retries: u32,

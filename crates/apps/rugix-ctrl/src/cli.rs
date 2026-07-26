@@ -21,9 +21,6 @@ use rugix_bundle::reader::BundleReader;
 use rugix_bundle::reader::DecodedPayloadInfo;
 use rugix_bundle::reader::PayloadTarget;
 use rugix_bundle::source::BundleSource;
-use rugix_bundle::source::ReaderSource;
-use rugix_bundle::source::SkipRead;
-use rugix_bundle::source::SkipSeek;
 use rugix_bundle::xdelta::xdelta_decompress;
 use rugix_cli::widgets::ProgressBar;
 use rugix_cli::widgets::ProgressSpinner;
@@ -73,15 +70,29 @@ use xscript::Vars;
 
 use crate::config::output::BlockDeviceInfo;
 use crate::config::output::ComponentsCheckOutput;
-use crate::http_source::HttpSource;
 use crate::http_source::RetryConfig;
+use crate::operations::apps::InstallAppBundle;
+use crate::operations::apps::ListApps;
+use crate::operations::apps::QueryApp;
+use crate::operations::bundle::BundleInput;
+use crate::operations::bundle::BundleInstallEvent;
+use crate::operations::bundle::BundleInstallOptions;
+use crate::operations::bundle::InstallSource;
+use crate::operations::local::LocalExecutor;
+use crate::operations::system::CheckComponents;
+use crate::operations::system::InstallSystemBundle;
+use crate::operations::system::QuerySystem;
+use crate::operations::system::SystemRebootMode;
+use crate::operations::EventSink;
+use crate::operations::Executor;
+use crate::operations::NoEvent;
+use crate::operations::Operation;
 use crate::overlay::overlay_dir;
 use crate::payload_db::BlockProvider;
 use crate::payload_db::{self};
-use crate::system_state;
 use crate::utils::clear_flag;
+use crate::utils::lock_update;
 use crate::utils::reboot;
-use crate::utils::set_deferred_reboot_target;
 use crate::utils::set_flag;
 use crate::utils::set_flag_data;
 use crate::utils::DEFERRED_SPARE_REBOOT_FLAG;
@@ -89,24 +100,6 @@ use crate::utils::DEFERRED_SPARE_REBOOT_FLAG;
 fn create_rugix_state_directory() -> SystemResult<()> {
     fs::create_dir_all("/run/rugix/state/.rugix")
         .whatever("unable to create `/run/rugix/state/.rugix`")
-}
-
-/// Acquire an exclusive lock for system update operations.
-///
-/// Prevents concurrent `update install` invocations from corrupting partition state and
-/// boot flow configuration.
-fn lock_update() -> SystemResult<nix::fcntl::Flock<File>> {
-    fs::create_dir_all("/run/rugix").whatever("unable to create `/run/rugix`")?;
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open("/run/rugix/update-lock")
-        .whatever("unable to open update lock file")?;
-    nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusiveNonblock)
-        .map_err(|(_file, errno)| errno)
-        .whatever("another update is already in progress")
 }
 
 fn set_rugix_state_flag(name: &str, value: Option<&str>) -> SystemResult<()> {
@@ -177,121 +170,52 @@ pub fn main() -> SystemResult<()> {
                 },
             },
         },
-        Command::Update(update_cmd) => {
-            match update_cmd {
-                UpdateCommand::Install {
+        Command::Update(update_cmd) => match update_cmd {
+            UpdateCommand::Install {
+                bundle,
+                insecure_skip_bundle_verification,
+                insecure_allow_missing_block_index,
+                skip_compatibility_check,
+                root_cert,
+                bundle_hash,
+                reboot: reboot_type,
+                keep_overlay,
+                boot_group,
+                disable_range_queries,
+                http_max_retries,
+                http_retry_initial_backoff,
+                http_retry_max_backoff,
+            } => {
+                let retry_config = RetryConfig {
+                    max_retries: *http_max_retries,
+                    initial_backoff: Duration::from_secs(*http_retry_initial_backoff),
+                    max_backoff: Duration::from_secs(*http_retry_max_backoff),
+                };
+                let (source, input) = resolve_cli_bundle_source(
                     bundle,
-                    insecure_skip_bundle_verification,
-                    insecure_allow_missing_block_index,
-                    skip_compatibility_check,
-                    root_cert,
-                    bundle_hash,
-                    reboot: reboot_type,
-                    keep_overlay,
-                    boot_group,
-                    disable_range_queries,
-                    http_max_retries,
-                    http_retry_initial_backoff,
-                    http_retry_max_backoff,
-                } => {
-                    let _update_lock = lock_update()?;
-                    let system = System::initialize()?;
-
-                    if system.needs_commit()? {
-                        bail!("system needs to be committed before installing an update");
-                    }
-
-                    // Find the entry where we are going to install the update to.
-                    let boot_group = match boot_group {
-                        Some(entry_name) => {
-                            let Some(entry) = system.boot_entries().find_by_name(entry_name) else {
-                                bail!("unable to find boot group {entry_name}")
-                            };
-                            Some(entry)
-                        }
-                        None => {
-                            if system.boot_entries().iter().count() > 2 {
-                                None
-                            } else {
-                                system
-                                    .boot_entries()
-                                    .iter()
-                                    .find(|(_, entry)| !entry.active())
-                            }
-                        }
-                    };
-                    if let Some((_, boot_group)) = boot_group {
-                        info!("installing update to boot group {:?}", boot_group.name());
-                        if boot_group.active() {
-                            bail!("selected boot group {} is active", boot_group.name());
-                        }
-                    }
-
-                    let retry_config = RetryConfig {
-                        max_retries: *http_max_retries,
-                        initial_backoff: Duration::from_secs(*http_retry_initial_backoff),
-                        max_backoff: Duration::from_secs(*http_retry_max_backoff),
-                    };
-                    let bundle_options = BundleInstallOptions {
-                        bundle_hash,
-                        root_cert: root_cert.as_deref(),
+                    *disable_range_queries,
+                    retry_config,
+                    "error opening image",
+                )?;
+                let operation = InstallSystemBundle {
+                    source,
+                    options: BundleInstallOptions {
+                        bundle_hash: bundle_hash.clone(),
+                        root_cert: read_explicit_root_certificate(root_cert.as_deref())?,
                         insecure_skip_bundle_verification: *insecure_skip_bundle_verification,
                         insecure_allow_missing_block_index: *insecure_allow_missing_block_index,
                         skip_compatibility_check: *skip_compatibility_check,
-                    };
-                    let should_reboot = install_update_stream(
-                        &system,
-                        &config,
-                        bundle,
-                        boot_group.as_ref(),
-                        bundle_options,
-                        *keep_overlay,
-                        *disable_range_queries,
-                        retry_config,
-                    )?;
-
-                    let reboot_type = reboot_type.clone().unwrap_or(should_reboot);
-
-                    match reboot_type {
-                        UpdateRebootType::Yes => {
-                            let (entry_idx, boot_group) =
-                                require_update_target(boot_group, "reboot")?;
-                            info!(
-                                "instructing boot flow to try booting into {:?}",
-                                boot_group.name()
-                            );
-                            system
-                                .boot_flow()
-                                .set_try_next(&system, entry_idx)
-                                .whatever("unable to set next boot group")?;
-                            info!("rebooting");
-                            system.reboot()?;
-                        }
-                        UpdateRebootType::No => { /* nothing to do */ }
-                        UpdateRebootType::Set => {
-                            let (entry_idx, boot_group) =
-                                require_update_target(boot_group, "boot selection")?;
-                            info!(
-                                "instructing boot flow to try booting into {:?}",
-                                boot_group.name()
-                            );
-                            system
-                                .boot_flow()
-                                .set_try_next(&system, entry_idx)
-                                .whatever("unable to set next boot group")?;
-                        }
-                        UpdateRebootType::Deferred => {
-                            let (_, target) = require_update_target(boot_group, "deferred reboot")?;
-                            set_deferred_reboot_target(target.name())?;
-                        }
-                    }
-                }
+                    },
+                    reboot: reboot_type.as_ref().map(system_reboot_mode),
+                    keep_overlay: *keep_overlay,
+                    boot_group: boot_group.clone(),
+                };
+                execute_local_operation(LocalExecutor::new(&config), operation, input)?;
             }
-        }
+        },
         Command::System(sys_cmd) => match sys_cmd {
             SystemCommand::Info { json } => {
-                let system = System::initialize()?;
-                let output = system_state::state_from_system(&system)?;
+                let output = execute_local_operation(LocalExecutor::new(&config), QuerySystem, ())?;
                 rugix_cli::json::print_json(&output, *json)
                     .whatever("unable to write system info to stdout")?;
             }
@@ -339,14 +263,24 @@ pub fn main() -> SystemResult<()> {
                 rugix_cli::json::print_json(&output, false)
                     .whatever("unable to write component info to stdout")?;
             }
-            ComponentsCommand::Check => match run_components_check() {
-                Ok(true) => {}
-                Ok(false) => std::process::exit(1),
-                Err(report) => {
-                    eprintln!("{report:?}");
-                    std::process::exit(2);
+            ComponentsCommand::Check => {
+                let check =
+                    execute_local_operation(LocalExecutor::new(&config), CheckComponents, ())
+                        .and_then(|output| {
+                            let consistent = output.consistent;
+                            rugix_cli::json::print_json(&output, false)
+                                .whatever("unable to write component check report to stdout")?;
+                            Ok(consistent)
+                        });
+                match check {
+                    Ok(true) => {}
+                    Ok(false) => std::process::exit(1),
+                    Err(report) => {
+                        eprintln!("{report:?}");
+                        std::process::exit(2);
+                    }
                 }
-            },
+            }
         },
         Command::Data(cmd) => match cmd {
             DataCommand::Wipe { yes, no_reboot } => {
@@ -574,94 +508,48 @@ pub fn main() -> SystemResult<()> {
                     http_retry_initial_backoff,
                     http_retry_max_backoff,
                 } => {
-                    let bundle_options = BundleInstallOptions {
-                        bundle_hash,
-                        root_cert: root_cert.as_deref(),
-                        insecure_skip_bundle_verification: *insecure_skip_bundle_verification,
-                        insecure_allow_missing_block_index: *insecure_allow_missing_block_index,
-                        skip_compatibility_check: *skip_compatibility_check,
+                    let retry_config = RetryConfig {
+                        max_retries: *http_max_retries,
+                        initial_backoff: Duration::from_secs(*http_retry_initial_backoff),
+                        max_backoff: Duration::from_secs(*http_retry_max_backoff),
                     };
-                    if bundle.starts_with("http") {
-                        let retry_config = RetryConfig {
-                            max_retries: *http_max_retries,
-                            initial_backoff: Duration::from_secs(*http_retry_initial_backoff),
-                            max_backoff: Duration::from_secs(*http_retry_max_backoff),
-                        };
-                        let source = HttpSource::new(bundle, false, retry_config)
-                            .whatever("unable to create HTTP source")?;
-                        install_app_bundle(&config, &manager, source, bundle_options)?;
-                    } else if bundle == "-" {
-                        let source = ReaderSource::<_, SkipRead>::from_unbuffered(std::io::stdin());
-                        install_app_bundle(&config, &manager, source, bundle_options)?;
-                    } else {
-                        let file = File::open(bundle).whatever("unable to open app bundle")?;
-                        let source = ReaderSource::<_, SkipSeek>::from_unbuffered(file);
-                        install_app_bundle(&config, &manager, source, bundle_options)?;
-                    }
+                    let (source, input) = resolve_cli_bundle_source(
+                        bundle,
+                        false,
+                        retry_config,
+                        "unable to open app bundle",
+                    )?;
+                    let operation = InstallAppBundle {
+                        source,
+                        options: BundleInstallOptions {
+                            bundle_hash: bundle_hash.clone(),
+                            root_cert: read_explicit_root_certificate(root_cert.as_deref())?,
+                            insecure_skip_bundle_verification: *insecure_skip_bundle_verification,
+                            insecure_allow_missing_block_index: *insecure_allow_missing_block_index,
+                            skip_compatibility_check: *skip_compatibility_check,
+                        },
+                    };
+                    execute_local_operation(
+                        LocalExecutor::new(&config).with_app_manager(&manager),
+                        operation,
+                        input,
+                    )?;
                 }
                 AppsCommand::List => {
-                    use crate::config::output::AppListEntryOutput;
-                    let apps = manager.list_apps().whatever("unable to list apps")?;
-                    let entries: indexmap::IndexMap<String, AppListEntryOutput> = apps
-                        .iter()
-                        .map(|app| {
-                            let status = resolve_app_status(manager.app_status(app).ok());
-                            let generation = match manager.current_generation(app) {
-                                Ok(gen) => gen,
-                                Err(err) => {
-                                    tracing::error!(app, error = ?err, "unable to read app state");
-                                    None
-                                }
-                            };
-                            let metadata = generation.and_then(|gen| {
-                                manager.generation_dir(app, gen).ok().and_then(|gen_dir| {
-                                    crate::apps::manager::AppManager::read_metadata(&gen_dir)
-                                })
-                            });
-                            (
-                                app.clone(),
-                                AppListEntryOutput::new(status)
-                                    .with_generation(generation)
-                                    .with_metadata(metadata),
-                            )
-                        })
-                        .collect();
+                    let entries = execute_local_operation(
+                        LocalExecutor::new(&config).with_app_manager(&manager),
+                        ListApps,
+                        (),
+                    )?;
                     rugix_cli::json::print_json(&entries, false)
                         .whatever("unable to write apps list to stdout")?;
                 }
                 AppsCommand::Info { app } => {
-                    use crate::config::output::AppInfoOutput;
-                    use crate::config::output::GenerationInfoOutput;
-                    let status = resolve_app_status(manager.app_status(app).ok());
-                    let generations = manager
-                        .list_generations(app)
-                        .whatever("unable to list generations")?;
-                    let current = manager
-                        .current_generation(app)
-                        .whatever("unable to read app state")?;
-                    let state = manager
-                        .read_state(app)
-                        .whatever("unable to read app state")?;
-                    let gen_entries: Vec<_> = generations
-                        .iter()
-                        .map(|gen| {
-                            let metadata = manager
-                                .generation_dir(app, gen.meta.number)
-                                .ok()
-                                .and_then(|gen_dir| {
-                                    crate::apps::manager::AppManager::read_metadata(&gen_dir)
-                                });
-                            GenerationInfoOutput::new(
-                                gen.meta.number,
-                                gen.meta.created_at.clone(),
-                                gen.complete,
-                                Some(gen.meta.number) == current,
-                            )
-                            .with_last_activated(gen.meta.last_activated.clone())
-                            .with_metadata(metadata)
-                        })
-                        .collect();
-                    let output = AppInfoOutput::new(app.clone(), status, state, gen_entries);
+                    let output = execute_local_operation(
+                        LocalExecutor::new(&config).with_app_manager(&manager),
+                        QueryApp { name: app.clone() },
+                        (),
+                    )?;
                     rugix_cli::json::print_json(&output, false)
                         .whatever("unable to write app info to stdout")?;
                 }
@@ -854,6 +742,62 @@ pub fn main() -> SystemResult<()> {
     Ok(())
 }
 
+fn resolve_cli_bundle_source(
+    bundle: &str,
+    disable_range_queries: bool,
+    retry: RetryConfig,
+    file_error_context: &'static str,
+) -> SystemResult<(InstallSource, BundleInput)> {
+    if bundle.starts_with("http") {
+        Ok((
+            InstallSource::Http {
+                url: bundle.to_owned(),
+                disable_range_queries,
+                retry,
+            },
+            BundleInput::None,
+        ))
+    } else if bundle == "-" {
+        Ok((
+            InstallSource::Stream,
+            BundleInput::Stream(Box::new(io::stdin())),
+        ))
+    } else {
+        let input = File::open(bundle).whatever(file_error_context)?;
+        Ok((
+            InstallSource::Stream,
+            BundleInput::Seekable(Box::new(input)),
+        ))
+    }
+}
+
+fn read_explicit_root_certificate(path: Option<&Path>) -> SystemResult<Option<Vec<u8>>> {
+    path.map(|path| fs::read(path).whatever("unable to read root certificate"))
+        .transpose()
+}
+
+fn execute_local_operation<'config, O>(
+    executor: LocalExecutor<'config>,
+    operation: O,
+    input: O::Input,
+) -> SystemResult<O::Output>
+where
+    O: Operation,
+    CliOperationEventSink: EventSink<O::Event>,
+{
+    let mut events = CliOperationEventSink::default();
+    executor.execute(operation, input, &mut events)
+}
+
+fn system_reboot_mode(reboot: &UpdateRebootType) -> SystemRebootMode {
+    match reboot {
+        UpdateRebootType::Yes => SystemRebootMode::Yes,
+        UpdateRebootType::No => SystemRebootMode::No,
+        UpdateRebootType::Set => SystemRebootMode::Set,
+        UpdateRebootType::Deferred => SystemRebootMode::Deferred,
+    }
+}
+
 fn resolve_mark_good_group(
     groups: &crate::system::boot_groups::BootGroups,
     active: Option<BootGroupIdx>,
@@ -868,24 +812,9 @@ fn resolve_mark_good_group(
     active.ok_or_else(|| whatever!("unable to determine the active boot group"))
 }
 
+#[cfg(test)]
 fn require_update_target<T: Copy>(target: Option<T>, operation: &str) -> SystemResult<T> {
     target.ok_or_else(|| whatever!("{operation} requires a target boot group"))
-}
-
-fn run_components_check() -> SystemResult<bool> {
-    let components = crate::components::InstalledComponents::load()?;
-    let output = components.check_output();
-    let consistent = output.consistent;
-    rugix_cli::json::print_json(&output, false)
-        .whatever("unable to write component check report to stdout")?;
-    Ok(consistent)
-}
-
-/// Resolve an optional [`AppStatus`], defaulting to `Unknown`.
-fn resolve_app_status(
-    status: Option<crate::apps::orchestrators::AppStatus>,
-) -> crate::apps::orchestrators::AppStatus {
-    status.unwrap_or(crate::apps::orchestrators::AppStatus::Unknown)
 }
 
 #[derive(Debug, Clone)]
@@ -935,26 +864,18 @@ impl<R: Read> Read for MaybeStreamHasher<R> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct BundleInstallOptions<'a> {
-    bundle_hash: &'a Option<HashDigest>,
-    root_cert: Option<&'a Path>,
-    insecure_skip_bundle_verification: bool,
-    insecure_allow_missing_block_index: bool,
-    skip_compatibility_check: bool,
-}
-
-fn install_app_bundle<S: BundleSource>(
+pub(crate) fn install_app_bundle<S: BundleSource>(
     config: &Config,
     app_manager: &crate::apps::manager::AppManager,
     bundle_source: S,
-    options: BundleInstallOptions<'_>,
+    options: &BundleInstallOptions,
+    events: &mut dyn EventSink<BundleInstallEvent>,
 ) -> SystemResult<()> {
     let mut bundle_reader =
         rugix_bundle::reader::BundleReader::start(bundle_source, options.bundle_hash.clone())
             .whatever("unable to read app bundle")?;
 
-    let root_certs = configured_signature_roots(config, options.root_cert);
+    let root_certs = configured_signature_roots(config, options.root_cert.as_deref());
 
     // If a bundle hash has been specified, then the bundle will be verified against that hash
     // by the reader. Otherwise, try signature verification.
@@ -986,9 +907,9 @@ fn install_app_bundle<S: BundleSource>(
     }
 
     if !options.skip_compatibility_check {
-        check_app_bundle_compatibility(config, &bundle_reader, &touched_apps)?;
+        check_app_bundle_compatibility(config, &bundle_reader, &touched_apps, events)?;
     } else {
-        report_compatibility_skip("app", "explicit --skip-compatibility-check option");
+        report_compatibility_skip("app", "explicit --skip-compatibility-check option", events);
     }
 
     let mut app_generations: std::collections::HashMap<String, (u64, PathBuf)> =
@@ -1488,71 +1409,6 @@ fn validate_app_archive(file: File) -> SystemResult<()> {
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments)]
-fn install_update_stream(
-    system: &System,
-    config: &Config,
-    bundle: &String,
-    boot_group: Option<&(BootGroupIdx, &BootGroup)>,
-    options: BundleInstallOptions<'_>,
-    keep_overlay: bool,
-    disable_range_queries: bool,
-    retry_config: RetryConfig,
-) -> SystemResult<UpdateRebootType> {
-    if bundle.starts_with("http") {
-        let mut has_indices = false;
-        for (_, slot) in system.slots().iter() {
-            has_indices |= payload_db::get_stored_indices(slot.name())
-                .map(|indices| !indices.is_empty())
-                .unwrap_or_default();
-            if has_indices {
-                break;
-            }
-        }
-
-        let mut bundle_source =
-            HttpSource::new(bundle, !disable_range_queries && has_indices, retry_config)?;
-        let should_reboot = install_update_bundle(
-            system,
-            config,
-            &mut bundle_source,
-            boot_group,
-            options,
-            keep_overlay,
-        )?;
-        let stats = bundle_source.get_download_stats();
-        info!(
-            "downloaded {:.1}% ({}/{}) of the full bundle",
-            stats.download_ratio() * 100.0,
-            stats.bytes_read,
-            stats.total_bytes(),
-        );
-        return Ok(should_reboot);
-    }
-    if bundle == "-" {
-        let bundle_source = ReaderSource::<_, SkipRead>::from_unbuffered(io::stdin());
-        install_update_bundle(
-            system,
-            config,
-            bundle_source,
-            boot_group,
-            options,
-            keep_overlay,
-        )
-    } else {
-        let file = File::open(bundle).whatever("error opening image")?;
-        let bundle_source = ReaderSource::<_, SkipSeek>::from_unbuffered(file);
-        install_update_bundle(
-            system,
-            config,
-            bundle_source,
-            boot_group,
-            options,
-            keep_overlay,
-        )
-    }
-}
-
 pub struct UpdateState {
     bytes_read: u64,
     bytes_total: u64,
@@ -1600,19 +1456,124 @@ impl StatusSegment for UpdateStatus {
     }
 }
 
-fn configured_signature_roots<'a>(config: &'a Config, explicit: Option<&'a Path>) -> Vec<&'a Path> {
+#[derive(Default)]
+struct CliOperationEventSink {
+    update_status: Option<rugix_cli::StatusSegmentRef<UpdateStatus>>,
+    progress_cursors: ProgressCursors,
+}
+
+impl CliOperationEventSink {
+    fn ensure_update_status(&mut self) -> &rugix_cli::StatusSegmentRef<UpdateStatus> {
+        self.update_status.get_or_insert_with(|| {
+            rugix_cli::add_status(UpdateStatus {
+                state: Mutex::new(UpdateState {
+                    bytes_read: 0,
+                    bytes_total: 0,
+                }),
+            })
+        })
+    }
+}
+
+impl EventSink<NoEvent> for CliOperationEventSink {
+    fn emit(&mut self, event: NoEvent) {
+        match event {}
+    }
+}
+
+impl EventSink<BundleInstallEvent> for CliOperationEventSink {
+    fn emit(&mut self, event: BundleInstallEvent) {
+        match &event {
+            BundleInstallEvent::Started => {
+                self.ensure_update_status();
+            }
+            BundleInstallEvent::UpdateProgress {
+                progress,
+                bytes_read,
+                bytes_total,
+            } => {
+                {
+                    let update_status = self.ensure_update_status();
+                    let mut update_state = update_status
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    update_state.bytes_read = *bytes_read;
+                    update_state.bytes_total = *bytes_total;
+                }
+                if !rugix_cli::stdout_is_piped()
+                    || !self.progress_cursors.should_emit_json(*progress)
+                {
+                    return;
+                }
+                self.progress_cursors.mark_json_emitted(*progress);
+            }
+            BundleInstallEvent::CompatibilityCheckSkipped { .. } => {
+                if !rugix_cli::stdout_is_piped() {
+                    return;
+                }
+            }
+        }
+
+        let Some(event) = operation_event_as_cli_event(&event) else {
+            return;
+        };
+        let result = serde_json::to_vec(&event)
+            .map_err(io::Error::other)
+            .and_then(|mut bytes| {
+                bytes.push(b'\n');
+                std::io::stdout().write_all(&bytes)
+            });
+        if let Err(error) = result {
+            warn!(%error, "unable to emit operation event");
+        }
+    }
+}
+
+fn operation_event_as_cli_event(event: &BundleInstallEvent) -> Option<Event> {
+    match event {
+        BundleInstallEvent::Started => None,
+        BundleInstallEvent::UpdateProgress { progress, .. } => {
+            Some(Event::UpdateProgress(UpdateProgressEvent {
+                progress: *progress,
+            }))
+        }
+        BundleInstallEvent::CompatibilityCheckSkipped { scope, reason } => Some(
+            Event::CompatibilityCheckSkipped(CompatibilityCheckSkippedEvent {
+                scope: scope.clone(),
+                reason: reason.clone(),
+            }),
+        ),
+    }
+}
+
+enum SignatureRoot<'a> {
+    ConfiguredPath(&'a Path),
+    ExplicitCertificate(&'a [u8]),
+}
+
+fn configured_signature_roots<'a>(
+    config: &'a Config,
+    explicit: Option<&'a [u8]>,
+) -> Vec<SignatureRoot<'a>> {
     if let Some(explicit) = explicit {
-        return vec![explicit];
+        return vec![SignatureRoot::ExplicitCertificate(explicit)];
     }
     config
         .signatures
         .as_ref()
-        .map(|config| config.roots.iter().map(Path::new).collect())
+        .map(|config| {
+            config
+                .roots
+                .iter()
+                .map(|root| SignatureRoot::ConfiguredPath(Path::new(root)))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 fn verify_bundle_signature<S: BundleSource>(
-    root_certs: &[&Path],
+    root_certs: &[SignatureRoot<'_>],
     bundle_reader: &BundleReader<S>,
 ) -> SystemResult<bool> {
     if root_certs.is_empty() {
@@ -1628,11 +1589,16 @@ fn verify_bundle_signature<S: BundleSource>(
     let mut verifiers = Vec::new();
     let mut root_errors = 0usize;
     for (root_index, root_cert) in root_certs.iter().enumerate() {
-        let verifier: SystemResult<rugix_pki::CmsVerifier> = std::fs::read(root_cert)
-            .whatever("unable to read root certificate")
-            .and_then(|cert_pem| {
-                rugix_pki::CmsVerifier::new(&cert_pem).whatever("unable to create CMS verifier")
-            });
+        let verifier: SystemResult<rugix_pki::CmsVerifier> = match root_cert {
+            SignatureRoot::ConfiguredPath(path) => fs::read(path)
+                .whatever("unable to read root certificate")
+                .and_then(|cert_pem| {
+                    rugix_pki::CmsVerifier::new(&cert_pem).whatever("unable to create CMS verifier")
+                }),
+            SignatureRoot::ExplicitCertificate(cert_pem) => {
+                rugix_pki::CmsVerifier::new(cert_pem).whatever("unable to create CMS verifier")
+            }
+        };
         match verifier {
             Ok(verifier) => verifiers.push((root_index, verifier)),
             Err(error) => {
@@ -1683,12 +1649,14 @@ fn verify_bundle_signature<S: BundleSource>(
 fn check_system_update_compatibility<S: BundleSource>(
     config: &Config,
     bundle_reader: &BundleReader<S>,
+    events: &mut dyn EventSink<BundleInstallEvent>,
 ) -> SystemResult<()> {
     let Some(bundle_components) = bundle_reader.header().components.as_ref() else {
         enforce_bundle_component_policy(config, false, "update")?;
         report_compatibility_skip(
             "system",
             "bundle component metadata is absent and not required by policy",
+            events,
         );
         return Ok(());
     };
@@ -1710,11 +1678,12 @@ fn check_app_bundle_compatibility<S: BundleSource>(
     config: &Config,
     bundle_reader: &BundleReader<S>,
     touched_apps: &[String],
+    events: &mut dyn EventSink<BundleInstallEvent>,
 ) -> SystemResult<()> {
     let bundle_components = bundle_reader.header().components.as_ref();
     enforce_bundle_component_policy(config, bundle_components.is_some(), "app")?;
     if touched_apps.is_empty() {
-        report_compatibility_skip("app", "bundle contains no app payloads");
+        report_compatibility_skip("app", "bundle contains no app payloads", events);
         return Ok(());
     }
     if bundle_components.is_none() {
@@ -1749,24 +1718,16 @@ fn enforce_bundle_component_policy(
     Ok(())
 }
 
-fn report_compatibility_skip(scope: &str, reason: &str) {
+fn report_compatibility_skip(
+    scope: &str,
+    reason: &str,
+    events: &mut dyn EventSink<BundleInstallEvent>,
+) {
     warn!(scope, reason, "skipping component compatibility check");
-    if !rugix_cli::stdout_is_piped() {
-        return;
-    }
-    let event = Event::CompatibilityCheckSkipped(CompatibilityCheckSkippedEvent {
+    events.emit(BundleInstallEvent::CompatibilityCheckSkipped {
         scope: scope.to_owned(),
         reason: reason.to_owned(),
     });
-    let result = serde_json::to_vec(&event)
-        .map_err(io::Error::other)
-        .and_then(|mut bytes| {
-            bytes.push(b'\n');
-            std::io::stdout().write_all(&bytes)
-        });
-    if let Err(error) = result {
-        warn!(%error, "unable to emit compatibility-skip JSON event");
-    }
 }
 
 fn app_activation_outcome(
@@ -2044,19 +2005,20 @@ fn finalize_payload_and_record<T>(
     record(finalized)
 }
 
-fn install_update_bundle<R: BundleSource>(
+pub(crate) fn install_update_bundle<R: BundleSource>(
     system: &System,
     config: &Config,
     bundle_source: R,
     boot_group: Option<&(BootGroupIdx, &BootGroup)>,
-    options: BundleInstallOptions<'_>,
+    options: &BundleInstallOptions,
     keep_overlay: bool,
-) -> SystemResult<UpdateRebootType> {
+    events: &mut dyn EventSink<BundleInstallEvent>,
+) -> SystemResult<SystemRebootMode> {
     let mut bundle_reader =
         rugix_bundle::reader::BundleReader::start(bundle_source, options.bundle_hash.clone())
             .whatever("unable to read bundle")?;
 
-    let root_certs = configured_signature_roots(config, options.root_cert);
+    let root_certs = configured_signature_roots(config, options.root_cert.as_deref());
 
     // If a bundle hash has been specified, then the bundle will be verified against that hash
     // by the reader.
@@ -2068,9 +2030,13 @@ fn install_update_bundle<R: BundleSource>(
     }
 
     if !options.skip_compatibility_check {
-        check_system_update_compatibility(config, &bundle_reader)?;
+        check_system_update_compatibility(config, &bundle_reader, events)?;
     } else {
-        report_compatibility_skip("system", "explicit --skip-compatibility-check option");
+        report_compatibility_skip(
+            "system",
+            "explicit --skip-compatibility-check option",
+            events,
+        );
     }
 
     let update_hooks = HooksLoader::default()
@@ -2113,18 +2079,11 @@ fn install_update_bundle<R: BundleSource>(
         },
     )?;
 
-    let update_status = rugix_cli::add_status(UpdateStatus {
-        state: Mutex::new(UpdateState {
-            bytes_read: 0,
-            bytes_total: 0,
-        }),
-    });
-
     let mut progress_cursors = ProgressCursors::default();
     let hooks = HooksLoader::default()
         .load_hooks("update-install")
         .whatever("unable to load `update-install` hooks")?;
-    let mut emit_progress = |current_progress: f64| {
+    let mut emit_progress = |current_progress: f64, bytes_read: u64, bytes_total: u64| {
         if progress_cursors.should_emit_hook(current_progress) {
             let hook_vars = vars! {
                 RUGIX_UPDATE_PROGRESS = format!("{current_progress:.2}")
@@ -2140,22 +2099,14 @@ fn install_update_bundle<R: BundleSource>(
                 }
             }
         }
-        if rugix_cli::stdout_is_piped() && progress_cursors.should_emit_json(current_progress) {
-            let event = Event::UpdateProgress(UpdateProgressEvent {
-                progress: current_progress,
-            });
-            let result = serde_json::to_vec(&event)
-                .map_err(io::Error::other)
-                .and_then(|mut bytes| {
-                    bytes.push(b'\n');
-                    std::io::stdout().write_all(&bytes)
-                });
-            match result {
-                Ok(()) => progress_cursors.mark_json_emitted(current_progress),
-                Err(error) => warn!("unable to emit JSON update progress: {error}"),
-            }
-        }
+        events.emit(BundleInstallEvent::UpdateProgress {
+            progress: current_progress,
+            bytes_read,
+            bytes_total,
+        });
     };
+    let mut latest_bytes_read = 0;
+    let mut latest_bytes_total = 0;
     let mut progress = {
         |source: &R| {
             let Some(bytes_total) = source.bytes_total() else {
@@ -2169,15 +2120,9 @@ fn install_update_bundle<R: BundleSource>(
             };
             let current_progress =
                 ((bytes_read.raw as f64) / (bytes_total.raw as f64) * 100.0).min(100.0);
-            {
-                let mut update_state = update_status
-                    .state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                update_state.bytes_read = bytes_read.raw;
-                update_state.bytes_total = bytes_total.raw;
-            }
-            emit_progress(current_progress);
+            latest_bytes_read = bytes_read.raw;
+            latest_bytes_total = bytes_total.raw;
+            emit_progress(current_progress, latest_bytes_read, latest_bytes_total);
         }
     };
 
@@ -2456,7 +2401,7 @@ fn install_update_bundle<R: BundleSource>(
         reason = "release the mutable borrow of emit_progress"
     )]
     drop(progress);
-    emit_progress(100.0);
+    emit_progress(100.0, latest_bytes_read, latest_bytes_total);
 
     let reboot_type = if !bundle_reader.header().is_incremental {
         let (target, _) =
@@ -2465,9 +2410,9 @@ fn install_update_bundle<R: BundleSource>(
             .boot_flow()
             .post_install(system, *target)
             .whatever("error executing post-install step")?;
-        UpdateRebootType::Yes
+        SystemRebootMode::Yes
     } else {
-        UpdateRebootType::No
+        SystemRebootMode::No
     };
     update_hooks
         .run_hooks("post-update", hook_vars, &Default::default())
