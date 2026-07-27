@@ -9,6 +9,8 @@ use reportify::bail;
 use reportify::ResultExt;
 
 use crate::config::daemon::DaemonConfig;
+use crate::config::daemon::DaemonFeatureInfo;
+use crate::config::daemon::DaemonInfo;
 use crate::system::SystemResult;
 
 const DAEMON_CONFIG_PATH: &str = "/etc/rugix/daemon.toml";
@@ -31,6 +33,20 @@ pub(crate) struct DaemonFeatureSettings {
     pub(crate) system_commit: bool,
     pub(crate) system_reboot: bool,
     pub(crate) app_lifecycle: bool,
+}
+
+impl DaemonSettings {
+    pub(crate) fn info(&self) -> DaemonInfo {
+        DaemonInfo::new(
+            self.dangerously_insecure,
+            DaemonFeatureInfo::new(
+                self.features.factory_reset,
+                self.features.system_commit,
+                self.features.system_reboot,
+                self.features.app_lifecycle,
+            ),
+        )
+    }
 }
 
 pub(crate) fn load_daemon_settings() -> SystemResult<DaemonSettings> {

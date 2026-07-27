@@ -12,7 +12,9 @@ use super::protocol::finish_input;
 use super::protocol::read_response;
 use super::protocol::write_request;
 use super::protocol::DaemonOperation;
+use super::protocol::Request;
 use super::protocol::Response;
+use crate::config::daemon::DaemonInfo;
 use crate::operations::EventSink;
 use crate::operations::Operation;
 use crate::system::SystemResult;
@@ -36,9 +38,7 @@ impl DaemonClient {
     where
         O::Input: Send,
     {
-        let mut socket = UnixStream::connect(&self.settings.socket_path)
-            .whatever("unable to connect to the privileged Rugix Ctrl daemon")
-            .field("socket", self.settings.socket_path.clone())?;
+        let mut socket = self.connect()?;
         write_request(&mut socket, operation.into_request())?;
         let mut input_socket = socket
             .try_clone()
@@ -65,6 +65,30 @@ impl DaemonClient {
                 Err(error) => Err(error),
             }
         })
+    }
+
+    pub(crate) fn query_info(&self) -> SystemResult<DaemonInfo> {
+        let mut socket = self.connect()?;
+        write_request(&mut socket, Request::QueryInfo)?;
+        finish_input(&socket).whatever("unable to finish daemon information request")?;
+        match read_response(&mut socket, self.settings.max_control_frame_size)? {
+            Response::Event(_) => {
+                bail!("privileged Rugix Ctrl daemon sent an unexpected information event")
+            }
+            Response::Output(payload) => {
+                decode_response(&payload, "unable to decode privileged daemon information")
+            }
+            Response::OperationError(message) => bail!("{message}"),
+            Response::ProtocolError(message) => {
+                bail!("privileged Rugix Ctrl daemon protocol error: {message}")
+            }
+        }
+    }
+
+    fn connect(&self) -> SystemResult<UnixStream> {
+        UnixStream::connect(&self.settings.socket_path)
+            .whatever("unable to connect to the privileged Rugix Ctrl daemon")
+            .field("socket", self.settings.socket_path.clone())
     }
 }
 

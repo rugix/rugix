@@ -24,6 +24,7 @@ use super::protocol::write_output;
 use super::protocol::ErrorKind;
 use super::protocol::Request;
 use crate::config::config::Config;
+use crate::config::daemon::DaemonInfo;
 use crate::config::load_ctrl_config;
 use crate::operations::install::BundleInput;
 use crate::operations::install::InstallSource;
@@ -45,6 +46,7 @@ pub(crate) fn serve(settings: DaemonSettings) -> SystemResult<()> {
     let _socket_guard = SocketGuard::new(settings.socket_path.clone());
     let config = Arc::new(load_ctrl_config()?);
     let policy = AdmissionPolicy::new(&settings);
+    let daemon_info = settings.info();
     info!(socket = %settings.socket_path.display(), "Rugix Ctrl daemon listening");
 
     loop {
@@ -53,10 +55,16 @@ pub(crate) fn serve(settings: DaemonSettings) -> SystemResult<()> {
             .whatever("unable to accept daemon connection")?;
         let config = config.clone();
         let policy = policy.clone();
+        let daemon_info = daemon_info.clone();
         let max_control_frame_size = settings.max_control_frame_size;
         rugix_tasks::spawn_blocking(move || {
-            if let Err(error) = handle_connection(socket, &config, &policy, max_control_frame_size)
-            {
+            if let Err(error) = handle_connection(
+                socket,
+                &config,
+                &policy,
+                &daemon_info,
+                max_control_frame_size,
+            ) {
                 warn!(error = ?error, "daemon connection failed");
             }
         })
@@ -68,6 +76,7 @@ fn handle_connection(
     mut socket: UnixStream,
     config: &Config,
     policy: &AdmissionPolicy,
+    daemon_info: &DaemonInfo,
     max_control_frame_size: usize,
 ) -> SystemResult<()> {
     let request = match read_request(&mut socket, max_control_frame_size) {
@@ -84,12 +93,18 @@ fn handle_connection(
         write_error(&mut socket, ErrorKind::Operation, format!("{error:?}"))?;
         return Ok(());
     }
-    dispatch(request, socket, config)
+    dispatch(request, socket, config, daemon_info)
 }
 
-fn dispatch(request: Request, mut socket: UnixStream, config: &Config) -> SystemResult<()> {
+fn dispatch(
+    request: Request,
+    mut socket: UnixStream,
+    config: &Config,
+    daemon_info: &DaemonInfo,
+) -> SystemResult<()> {
     let executor = LocalExecutor::new(config);
     match request {
+        Request::QueryInfo => write_output(&mut socket, daemon_info),
         Request::InstallBundle(operation) => {
             let input = match &operation.source {
                 InstallSource::Stream => BundleInput::Stream(Box::new(
@@ -267,8 +282,14 @@ mod tests {
 
         std::thread::scope(|scope| {
             let server = scope.spawn(|| {
-                handle_connection(server, &config, &policy, settings.max_control_frame_size)
-                    .unwrap();
+                handle_connection(
+                    server,
+                    &config,
+                    &policy,
+                    &settings.info(),
+                    settings.max_control_frame_size,
+                )
+                .unwrap();
             });
             write_request(&mut client, Request::ListApps(ListApps)).unwrap();
             client.shutdown(Shutdown::Write).unwrap();

@@ -409,7 +409,15 @@ pub fn main() -> SystemResult<()> {
                 .whatever("unable to write partition info to stdout")?;
             }
         },
-        Command::Daemon => crate::daemon::run()?,
+        Command::Daemon { command } => match command {
+            Some(DaemonCommand::Info { json }) => {
+                let info =
+                    DaemonClient::new(crate::daemon::load_daemon_settings()?).query_info()?;
+                rugix_cli::json::print_json(&info, *json)
+                    .whatever("unable to write daemon information to stdout")?;
+            }
+            None => crate::daemon::run()?,
+        },
         Command::Apps(cmd) => {
             warn!("edge application orchestration is experimental");
             match cmd {
@@ -918,8 +926,12 @@ pub struct Args {
 
 #[derive(Debug, Parser)]
 pub enum Command {
-    /// Run the privileged operation daemon in the foreground.
-    Daemon,
+    /// Run or inspect the privileged operation daemon.
+    Daemon {
+        /// Optional daemon inspection command.
+        #[clap(subcommand)]
+        command: Option<DaemonCommand>,
+    },
     /// Manage the persistent state of the system.
     #[clap(subcommand)]
     State(StateCommand),
@@ -950,6 +962,16 @@ pub enum Command {
     /// Unstable experimental commands.
     #[clap(subcommand)]
     Unstable(UnstableCommand),
+}
+
+#[derive(Debug, Parser)]
+pub enum DaemonCommand {
+    /// Query the running daemon's effective policy.
+    Info {
+        /// Format the output as JSON.
+        #[clap(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Parser)]

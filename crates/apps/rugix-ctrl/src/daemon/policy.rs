@@ -26,6 +26,7 @@ impl AdmissionPolicy {
 
     pub(crate) fn authorize(&self, request: &Request) -> SystemResult<()> {
         match request {
+            Request::QueryInfo => {}
             Request::InstallBundle(operation) => {
                 self.authorize_install_options(&operation.options)?;
                 if let InstallTarget::System { reboot, .. } = &operation.target {

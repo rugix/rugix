@@ -47,6 +47,7 @@ pub(crate) trait DaemonOperation: Operation {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "parameters", rename_all = "kebab-case")]
 pub(crate) enum Request {
+    QueryInfo,
     InstallBundle(InstallBundle),
     QuerySystem(QuerySystem),
     CheckComponents(CheckComponents),

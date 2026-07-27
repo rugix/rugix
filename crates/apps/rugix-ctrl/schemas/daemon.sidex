@@ -23,3 +23,23 @@ record DaemonFeatures {
     /// Allow starting, stopping, activating, removing, and garbage collecting apps.
     app_lifecycle?: bool,
 }
+
+/// Effective policy exposed by the running privileged daemon.
+record DaemonInfo {
+    /// Whether callers may bypass verification and compatibility checks.
+    dangerously_insecure: bool,
+    /// Additional privileged operation families exposed by the daemon.
+    features: DaemonFeatureInfo,
+}
+
+/// Effective state of the daemon's optional privileged operation families.
+record DaemonFeatureInfo {
+    /// Whether factory resets are enabled.
+    factory_reset: bool,
+    /// Whether committing the active system is enabled.
+    system_commit: bool,
+    /// Whether explicit system reboots are enabled.
+    system_reboot: bool,
+    /// Whether application lifecycle management is enabled.
+    app_lifecycle: bool,
+}
