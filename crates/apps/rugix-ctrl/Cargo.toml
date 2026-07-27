@@ -45,6 +45,7 @@ jiff = { version = "0.2.14", default-features = false, features = [
     "std",
     "serde",
 ] }
+libc.workspace = true
 rugix-tasks.workspace = true
 
 # HTTP and TLS: The version of `rustls` must match the version used by `ureq`.

@@ -200,15 +200,15 @@ pub enum BundleInput {
     /// The bundle source does not require a data stream.
     None,
     /// A sequential input stream, such as standard input or a socket.
-    Stream(Box<dyn Read>),
+    Stream(Box<dyn Read + Send>),
     /// A seekable input stream, such as a local file.
-    Seekable(Box<dyn ReadSeek>),
+    Seekable(Box<dyn ReadSeek + Send>),
 }
 
 /// A readable and seekable operation input.
-pub trait ReadSeek: Read + Seek {}
+pub trait ReadSeek: Read + Seek + Send {}
 
-impl<T: Read + Seek> ReadSeek for T {}
+impl<T: Read + Seek + Send> ReadSeek for T {}
 
 /// Bundle verification and compatibility options.
 #[derive(Debug, Clone, Serialize, Deserialize)]

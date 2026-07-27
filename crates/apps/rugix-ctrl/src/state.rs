@@ -1,14 +1,18 @@
 use std::fs;
+use std::path::Path;
 
 use reportify::ResultExt;
 use tracing::warn;
 
 use crate::config::state::StateConfig;
 use crate::system::SystemResult;
+use crate::utils::clear_flag;
+use crate::utils::set_flag_data;
 
 /// The default directory with the configurations for state management.
 pub const STATE_CONFIG_DIR: &str = "/etc/rugix/state";
 pub const STATE_CONFIG_PATH: &str = "/etc/rugix/state.toml";
+const STATE_RUNTIME_DIR: &str = "/run/rugix/state/.rugix";
 
 /// Loads the state configuration from the provided directory.
 pub fn load_state_config() -> SystemResult<StateConfig> {
@@ -33,6 +37,25 @@ pub fn load_state_config() -> SystemResult<StateConfig> {
         }
     }
     Ok(combined)
+}
+
+pub(crate) fn create_state_runtime_directory() -> SystemResult<()> {
+    fs::create_dir_all(STATE_RUNTIME_DIR).whatever("unable to create Rugix state runtime directory")
+}
+
+pub(crate) fn set_state_flag(name: &str, value: Option<&str>) -> SystemResult<()> {
+    set_flag_data(
+        Path::new(STATE_RUNTIME_DIR).join(name),
+        value.unwrap_or_default().as_bytes(),
+    )
+    .whatever("unable to write state flag")
+    .field("name", name.to_owned())
+}
+
+pub(crate) fn clear_state_flag(name: &str) -> SystemResult<()> {
+    clear_flag(Path::new(STATE_RUNTIME_DIR).join(name))
+        .whatever("unable to clear state flag")
+        .field("name", name.to_owned())
 }
 
 fn merge(target: &mut StateConfig, other: StateConfig) {

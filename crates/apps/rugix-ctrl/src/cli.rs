@@ -19,11 +19,9 @@ use rugix_common::disk::blkdev::find_block_device;
 use rugix_common::disk::blkdev::BlockDevice;
 use rugix_common::mount::is_mount_point;
 use rugix_common::path::ValidatedRelativePath;
-use rugix_hooks::HooksLoader;
 use si_crypto_hashes::HashAlgorithm;
 use si_crypto_hashes::HashDigest;
 use tracing::debug;
-use tracing::error;
 use tracing::info;
 use tracing::warn;
 
@@ -42,13 +40,21 @@ use reportify::bail;
 use reportify::whatever;
 use reportify::ResultExt;
 use rugix_common::stream_hasher::StreamHasher;
-use xscript::Vars;
 
 use crate::config::output::BlockDeviceInfo;
-use crate::config::output::ComponentsCheckOutput;
+use crate::daemon::client::DaemonClient;
+use crate::daemon::DaemonOperation;
 use crate::http_source::RetryConfig;
+use crate::operations::apps::ActivateApp;
+use crate::operations::apps::AppLifecycleEvent;
+use crate::operations::apps::DeactivateApp;
+use crate::operations::apps::GarbageCollectApps;
 use crate::operations::apps::ListApps;
 use crate::operations::apps::QueryApp;
+use crate::operations::apps::RemoveApp;
+use crate::operations::apps::RollbackApp;
+use crate::operations::apps::StartApp;
+use crate::operations::apps::StopApp;
 use crate::operations::install::BundleInput;
 use crate::operations::install::BundleInstallEvent;
 use crate::operations::install::BundleInstallOptions;
@@ -58,89 +64,51 @@ use crate::operations::install::InstallTarget;
 use crate::operations::install::ProgressCursors;
 use crate::operations::install::SystemRebootMode;
 use crate::operations::local::LocalExecutor;
+use crate::operations::state::FactoryReset;
 use crate::operations::system::CheckComponents;
+use crate::operations::system::CommitSystem;
 use crate::operations::system::QuerySystem;
+use crate::operations::system::RebootSystem;
 use crate::operations::EventSink;
 use crate::operations::Executor;
 use crate::operations::NoEvent;
 use crate::operations::Operation;
 use crate::payload_db::{self};
+use crate::state::clear_state_flag;
+use crate::state::create_state_runtime_directory;
+use crate::state::set_state_flag;
 use crate::utils::clear_flag;
 use crate::utils::lock_update;
 use crate::utils::reboot;
 use crate::utils::set_flag;
-use crate::utils::set_flag_data;
 use crate::utils::DEFERRED_SPARE_REBOOT_FLAG;
-
-fn create_rugix_state_directory() -> SystemResult<()> {
-    fs::create_dir_all("/run/rugix/state/.rugix")
-        .whatever("unable to create `/run/rugix/state/.rugix`")
-}
-
-fn set_rugix_state_flag(name: &str, value: Option<&str>) -> SystemResult<()> {
-    set_flag_data(
-        Path::new("/run/rugix/state/.rugix").join(name),
-        value.unwrap_or_default().as_bytes(),
-    )
-    .whatever("unable to write state flag")
-    .field("name", name.to_owned())
-}
-
-fn clear_rugix_state_flag(name: &str) -> SystemResult<()> {
-    let path = Path::new("/run/rugix/state/.rugix").join(name);
-    clear_flag(&path)
-        .whatever("unable to clear state flag")
-        .field("name", name.to_owned())
-}
 
 pub fn main() -> SystemResult<()> {
     rugix_cli::CliBuilder::new().init();
 
     let args = Args::parse();
-    let config = load_ctrl_config()?;
-
     match &args.command {
         Command::State(state_cmd) => match state_cmd {
             StateCommand::Reset {
                 backup,
                 backup_name,
             } => {
-                if backup_name.is_some() && !*backup {
-                    warn!("ignoring `--backup-name` option because `--backup` is not set");
-                }
-
-                let reset_hooks = HooksLoader::default()
-                    .load_hooks("state-reset")
-                    .whatever("unable to load `state-reset` hooks")?;
-                reset_hooks
-                    .run_hooks("prepare", Vars::new(), &Default::default())
-                    .whatever("unable to run `state-reset/prepare` hooks")?;
-                create_rugix_state_directory()?;
-                if *backup {
-                    let backup_name = backup_name.clone().unwrap_or_else(|| {
-                        jiff::Timestamp::now()
-                            .strftime("default.%Y%m%d%H%M%S")
-                            .to_string()
-                    });
-                    let validated_backup_name = ValidatedRelativePath::new(backup_name)
-                        .whatever("invalid state backup name")?;
-                    if !validated_backup_name.is_single_component() {
-                        bail!("state backup name must contain exactly one path component");
-                    }
-                    set_rugix_state_flag("reset-state", Some(validated_backup_name.as_str()))?;
-                } else {
-                    set_rugix_state_flag("reset-state", None)?;
-                };
-                reboot()?;
+                execute_operation(
+                    FactoryReset {
+                        backup: *backup,
+                        backup_name: backup_name.clone(),
+                    },
+                    (),
+                )?;
             }
             StateCommand::Overlay(overlay_cmd) => match overlay_cmd {
                 OverlayCommand::ForcePersist { persist } => match persist {
                     Boolean::True => {
-                        create_rugix_state_directory()?;
-                        set_rugix_state_flag("force-persist-overlay", None)?;
+                        create_state_runtime_directory()?;
+                        set_state_flag("force-persist-overlay", None)?;
                     }
                     Boolean::False => {
-                        clear_rugix_state_flag("force-persist-overlay")?;
+                        clear_state_flag("force-persist-overlay")?;
                     }
                 },
             },
@@ -187,44 +155,20 @@ pub fn main() -> SystemResult<()> {
                         skip_compatibility_check: *skip_compatibility_check,
                     },
                 };
-                execute_local_operation(LocalExecutor::new(&config), operation, input)?;
+                execute_operation(operation, input)?;
             }
         },
         Command::System(sys_cmd) => match sys_cmd {
             SystemCommand::Info { json } => {
-                let output = execute_local_operation(LocalExecutor::new(&config), QuerySystem, ())?;
+                let output = execute_operation(QuerySystem, ())?;
                 rugix_cli::json::print_json(&output, *json)
                     .whatever("unable to write system info to stdout")?;
             }
             SystemCommand::Commit => {
-                let system = System::initialize()?;
-
-                if system.needs_commit()? {
-                    let hooks = HooksLoader::default()
-                        .load_hooks("system-commit")
-                        .whatever("unable to load `system-commit` hooks")?;
-                    hooks
-                        .run_hooks("pre-commit", Vars::new(), &Default::default())
-                        .whatever("unable to run `pre-commit` hooks")?;
-                    system.commit()?;
-                    hooks
-                        .run_hooks("post-commit", Vars::new(), &Default::default())
-                        .whatever("unable to run `post-commit` hooks")?;
-                } else {
-                    info!("active boot group is already the default");
-                }
+                execute_operation(CommitSystem, ())?;
             }
             SystemCommand::Reboot { spare } => {
-                let system = System::initialize()?;
-                if *spare {
-                    if let Some((spare, _)) = system.spare_entry()? {
-                        system
-                            .boot_flow()
-                            .set_try_next(&system, spare)
-                            .whatever("unable to set next boot group")?;
-                    }
-                }
-                system.reboot()?;
+                execute_operation(RebootSystem { spare: *spare }, ())?;
             }
         },
         Command::Components(cmd) => match cmd {
@@ -241,14 +185,12 @@ pub fn main() -> SystemResult<()> {
                     .whatever("unable to write component info to stdout")?;
             }
             ComponentsCommand::Check => {
-                let check =
-                    execute_local_operation(LocalExecutor::new(&config), CheckComponents, ())
-                        .and_then(|output| {
-                            let consistent = output.consistent;
-                            rugix_cli::json::print_json(&output, false)
-                                .whatever("unable to write component check report to stdout")?;
-                            Ok(consistent)
-                        });
+                let check = execute_operation(CheckComponents, ()).and_then(|output| {
+                    let consistent = output.consistent;
+                    rugix_cli::json::print_json(&output, false)
+                        .whatever("unable to write component check report to stdout")?;
+                    Ok(consistent)
+                });
                 match check {
                     Ok(true) => {}
                     Ok(false) => std::process::exit(1),
@@ -467,12 +409,9 @@ pub fn main() -> SystemResult<()> {
                 .whatever("unable to write partition info to stdout")?;
             }
         },
+        Command::Daemon => crate::daemon::run()?,
         Command::Apps(cmd) => {
             warn!("edge application orchestration is experimental");
-            let apps_config =
-                crate::apps::config::load_apps_config().whatever("unable to load apps config")?;
-            let apps_dir = crate::apps::config::apps_dir().to_owned();
-            let manager = crate::apps::manager::AppManager::new(apps_dir, apps_config);
             match cmd {
                 AppsCommand::Install {
                     bundle,
@@ -507,27 +446,15 @@ pub fn main() -> SystemResult<()> {
                             skip_compatibility_check: *skip_compatibility_check,
                         },
                     };
-                    execute_local_operation(
-                        LocalExecutor::new(&config).with_app_manager(&manager),
-                        operation,
-                        input,
-                    )?;
+                    execute_operation(operation, input)?;
                 }
                 AppsCommand::List => {
-                    let entries = execute_local_operation(
-                        LocalExecutor::new(&config).with_app_manager(&manager),
-                        ListApps,
-                        (),
-                    )?;
+                    let entries = execute_operation(ListApps, ())?;
                     rugix_cli::json::print_json(&entries, false)
                         .whatever("unable to write apps list to stdout")?;
                 }
                 AppsCommand::Info { app } => {
-                    let output = execute_local_operation(
-                        LocalExecutor::new(&config).with_app_manager(&manager),
-                        QueryApp { name: app.clone() },
-                        (),
-                    )?;
+                    let output = execute_operation(QueryApp { name: app.clone() }, ())?;
                     rugix_cli::json::print_json(&output, false)
                         .whatever("unable to write app info to stdout")?;
                 }
@@ -536,91 +463,60 @@ pub fn main() -> SystemResult<()> {
                     generation,
                     skip_compatibility_check,
                 } => {
-                    let lock = manager.lock_app(app).whatever("unable to lock app")?;
-                    let gen = match generation {
-                        Some(n) => *n,
-                        None => {
-                            let Some(n) = manager
-                                .last_activated_generation(app)
-                                .whatever("unable to find last activated generation")?
-                            else {
-                                bail!("no previously activated generation found for {app}");
-                            };
-                            n
-                        }
-                    };
-                    if !*skip_compatibility_check {
-                        check_app_generation_compatibility(&manager, app, gen)?;
-                    } else {
-                        warn!("skipping app compatibility check");
-                    }
-                    let activation = manager.activate_generation(&lock, app, gen);
-                    let state = manager
-                        .read_state(app)
-                        .whatever("unable to read activation result")?;
-                    let outcome = app_activation_outcome(gen, activation.is_ok(), &state);
-                    report_app_activation_result(app, gen, outcome);
-                    activation.whatever("unable to activate generation")?;
+                    execute_operation(
+                        ActivateApp {
+                            name: app.clone(),
+                            generation: *generation,
+                            skip_compatibility_check: *skip_compatibility_check,
+                        },
+                        (),
+                    )?;
                 }
                 AppsCommand::Deactivate {
                     app,
                     skip_compatibility_check,
                 } => {
-                    let lock = manager.lock_app(app).whatever("unable to lock app")?;
-                    if !*skip_compatibility_check {
-                        check_app_removal_compatibility(&manager, app)?;
-                    } else {
-                        warn!("skipping app compatibility check");
-                    }
-                    manager
-                        .deactivate(&lock, app)
-                        .whatever("unable to deactivate app")?;
+                    execute_operation(
+                        DeactivateApp {
+                            name: app.clone(),
+                            skip_compatibility_check: *skip_compatibility_check,
+                        },
+                        (),
+                    )?;
                 }
                 AppsCommand::Start { app } => {
-                    let lock = manager.lock_app(app).whatever("unable to lock app")?;
-                    manager
-                        .start_app(&lock, app)
-                        .whatever("unable to start app workload")?;
+                    execute_operation(StartApp { name: app.clone() }, ())?;
                 }
                 AppsCommand::Stop { app } => {
-                    let lock = manager.lock_app(app).whatever("unable to lock app")?;
-                    manager
-                        .stop_app(&lock, app)
-                        .whatever("unable to stop app workload")?;
+                    execute_operation(StopApp { name: app.clone() }, ())?;
                 }
                 AppsCommand::Rollback {
                     app,
                     skip_compatibility_check,
                 } => {
-                    let lock = manager.lock_app(app).whatever("unable to lock app")?;
-                    if !*skip_compatibility_check {
-                        let generation = manager
-                            .rollback_target_generation(app)
-                            .whatever("unable to determine rollback target generation")?;
-                        check_app_generation_compatibility(&manager, app, generation)?;
-                    } else {
-                        warn!("skipping app compatibility check");
-                    }
-                    manager
-                        .rollback(&lock, app)
-                        .whatever("unable to rollback app")?;
+                    execute_operation(
+                        RollbackApp {
+                            name: app.clone(),
+                            skip_compatibility_check: *skip_compatibility_check,
+                        },
+                        (),
+                    )?;
                 }
                 AppsCommand::Remove {
                     app,
                     skip_compatibility_check,
                 } => {
-                    let lock = manager.lock_app(app).whatever("unable to lock app")?;
-                    if !*skip_compatibility_check {
-                        check_app_removal_compatibility(&manager, app)?;
-                    } else {
-                        warn!("skipping app compatibility check");
-                    }
-                    manager
-                        .remove_app(&lock, app)
-                        .whatever("unable to remove app")?;
+                    execute_operation(
+                        RemoveApp {
+                            name: app.clone(),
+                            skip_compatibility_check: *skip_compatibility_check,
+                        },
+                        (),
+                    )?;
                 }
                 AppsCommand::Generations { app } => {
                     use crate::config::output::GenerationInfoOutput;
+                    let manager = load_cli_app_manager()?;
                     let generations = manager
                         .list_generations(app)
                         .whatever("unable to list generations")?;
@@ -643,23 +539,18 @@ pub fn main() -> SystemResult<()> {
                         .whatever("unable to write generations to stdout")?;
                 }
                 AppsCommand::Gc { app, keep } => {
-                    use crate::config::output::AppGcAppOutput;
-                    let app_names = match app {
-                        Some(name) => vec![name.clone()],
-                        None => manager.list_apps().whatever("unable to list apps")?,
-                    };
-                    let mut results = indexmap::IndexMap::new();
-                    for name in &app_names {
-                        let lock = manager.lock_app(name).whatever("unable to lock app")?;
-                        let removed = manager
-                            .gc(&lock, name, *keep)
-                            .whatever("unable to garbage collect")?;
-                        results.insert(name.clone(), AppGcAppOutput::new(removed));
-                    }
+                    let results = execute_operation(
+                        GarbageCollectApps {
+                            name: app.clone(),
+                            keep: *keep,
+                        },
+                        (),
+                    )?;
                     rugix_cli::json::print_json(&results, false)
                         .whatever("unable to write gc output to stdout")?;
                 }
                 AppsCommand::Recover => {
+                    let manager = load_cli_app_manager()?;
                     manager.recover_all().whatever("recovery failed")?;
                 }
                 AppsCommand::CreateIndex {
@@ -669,6 +560,7 @@ pub fn main() -> SystemResult<()> {
                     path,
                     generation,
                 } => {
+                    let manager = load_cli_app_manager()?;
                     let gen_number = match generation {
                         Some(n) => *n,
                         None => manager
@@ -706,14 +598,17 @@ pub fn main() -> SystemResult<()> {
                         )?;
                     }
                 }
-                AppsCommand::ServiceManager(sm_cmd) => match sm_cmd {
-                    AppsServiceManagerCommand::Systemd(systemd_cmd) => match systemd_cmd {
-                        AppsSystemdCommand::RestoreUnits => {
-                            crate::apps::systemd::restore::restore_units(&manager)
-                                .whatever("failed to restore app units")?;
-                        }
-                    },
-                },
+                AppsCommand::ServiceManager(sm_cmd) => {
+                    let manager = load_cli_app_manager()?;
+                    match sm_cmd {
+                        AppsServiceManagerCommand::Systemd(systemd_cmd) => match systemd_cmd {
+                            AppsSystemdCommand::RestoreUnits => {
+                                crate::apps::systemd::restore::restore_units(&manager)
+                                    .whatever("failed to restore app units")?;
+                            }
+                        },
+                    }
+                }
             }
         }
     }
@@ -754,17 +649,31 @@ fn read_explicit_root_certificate(path: Option<&Path>) -> SystemResult<Option<Ve
         .transpose()
 }
 
-fn execute_local_operation<'config, O>(
-    executor: LocalExecutor<'config>,
-    operation: O,
-    input: O::Input,
-) -> SystemResult<O::Output>
+fn load_cli_app_manager() -> SystemResult<crate::apps::manager::AppManager> {
+    let config = crate::apps::config::load_apps_config().whatever("unable to load apps config")?;
+    Ok(crate::apps::manager::AppManager::new(
+        crate::apps::config::apps_dir().to_owned(),
+        config,
+    ))
+}
+
+fn execute_operation<O>(operation: O, input: O::Input) -> SystemResult<O::Output>
 where
-    O: Operation,
+    O: Operation + DaemonOperation,
+    O::Input: Send,
     CliOperationEventSink: EventSink<O::Event>,
 {
     let mut events = CliOperationEventSink::default();
-    executor.execute(operation, input, &mut events)
+    if crate::daemon::is_privileged() {
+        let config = load_ctrl_config()?;
+        LocalExecutor::new(&config).execute(operation, input, &mut events)
+    } else {
+        DaemonClient::new(crate::daemon::load_daemon_settings()?).execute(
+            operation,
+            input,
+            &mut events,
+        )
+    }
 }
 
 fn system_reboot_mode(reboot: &UpdateRebootType) -> SystemRebootMode {
@@ -940,6 +849,41 @@ impl EventSink<BundleInstallEvent> for CliOperationEventSink {
     }
 }
 
+impl EventSink<AppLifecycleEvent> for CliOperationEventSink {
+    fn emit(&mut self, event: AppLifecycleEvent) {
+        match event {
+            AppLifecycleEvent::ActivationCompleted {
+                app,
+                generation,
+                outcome,
+            } => {
+                if !rugix_cli::stdout_is_piped() {
+                    return;
+                }
+                let event = Event::AppActivationResult(AppActivationResultEvent {
+                    app,
+                    generation,
+                    outcome,
+                });
+                let result = serde_json::to_vec(&event)
+                    .map_err(io::Error::other)
+                    .and_then(|mut bytes| {
+                        bytes.push(b'\n');
+                        std::io::stdout().write_all(&bytes)
+                    });
+                if let Err(error) = result {
+                    warn!(%error, "unable to emit app activation JSON event");
+                }
+            }
+            AppLifecycleEvent::CompatibilityCheckFailed { report } => {
+                if let Err(error) = rugix_cli::json::print_json(&report, false) {
+                    warn!(%error, "unable to write component compatibility report");
+                }
+            }
+        }
+    }
+}
+
 fn operation_event_as_cli_event(event: &BundleInstallEvent) -> Option<Event> {
     match event {
         BundleInstallEvent::Started => None,
@@ -958,91 +902,6 @@ fn operation_event_as_cli_event(event: &BundleInstallEvent) -> Option<Event> {
     }
 }
 
-fn app_activation_outcome(
-    requested: u64,
-    succeeded: bool,
-    state: &crate::config::apps::AppState,
-) -> &'static str {
-    if succeeded {
-        return "activated";
-    }
-    match state {
-        crate::config::apps::AppState::Active(active) if active.generation != requested => {
-            "rolled-back"
-        }
-        crate::config::apps::AppState::Error(error) if error.from.is_some() => "rollback-failed",
-        _ => "failed",
-    }
-}
-
-fn report_app_activation_result(app: &str, generation: u64, outcome: &str) {
-    if outcome == "activated" {
-        info!(app, generation, outcome, "app activation completed");
-    } else {
-        error!(app, generation, outcome, "app activation did not complete");
-    }
-    if !rugix_cli::stdout_is_piped() {
-        return;
-    }
-    let event = Event::AppActivationResult(AppActivationResultEvent {
-        app: app.to_owned(),
-        generation,
-        outcome: outcome.to_owned(),
-    });
-    let result = serde_json::to_vec(&event)
-        .map_err(io::Error::other)
-        .and_then(|mut bytes| {
-            bytes.push(b'\n');
-            std::io::stdout().write_all(&bytes)
-        });
-    if let Err(error) = result {
-        warn!(%error, "unable to emit app activation JSON event");
-    }
-}
-
-fn check_app_generation_compatibility(
-    app_manager: &crate::apps::manager::AppManager,
-    app: &str,
-    generation: u64,
-) -> SystemResult<()> {
-    let installed = crate::components::InstalledComponents::load()
-        .whatever("unable to load installed components")?;
-    let component_root = app_manager
-        .generation_dir(app, generation)
-        .whatever("invalid app name")?
-        .join(".rugix/components");
-    let output = installed
-        .check_app_generation(app, generation, component_root)
-        .whatever("unable to check app generation compatibility")?;
-    require_compatible_components(output)
-}
-
-fn check_app_removal_compatibility(
-    app_manager: &crate::apps::manager::AppManager,
-    app: &str,
-) -> SystemResult<()> {
-    if app_manager
-        .current_generation(app)
-        .whatever("unable to read app state")?
-        .is_none()
-    {
-        return Ok(());
-    }
-    let installed = crate::components::InstalledComponents::load()
-        .whatever("unable to load installed components")?;
-    let output = installed.check_app_removal(app);
-    require_compatible_components(output)
-}
-
-fn require_compatible_components(output: ComponentsCheckOutput) -> SystemResult<()> {
-    if output.consistent {
-        return Ok(());
-    }
-    rugix_cli::json::print_json(&output, false)
-        .whatever("unable to write component compatibility report to stdout")?;
-    bail!("component compatibility check failed");
-}
-
 #[derive(Debug, Clone, ValueEnum)]
 pub enum Boolean {
     True,
@@ -1059,6 +918,8 @@ pub struct Args {
 
 #[derive(Debug, Parser)]
 pub enum Command {
+    /// Run the privileged operation daemon in the foreground.
+    Daemon,
     /// Manage the persistent state of the system.
     #[clap(subcommand)]
     State(StateCommand),
@@ -1467,9 +1328,6 @@ fn run_data_wipe(yes: bool, no_reboot: bool) -> SystemResult<()> {
 mod tests {
     use indexmap::IndexMap;
 
-    use crate::config::apps::AppState;
-    use crate::config::apps::AppStateActive;
-    use crate::config::apps::AppStateError;
     use crate::config::system::BootGroupConfig;
     use crate::config::system::FileSlotConfig;
     use crate::config::system::SlotConfig;
@@ -1477,7 +1335,6 @@ mod tests {
     use crate::system::boot_groups::BootGroups;
     use crate::system::slots::SystemSlots;
 
-    use super::app_activation_outcome;
     use super::operation_event_as_cli_event;
     use super::resolve_mark_good_group;
 
@@ -1526,33 +1383,5 @@ mod tests {
         assert_eq!(json["event"], "CompatibilityCheckSkipped");
         assert_eq!(json["scope"], "system");
         assert_eq!(json["reason"], "explicit bypass");
-    }
-
-    #[test]
-    fn app_activation_outcomes_distinguish_rollback_states() {
-        assert_eq!(
-            app_activation_outcome(2, true, &AppState::Active(AppStateActive::new(2))),
-            "activated"
-        );
-        assert_eq!(
-            app_activation_outcome(2, false, &AppState::Active(AppStateActive::new(1))),
-            "rolled-back"
-        );
-        assert_eq!(
-            app_activation_outcome(
-                2,
-                false,
-                &AppState::Error(AppStateError::new(2, "failed".to_owned()).with_from(Some(1))),
-            ),
-            "rollback-failed"
-        );
-        assert_eq!(
-            app_activation_outcome(
-                2,
-                false,
-                &AppState::Error(AppStateError::new(2, "failed".to_owned())),
-            ),
-            "failed"
-        );
     }
 }

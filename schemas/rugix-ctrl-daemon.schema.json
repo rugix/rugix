@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.daemon.DaemonConfig",
+  "type": "object",
+  "description": "Configuration for the privileged Rugix Ctrl daemon.",
+  "properties": {
+    "socket-path": {
+      "type": "string"
+    },
+    "max-control-frame-size": {
+      "type": "integer",
+      "format": "uint64"
+    },
+    "dangerously-insecure": {
+      "type": "boolean"
+    },
+    "features": {
+      "$ref": "#/$defs/rugix_ctrl.daemon.DaemonFeatures"
+    }
+  },
+  "required": [],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "rugix_ctrl.daemon.DaemonFeatures": {
+      "$id": "rugix_ctrl.daemon.DaemonFeatures",
+      "type": "object",
+      "description": "Privileged operation families that require explicit daemon opt-in.",
+      "properties": {
+        "factory-reset": {
+          "type": "boolean"
+        },
+        "system-commit": {
+          "type": "boolean"
+        },
+        "system-reboot": {
+          "type": "boolean"
+        },
+        "app-lifecycle": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "unevaluatedProperties": false
+    }
+  }
+}

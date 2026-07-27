@@ -1469,6 +1469,7 @@ dependencies = [
  "indexmap",
  "indoc",
  "jiff",
+ "libc",
  "nix 0.29.0",
  "reportify",
  "rugix-bundle",

@@ -14,6 +14,7 @@ use crate::system::SystemResult;
 pub mod apps;
 pub mod install;
 pub mod local;
+pub mod state;
 pub mod system;
 
 /// A Rugix Ctrl operation with statically known input, event, and output types.

@@ -1,0 +1,25 @@
+/// Configuration for the privileged Rugix Ctrl daemon.
+#[json(rename_all = "kebab-case")]
+record DaemonConfig {
+    /// Path of the daemon's Unix socket.
+    socket_path?: string,
+    /// Maximum size of a serialized control frame in bytes.
+    max_control_frame_size?: u64,
+    /// Allow installation options that bypass verification or compatibility checks.
+    dangerously_insecure?: bool,
+    /// Additional privileged operation families exposed by the daemon.
+    features?: DaemonFeatures,
+}
+
+/// Privileged operation families that require explicit daemon opt-in.
+#[json(rename_all = "kebab-case")]
+record DaemonFeatures {
+    /// Allow factory resets.
+    factory_reset?: bool,
+    /// Allow committing the active system.
+    system_commit?: bool,
+    /// Allow rebooting the system.
+    system_reboot?: bool,
+    /// Allow starting, stopping, activating, removing, and garbage collecting apps.
+    app_lifecycle?: bool,
+}

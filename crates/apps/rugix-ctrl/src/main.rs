@@ -3,6 +3,7 @@ pub mod boot;
 pub mod cli;
 pub mod components;
 pub mod config;
+pub mod daemon;
 pub mod http;
 pub mod http_source;
 pub mod init;

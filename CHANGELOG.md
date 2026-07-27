@@ -19,6 +19,7 @@ Security and Reliability:
 
 Rugix Ctrl:
 
+- Add an internal Unix-socket daemon mode that lets unprivileged Rugix Ctrl clients execute typed status, installation, system, and application operations through a privileged process. Destructive system and application lifecycle operation families require explicit daemon feature flags.
 - Detect the active boot group through transitive backing devices for device-mapper system roots.
 - Log Rugix init errors that were previously ignored or only printed to stderr.
 - Add opt-in `rugix.init.shell_on_error[=<seconds>]` kernel cmdline option for opening a debug shell after init errors. This is intentionally disabled by default to avoid exposing a root shell to someone with console access.
