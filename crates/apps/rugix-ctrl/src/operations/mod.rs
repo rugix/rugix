@@ -12,7 +12,7 @@ use self::local::ExecutionContext;
 use crate::system::SystemResult;
 
 pub mod apps;
-pub mod bundle;
+pub mod install;
 pub mod local;
 pub mod system;
 
