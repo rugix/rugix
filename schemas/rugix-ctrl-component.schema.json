@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.component.ComponentDeclaration",
+  "type": "object",
+  "description": "A component participating in compatibility checks.",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "provides": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rugix_ctrl.component.CapabilityDeclaration"
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rugix_ctrl.component.ClaimDeclaration"
+      }
+    },
+    "requires": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rugix_ctrl.component.CapabilitySelectorDeclaration"
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rugix_ctrl.component.CapabilitySelectorDeclaration"
+      }
+    }
+  },
+  "required": [
+    "id"
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "rugix_ctrl.component.CapabilityDeclaration": {
+      "$id": "rugix_ctrl.component.CapabilityDeclaration",
+      "type": "object",
+      "description": "A capability provided by a component.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.component.CapabilitySelectorDeclaration": {
+      "$id": "rugix_ctrl.component.CapabilitySelectorDeclaration",
+      "type": "object",
+      "description": "A selector matching a provided capability.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.component.ClaimDeclaration": {
+      "$id": "rugix_ctrl.component.ClaimDeclaration",
+      "type": "object",
+      "description": "An exclusive resource claim.",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

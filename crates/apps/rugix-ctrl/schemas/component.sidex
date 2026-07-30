@@ -1,0 +1,43 @@
+//! Rugix component declaration format.
+
+/// A component participating in compatibility checks.
+record ComponentDeclaration {
+    /// Component ID.
+    id: string,
+    /// Component version, if any.
+    version?: string,
+    /// Capabilities provided by the component.
+    provides?: [CapabilityDeclaration],
+    /// Exclusive resource claims made by the component.
+    claims?: [ClaimDeclaration],
+    /// Capability selectors that must match.
+    requires?: [CapabilitySelectorDeclaration],
+    /// Capability selectors that must not match.
+    conflicts?: [CapabilitySelectorDeclaration],
+}
+
+/// An exclusive resource claim.
+record ClaimDeclaration {
+    /// Claim ID.
+    id: string,
+}
+
+/// A capability provided by a component.
+record CapabilityDeclaration {
+    /// Capability ID.
+    id: string,
+    /// Capability version, if any.
+    version?: string,
+    /// Capability value, if any.
+    value?: string,
+}
+
+/// A selector matching a provided capability.
+record CapabilitySelectorDeclaration {
+    /// Capability ID.
+    id: string,
+    /// Version requirement, if any.
+    version?: string,
+    /// Exact value to match, if any.
+    value?: string,
+}

@@ -1,3 +1,8 @@
+//! Discovery, evaluation, and reporting for installed compatibility components.
+//!
+//! This module loads declarations from system, local, runtime, application, and
+//! bundle sources and evaluates candidate component sets for lifecycle operations.
+
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -19,6 +24,7 @@ use rugix_component_set::ComponentSet;
 use rugix_component_set::Problem;
 
 use crate::apps::manager::AppManager;
+use crate::component_format::parse_component;
 use crate::config::output::CapabilityOutput;
 use crate::config::output::CapabilitySelectorOutput;
 use crate::config::output::ClaimOutput;
@@ -668,7 +674,7 @@ fn read_component_file(path: &Path) -> SystemResult<Component> {
     let content = fs::read_to_string(path)
         .whatever("unable to read component file")
         .field_debug("path", path)?;
-    parse_component_content(path, &content)
+    parse_component(path, &content)
 }
 
 fn read_bundle_component_file(
@@ -678,23 +684,7 @@ fn read_bundle_component_file(
     let content = str::from_utf8(&file.data.raw)
         .whatever("bundle component file is not UTF-8")
         .field_debug("path", &file.path)?;
-    parse_component_content(Path::new(&file.path), content).field_debug("path", &file.path)
-}
-
-fn parse_component_content(path: &Path, content: &str) -> SystemResult<Component> {
-    let extension = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or_default();
-    if extension.eq_ignore_ascii_case("json") {
-        serde_json::from_str(content)
-            .whatever("unable to parse JSON component file")
-            .field_debug("path", path)
-    } else {
-        toml::from_str(content)
-            .whatever("unable to parse TOML component file")
-            .field_debug("path", path)
-    }
+    parse_component(Path::new(&file.path), content).field_debug("path", &file.path)
 }
 
 fn validate_bundle_component_path(path: &str) -> SystemResult<()> {

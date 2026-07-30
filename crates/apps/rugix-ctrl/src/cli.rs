@@ -941,7 +941,7 @@ pub enum Command {
     /// Manage the system.
     #[clap(subcommand)]
     System(SystemCommand),
-    /// Inspect compatibility components and constraints.
+    /// Inspect compatibility components and constraints (experimental).
     #[clap(subcommand)]
     Components(ComponentsCommand),
     /// Manage the update slots of the system.

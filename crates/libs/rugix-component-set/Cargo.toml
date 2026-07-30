@@ -10,7 +10,6 @@ homepage.workspace = true
 
 [dependencies]
 anyver.workspace = true
-serde.workspace = true
 
 [lints]
 workspace = true

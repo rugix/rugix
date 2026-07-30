@@ -26,7 +26,7 @@ Rugix Ctrl:
 - Add `overlay-fallback: in-memory` state configuration to retry root overlay setup with an in-memory overlay when the configured overlay fails.
 - Add boot flow capability reporting for userspace failure recovery and fall back to starting the underlying init on committed systems when Rugix init fails and the boot flow cannot recover userspace failures.
 - Write Docker Compose activation diagnostics, including service status and recent logs, when bringing up a Rugix App generation fails.
-- Add component compatibility metadata discovery and `rugix-ctrl components` inspection commands for checking installed system, local, runtime, app, and synthetic host components.
+- Add experimental component compatibility metadata discovery and `rugix-ctrl components` inspection commands for checking installed system, local, runtime, app, and synthetic host components.
 - Check component compatibility before installing system updates, installing apps, or removing apps. Pass `--skip-compatibility-check` to bypass these checks.
 
 Rugix Bundler:

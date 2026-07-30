@@ -1,3 +1,8 @@
+//! Rugix Ctrl device lifecycle management application.
+//!
+//! The binary runs early-boot initialization when invoked as the init process
+//! and otherwise dispatches the Rugix Ctrl command-line interface.
+
 pub mod apps;
 pub mod boot;
 pub mod cli;
@@ -29,3 +34,5 @@ pub fn main() {
         std::process::exit(1);
     }
 }
+
+mod component_format;

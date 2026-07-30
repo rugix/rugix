@@ -4,6 +4,9 @@
 //! compatible. A component may represent an operating system image, an app, a
 //! runtime, a hardware description, or any other participant in the system.
 //!
+//! The component compatibility model is experimental and may change based on
+//! practical deployment experience.
+//!
 //! Compatibility is modeled in terms of capabilities and exclusive claims. Each
 //! component contributes a union of provided capabilities, including an implicit
 //! capability for its own component ID and version. Components can also declare
@@ -17,10 +20,6 @@
 //! metadata comes from. Callers can use it to validate a complete component set,
 //! or to ask whether installing, removing, or replacing components would leave
 //! the resulting set consistent.
-//!
-//! Serde support uses string representations for component and capability IDs,
-//! versions, version requirements, and comparator operators. Optional fields and
-//! empty selector lists are omitted when serializing component metadata.
 
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
@@ -30,22 +29,15 @@ use std::fmt;
 pub use anyver::ParseError as VersionParseError;
 pub use anyver::Version;
 pub use anyver::VersionReq;
-use serde::Deserialize;
-use serde::Serialize;
 
 /// A component participating in a compatibility check.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
     id: ComponentId,
-    #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<Version>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     provides: Vec<Capability>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     claims: Vec<Claim>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     requires: Vec<CapabilitySelector>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     conflicts: Vec<CapabilitySelector>,
 }
 
@@ -137,7 +129,7 @@ impl Component {
 }
 
 /// An exclusive resource claim made by a component.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Claim {
     id: ClaimId,
 }
@@ -161,12 +153,10 @@ impl fmt::Display for Claim {
 }
 
 /// A capability provided by a component.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capability {
     id: CapabilityId,
-    #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<Version>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     value: Option<String>,
 }
 
@@ -235,12 +225,10 @@ impl fmt::Display for Capability {
 }
 
 /// A selector matching provided capabilities.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilitySelector {
     id: CapabilityId,
-    #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<VersionReq>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     value: Option<String>,
 }
 
@@ -330,7 +318,7 @@ impl fmt::Display for CapabilitySelector {
 }
 
 /// A capability with the component that provided it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProvidedCapability {
     /// Component ID providing the capability.
     pub provider: ComponentId,
@@ -339,9 +327,8 @@ pub struct ProvidedCapability {
 }
 
 /// A component set.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ComponentSet {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     components: Vec<Component>,
 }
 
@@ -487,9 +474,8 @@ impl ComponentSet {
 }
 
 /// Consistency check result.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConsistencyReport {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     problems: Vec<Problem>,
 }
 
@@ -511,8 +497,7 @@ impl ConsistencyReport {
 }
 
 /// Internal consistency problem.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
     /// More than one component uses the same component ID.
     DuplicateComponent {
@@ -588,8 +573,7 @@ impl fmt::Display for Problem {
 }
 
 /// Identifier of a component.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ComponentId(String);
 
 impl ComponentId {
@@ -640,8 +624,7 @@ impl fmt::Display for ComponentId {
 }
 
 /// Identifier of a claim.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ClaimId(String);
 
 impl ClaimId {
@@ -692,8 +675,7 @@ impl fmt::Display for ClaimId {
 }
 
 /// Identifier of a capability.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CapabilityId(String);
 
 impl CapabilityId {
