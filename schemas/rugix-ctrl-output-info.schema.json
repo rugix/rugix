@@ -117,17 +117,12 @@
           "properties": {
             "status": {
               "const": "Error"
-            }
-          },
-          "required": [
-            "status"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "status": {
-              "const": "EphemeralFallback"
+            },
+            "message": {
+              "type": "string"
+            },
+            "ephemeral": {
+              "type": "boolean"
             }
           },
           "required": [

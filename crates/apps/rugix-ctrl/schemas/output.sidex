@@ -22,17 +22,21 @@ variant StateInfoOutput {
     /// State management is active.
     Active: StateInfoActiveOutput,
     /// State management is inactive due to an error.
-    /// 
-    /// State is stored in memory and will fail to persist even if declared.
-    Error,
-    /// The data partition failed to mount and state is temporarily stored in memory.
-    EphemeralFallback,
+    Error: StateInfoErrorOutput,
 }
 
 /// Information about the state management mechanism, if state management is active.
 record StateInfoActiveOutput {
     /// Device backing the data partition, if any.
     data_partition?: string,
+}
+
+/// Information about a state management error.
+record StateInfoErrorOutput {
+    /// Human-readable description of the error.
+    message?: string,
+    /// Whether state is temporarily stored in memory and may not persist.
+    ephemeral?: bool,
 }
 
 /// Information about a slot.

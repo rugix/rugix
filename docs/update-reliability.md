@@ -68,5 +68,5 @@ the compatibility comparison is skipped.
 By default, a data-partition mount failure falls back to ephemeral state so boot can continue.
 Set `data-partition.fail-on-mount-error = true` only when continuing without persistent data is
 unsafe. With the default fallback, Rugix emits a prominent diagnostic, records it on the config
-partition when possible, and reports `EphemeralFallback` in machine-readable system information.
-Changes made in that mode do not survive reboot.
+partition when possible, and reports an `Error` with an explanatory message and an `ephemeral`
+flag in machine-readable system information. Changes made in that mode do not survive reboot.
