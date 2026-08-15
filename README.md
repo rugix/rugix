@@ -5,19 +5,18 @@
     Rugix
 </h1>
 <h4 align="center">
-    The Open Lifecycle Layer for Embedded Linux
+    The Open-Source Toolkit for Embedded Linux
 </h4>
 <p align="center">
   <a href="https://github.com/rugix/rugix/releases"><img alt="Rugix Version Badge" src="https://img.shields.io/github/v/tag/rugix/rugix?label=version"></a>
   <a href="https://github.com/rugix/rugix/actions"><img alt="Pipeline Status Badge" src="https://img.shields.io/github/actions/workflow/status/rugix/rugix/check-and-lint.yml"></a>
 </p>
 
-Rugix provides an open-source lifecycle layer for building and maintaining robust,
-Linux-powered products from development to production. Its tools cover reliable
-system and application lifecycle management, custom image creation, and local device
-administration:
+Rugix is an open-source toolkit for building and maintaining robust Linux-powered
+products from development to production. Its tools cover on-device systems
+management, custom image builds, and a browser-based operator interface:
 
-- [**Rugix Ctrl**](https://github.com/rugix/rugix): On-device lifecycle engine for atomic system and application updates, automatic rollback, and persistent state management.
+- [**Rugix Ctrl**](https://github.com/rugix/rugix): On-device tool for atomic system and application updates, automatic rollback, and persistent state management.
 - [**Rugix Admin**](https://github.com/rugix/rugix-admin): Lightweight, browser-based interface for managing individual Rugix devices.
 - [**Rugix Bakery**](https://github.com/rugix/rugix-bakery): Build system for custom, OTA-ready Linux distributions.
 
@@ -30,7 +29,7 @@ developers or operators need to inspect and manage a device locally.
 
 ## Rugix Ctrl
 
-This repository contains Rugix Ctrl, which provides reliable lifecycle management
+This repository contains Rugix Ctrl, which provides reliable on-device management
 for Linux devices:
 
 - **Fail-Safe System Updates**: Atomic A/B updates with automatic rollback on failure.
@@ -71,8 +70,8 @@ Robust over-the-air updates require system images built to support atomic update
 ## Why Rugix?
 
 **Rugix is fully open-source and permissively licensed**, including features such as
-delta updates. As an open lifecycle layer, it integrates with different build systems
-and fleet management solutions, so **you stay in control without vendor lock-in**.
+delta updates. Rugix's tools integrate with different build systems and fleet
+management solutions, so **you stay in control without vendor lock-in**.
 
 Rugix empowers teams to **ship robust products fast and without compromising on best practices** like read-only root filesystems, atomic OTA updates, reliable application deployment, and reproducible builds.
 
