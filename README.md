@@ -12,18 +12,21 @@
   <a href="https://github.com/rugix/rugix/actions"><img alt="Pipeline Status Badge" src="https://img.shields.io/github/actions/workflow/status/rugix/rugix/check-and-lint.yml"></a>
 </p>
 
+> [!NOTE]
+> **Support:** This repository is covered by [Tier 1: Core](https://rugix.org/support-commitment/#tier-core) of the Rugix Support Commitment.
+
 Rugix is an open-source toolkit for building and maintaining robust Linux-powered
-products from development to production. Its tools cover on-device systems
-management, custom image builds, and a browser-based operator interface:
+products from development to production. Its tools support on-device lifecycle
+management, custom image builds, and browser-based operation of individual
+devices:
 
-- [**Rugix Ctrl**](https://github.com/rugix/rugix): On-device tool for atomic system and application updates, automatic rollback, and persistent state management.
-- [**Rugix Admin**](https://github.com/rugix/rugix-admin): Lightweight, browser-based interface for managing individual Rugix devices.
-- [**Rugix Bakery**](https://github.com/rugix/rugix-bakery): Build system for custom, OTA-ready Linux distributions.
+- [**Rugix Ctrl**](https://github.com/rugix/rugix): On-device tool for robust system and application updates and persistent state management.
+- [**Rugix Bakery**](https://github.com/rugix/rugix-bakery): Build system for custom, OTA-ready Linux system images.
+- [**Rugix Admin**](https://github.com/rugix/rugix-admin): Lightweight, browser-based interface for operating individual Rugix devices.
 
-Use Rugix Bakery and Rugix Ctrl together for an end-to-end workflow from image
-creation through deployment and maintenance, or integrate Rugix Ctrl into your
-existing Yocto, Buildroot, or other Linux build workflow. Add Rugix Admin when
-developers or operators need to inspect and manage a device locally.
+Rugix Bakery builds system images with Rugix Ctrl update support out of the box.
+Rugix Ctrl integrates into existing Yocto, Buildroot, and other Linux build
+workflows. Rugix Admin provides local access for developers and operators.
 
 [**Get started today! Build your first system and deploy an update, all in under 30 minutes!**](https://rugix.org/docs/getting-started) 🚀
 
@@ -37,9 +40,9 @@ for Linux devices:
 - **Signature Verification**: Cryptographic verification _before_ installing anything anywhere.
 - **Compatibility Checks**: Verifies system and application updates are compatible before installation.
 - **State Management**: Flexible state management inspired by container-based architectures.
-- **Application Updates**: Atomic deployment and rollback of [application workloads](https://rugix.org/docs/ctrl/application-updates/).
-- **Vendor-Agnostic**: Compatible with [various fleet management solutions](https://rugix.org/docs/ctrl/advanced/fleet-management) (avoids lock-in).
-- **Flexible Boot Flows**: Supports [any bootloader and boot process](https://rugix.org/docs/ctrl/advanced/boot-flows).
+- **Application Updates**: Atomic deployment and rollback of [application workloads](https://rugix.org/docs/ctrl/application-management/).
+- **Vendor-Agnostic**: Compatible with [various fleet management solutions](https://rugix.org/docs/ctrl/integration/fleet-management/) (avoids lock-in).
+- **Flexible Boot Flows**: Supports [any bootloader and boot process](https://rugix.org/docs/ctrl/updates/system-updates/boot-flows/).
 - **Yocto Integration**: [Ready-made Yocto layers](https://github.com/rugix/meta-rugix) available.
 
 Rugix Ctrl supports different update strategies (symmetric A/B, asymmetric with recovery, incremental updates) and can be adapted to almost any requirements you may have for robust and secure updates.
