@@ -12,9 +12,6 @@
   <a href="https://github.com/rugix/rugix/actions"><img alt="Pipeline Status Badge" src="https://img.shields.io/github/actions/workflow/status/rugix/rugix/check-and-lint.yml"></a>
 </p>
 
-> [!NOTE]
-> **Support:** This repository is covered by [Tier 1: Core](https://rugix.org/support-commitment/#tier-core) of the Rugix Support Commitment.
-
 Rugix is an open-source toolkit for building and maintaining robust Linux-powered
 products from development to production. Its tools support on-device lifecycle
 management, custom image builds, and browser-based operation of individual
@@ -128,6 +125,12 @@ nix run github:rugix/rugix#rugix-util -- --help
 
 Replace the flake reference with a tag or commit when a specific revision is required,
 for example `github:rugix/rugix/v0.8.17#rugix-ctrl`.
+
+## Support
+
+This repository is covered by
+[Tier 1: Core](https://rugix.org/support-commitment/#tier-core) of the Rugix
+Support Commitment.
 
 ## Commercial Support
 
