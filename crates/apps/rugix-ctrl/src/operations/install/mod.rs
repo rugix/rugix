@@ -36,6 +36,7 @@ use crate::config::config::Config;
 use crate::config::output::ComponentsCheckOutput;
 use crate::http_source::DownloadStats;
 use crate::http_source::HttpSource;
+use crate::http_source::RangeQueryStrategy;
 use crate::http_source::RetryConfig;
 use crate::payload_db;
 use crate::system::boot_groups::BootGroup;
@@ -270,7 +271,7 @@ fn install_bundle(
         ResolvedInstallTarget::Apps(_) => BundleKind::App,
         ResolvedInstallTarget::System { .. } => BundleKind::System,
     };
-    let range_queries_available = match (&source, &target) {
+    let stored_block_indices_available = match (&source, &target) {
         (InstallSource::Http { .. }, ResolvedInstallTarget::System { system, .. }) => {
             system.slots().iter().any(|(_, slot)| {
                 payload_db::get_stored_indices(slot.name())
@@ -287,7 +288,7 @@ fn install_bundle(
         config,
         source,
         input,
-        range_queries_available,
+        stored_block_indices_available,
         &options,
         kind,
         |bundle_reader| match &target {
@@ -467,12 +468,12 @@ fn with_verified_bundle<T>(
     config: &Config,
     source: InstallSource,
     input: BundleInput,
-    range_queries_available: bool,
+    stored_block_indices_available: bool,
     options: &BundleInstallOptions,
     kind: BundleKind,
     install: impl FnOnce(BundleReader<&mut dyn BundleSource>) -> SystemResult<T>,
 ) -> SystemResult<BundleSourceResult<T>> {
-    with_bundle_source(source, input, range_queries_available, |source| {
+    with_bundle_source(source, input, stored_block_indices_available, |source| {
         let bundle_reader = start_verified_bundle(config, source, options, kind)?;
         install(bundle_reader)
     })
@@ -534,7 +535,7 @@ fn require_compatible_components(
 fn with_bundle_source<T>(
     source: InstallSource,
     input: BundleInput,
-    range_queries_available: bool,
+    stored_block_indices_available: bool,
     install: impl FnOnce(&mut dyn BundleSource) -> SystemResult<T>,
 ) -> SystemResult<BundleSourceResult<T>> {
     match source {
@@ -563,12 +564,15 @@ fn with_bundle_source<T>(
             if !matches!(input, BundleInput::None) {
                 bail!("HTTP bundle source does not accept an input stream");
             }
-            let mut source = HttpSource::new(
-                &url,
-                range_queries_available && !disable_range_queries,
-                retry,
-            )
-            .whatever("unable to create HTTP source")?;
+            let range_query_strategy = if disable_range_queries {
+                RangeQueryStrategy::Disabled
+            } else if stored_block_indices_available {
+                RangeQueryStrategy::Dynamic
+            } else {
+                RangeQueryStrategy::Resume
+            };
+            let mut source = HttpSource::new(&url, range_query_strategy, retry)
+                .whatever("unable to create HTTP source")?;
             let output = install(&mut source)?;
             Ok(BundleSourceResult {
                 output,

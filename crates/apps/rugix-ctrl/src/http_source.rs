@@ -1,3 +1,10 @@
+//! HTTP-backed bundle source with resumable downloads and dynamic range-query skipping.
+//!
+//! [`HttpSource`] streams bundle data while [`RangeQueryStrategy`] controls whether HTTP
+//! range queries are disabled, reserved for recovery, or used proactively for block
+//! reuse.
+
+use std::io;
 use std::io::Read;
 use std::time::Duration;
 
@@ -25,6 +32,17 @@ pub struct RetryConfig {
     pub max_backoff: Duration,
 }
 
+/// Controls how HTTP range queries are used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RangeQueryStrategy {
+    /// Do not issue range queries.
+    Disabled,
+    /// Stream the full response and use range queries only to resume interrupted reads.
+    Resume,
+    /// Use range queries for both efficient skipping and interrupted-read recovery.
+    Dynamic,
+}
+
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
@@ -37,7 +55,7 @@ impl Default for RetryConfig {
 
 pub struct HttpSource {
     url: String,
-    use_range_queries: bool,
+    range_query_strategy: RangeQueryStrategy,
     current_response: Option<Response<Body>>,
     content_length: Option<u64>,
     current_end: Option<u64>,
@@ -50,7 +68,7 @@ pub struct HttpSource {
     total_bytes: Option<NumBytes>,
     retry_config: RetryConfig,
     /// Tracks consecutive retries in the current failure sequence.
-    /// Reset to 0 after every successful request or body read.
+    /// Reset to 0 after every successful body read.
     consecutive_retries: u32,
 }
 
@@ -128,46 +146,54 @@ fn compute_backoff(config: &RetryConfig, consecutive_retries: u32) -> Duration {
 }
 
 impl HttpSource {
-    pub fn new(
+    pub(crate) fn new(
         url: &str,
-        use_range_queries: bool,
+        requested_range_query_strategy: RangeQueryStrategy,
         retry_config: RetryConfig,
     ) -> SystemResult<Self> {
         // Try a request with a `Range` header and look at the response to determine the
         // content length and whether range requests are supported by the server.
-        let (mut content_length, use_range_queries) = if use_range_queries {
-            get_with_retry(url, Some("bytes=0-0"), &retry_config)
-                .ok()
-                .and_then(|response| {
-                    response.headers().get("Content-Range").and_then(|range| {
-                        range
-                            .to_str()
-                            .ok()?
-                            .rsplit_once("/")?
-                            .1
-                            .trim()
-                            .parse::<u64>()
-                            .ok()
+        let (mut content_length, range_query_strategy) =
+            if requested_range_query_strategy != RangeQueryStrategy::Disabled {
+                get_with_retry(url, Some("bytes=0-0"), &retry_config)
+                    .ok()
+                    .and_then(|response| {
+                        if response.status() != 206 {
+                            return None;
+                        }
+                        response.headers().get("Content-Range").and_then(|range| {
+                            range
+                                .to_str()
+                                .ok()?
+                                .rsplit_once("/")?
+                                .1
+                                .trim()
+                                .parse::<u64>()
+                                .ok()
+                        })
                     })
-                })
-                .map(|length| (Some(length), true))
-                .unwrap_or_default()
-        } else {
-            (None, false)
-        };
+                    .map(|length| (Some(length), requested_range_query_strategy))
+                    .unwrap_or((None, RangeQueryStrategy::Disabled))
+            } else {
+                (None, RangeQueryStrategy::Disabled)
+            };
 
-        let (current_response, current_end) = if !use_range_queries {
+        let (current_response, current_end) = if range_query_strategy != RangeQueryStrategy::Dynamic
+        {
             // Fetch the whole bundle all at once.
             let response = get_with_retry(url, None, &retry_config)
                 .whatever("unable to get bundle from URL")?;
-            content_length = response
+            let response_content_length = response
                 .headers()
                 .get("Content-Length")
                 .and_then(|length| length.to_str().ok()?.trim().parse::<u64>().ok());
-            (response, None)
+            content_length = content_length.or(response_content_length);
+            (response, content_length)
         } else {
             // Fetch a first chunk of the bundle.
-            let first_chunk_size = MIN_CHUNK_SIZE.raw.min(content_length.unwrap());
+            let first_chunk_size = MIN_CHUNK_SIZE.raw.min(
+                content_length.expect("range query support probe provides the content length"),
+            );
             let range = format!("bytes=0-{}", first_chunk_size - 1);
             (
                 get_with_retry(url, Some(&range), &retry_config)
@@ -177,7 +203,7 @@ impl HttpSource {
         };
         Ok(Self {
             url: url.to_owned(),
-            use_range_queries,
+            range_query_strategy,
             content_length,
             current_response: Some(current_response),
             current_end,
@@ -214,7 +240,6 @@ impl HttpSource {
             request = request.header("Range", &range_header);
             match request.call() {
                 Ok(response) => {
-                    self.consecutive_retries = 0;
                     // Validate the server still supports range queries.
                     if response.status() != 206 {
                         bail!(
@@ -262,6 +287,30 @@ impl HttpSource {
             }
         }
     }
+
+    /// Applies the retry policy to a response-body failure and prepares a reconnect.
+    fn reconnect_after_body_error(&mut self, io_err: &io::Error, action: &'static str) -> bool {
+        if self.range_query_strategy == RangeQueryStrategy::Disabled
+            || self.consecutive_retries >= self.retry_config.max_retries
+        {
+            return false;
+        }
+        let backoff = compute_backoff(&self.retry_config, self.consecutive_retries);
+        warn!(
+            url = %self.url,
+            attempt = self.consecutive_retries + 1,
+            max_retries = self.retry_config.max_retries,
+            backoff_ms = backoff.as_millis() as u64,
+            position = self.current_position,
+            error = %io_err,
+            action,
+            "HTTP response read failed, reconnecting after backoff",
+        );
+        std::thread::sleep(backoff);
+        self.consecutive_retries += 1;
+        self.current_response = None;
+        true
+    }
 }
 
 impl BundleSource for HttpSource {
@@ -278,46 +327,44 @@ impl BundleSource for HttpSource {
             if chunk_exceeded {
                 // We have exceeded the chunk and need to fetch a new one.
                 self.current_response = None;
-                let actually_skipped = self.current_position - self.current_end.unwrap();
+                let actually_skipped = self.current_position
+                    - self
+                        .current_end
+                        .expect("an exceeded chunk has a known end position");
                 // Count the bytes that were still in the pending request as read.
                 self.bytes_skipped += actually_skipped;
                 self.bytes_read += self.current_skipped - actually_skipped;
             } else {
                 // We are still within the chunk and need to skip the bytes by reading.
-                if let Some(current_response) = self.current_response.as_mut() {
+                if self.current_response.is_some() {
                     // Read the bytes that we skip from the current response.
                     let mut remaining = self.current_skipped;
                     while remaining > 0 {
                         self.skip_buffer.resize(remaining.min(8192) as usize, 0);
-                        let read = match current_response
+                        let read_result = self
+                            .current_response
+                            .as_mut()
+                            .expect("the current response was checked before reading skipped bytes")
                             .body_mut()
                             .as_reader()
-                            .read(&mut self.skip_buffer)
-                        {
+                            .read(&mut self.skip_buffer);
+                        let read = match read_result {
                             Ok(0) => {
                                 error!("unexpected end of HTTP stream during skip");
                                 self.current_response = None;
                                 break;
                             }
                             Ok(n) => n,
-                            Err(io_err)
-                                if self.use_range_queries
-                                    && self.consecutive_retries < self.retry_config.max_retries =>
-                            {
-                                warn!(
-                                    url = %self.url,
-                                    position = self.current_position,
-                                    error = %io_err,
-                                    "read during skip failed, will reconnect on next read",
-                                );
-                                self.consecutive_retries += 1;
-                                self.current_response = None;
+                            Err(io_err) => {
+                                if !self
+                                    .reconnect_after_body_error(&io_err, "skipping bundle bytes")
+                                {
+                                    return Err(io_err).whatever("unable to read from HTTP source");
+                                }
                                 break;
                             }
-                            Err(io_err) => {
-                                return Err(io_err).whatever("unable to read from HTTP source");
-                            }
                         };
+                        self.consecutive_retries = 0;
                         remaining -= read as u64;
                     }
                     // Account for bytes actually consumed vs truly skipped.
@@ -333,19 +380,26 @@ impl BundleSource for HttpSource {
         loop {
             if self.current_response.is_none() {
                 // We need to issue a new request for a new chunk.
-                if !self.use_range_queries {
+                if self.range_query_strategy == RangeQueryStrategy::Disabled {
                     if self.content_length == Some(self.current_position) {
                         return Ok(0);
                     }
                     bail!("response is not available but range queries are not supported");
                 }
                 // Compute the end of the next chunk using the provided hint, if any.
-                let next_end = (self.current_position + MIN_CHUNK_SIZE.raw.max(slice.len() as u64))
-                    .max(self.next_chunk_end.unwrap_or(0))
-                    .min(self.content_length.unwrap());
+                let content_length = self
+                    .content_length
+                    .expect("range query support probe provides the content length");
+                let next_end = if self.range_query_strategy == RangeQueryStrategy::Dynamic {
+                    (self.current_position + MIN_CHUNK_SIZE.raw.max(slice.len() as u64))
+                        .max(self.next_chunk_end.unwrap_or(0))
+                        .min(content_length)
+                } else {
+                    content_length
+                };
                 self.next_chunk_end = None;
                 if self.current_position == next_end {
-                    assert_eq!(self.current_position, self.content_length.unwrap());
+                    assert_eq!(self.current_position, content_length);
                     // We reached the end of the update bundle, return `0`.
                     return Ok(0);
                 }
@@ -354,31 +408,40 @@ impl BundleSource for HttpSource {
                     Some(self.fetch_range_with_retry(self.current_position, next_end)?);
                 self.current_end = Some(next_end);
             }
-            let current_response = self.current_response.as_mut().unwrap();
             // We should now be able to read some bytes from the current response.
-            let read = match current_response.body_mut().as_reader().read(slice) {
+            let read_result = self
+                .current_response
+                .as_mut()
+                .expect("a response is available after reconnecting when necessary")
+                .body_mut()
+                .as_reader()
+                .read(slice);
+            let read = match read_result {
+                Ok(0)
+                    if self
+                        .current_end
+                        .is_some_and(|end| self.current_position < end) =>
+                {
+                    let io_err = io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "HTTP response ended before the requested range was complete",
+                    );
+                    if !self.reconnect_after_body_error(&io_err, "reading bundle bytes") {
+                        return Err(io_err).whatever("unable to read from HTTP source");
+                    }
+                    continue;
+                }
                 Ok(0) => {
                     // We reached the end of the response. Do a followup request.
                     self.current_response = None;
                     continue;
                 }
                 Ok(n) => n,
-                Err(io_err)
-                    if self.use_range_queries
-                        && self.consecutive_retries < self.retry_config.max_retries =>
-                {
-                    warn!(
-                        url = %self.url,
-                        position = self.current_position,
-                        error = %io_err,
-                        "read from HTTP response failed, attempting reconnect",
-                    );
-                    self.consecutive_retries += 1;
-                    self.current_response = None;
-                    continue;
-                }
                 Err(io_err) => {
-                    return Err(io_err).whatever("unable to read from HTTP source");
+                    if !self.reconnect_after_body_error(&io_err, "reading bundle bytes") {
+                        return Err(io_err).whatever("unable to read from HTTP source");
+                    }
+                    continue;
                 }
             };
             self.consecutive_retries = 0;
