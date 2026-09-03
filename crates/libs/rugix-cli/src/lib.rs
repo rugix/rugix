@@ -35,6 +35,8 @@ mod rate_limiter;
 pub struct CliBuilder {
     /// Init [`tracing`] by registering a subscriber.
     init_tracing: bool,
+    /// Maximum verbosity accepted by the tracing subscriber.
+    max_log_level: Option<LevelFilter>,
     /// Start a background thread redrawing the status area periodically.
     start_drawing_thread: bool,
     /// Period for redrawing the status area.
@@ -46,9 +48,16 @@ impl CliBuilder {
     pub fn new() -> Self {
         Self {
             init_tracing: true,
+            max_log_level: None,
             start_drawing_thread: true,
             drawing_period: Duration::from_millis(100),
         }
+    }
+
+    /// Limit the maximum verbosity accepted by the tracing subscriber.
+    pub fn with_max_log_level(&mut self, level: LevelFilter) -> &mut Self {
+        self.max_log_level = Some(level);
+        self
     }
 
     /// Initialize the CLI.
@@ -58,7 +67,7 @@ impl CliBuilder {
                 .without_time()
                 .with_target(false)
                 .compact();
-            tracing_subscriber::fmt()
+            let subscriber = tracing_subscriber::fmt()
                 .with_writer(StderrWriter::new())
                 .with_ansi(Term::stderr().is_term())
                 .event_format(format)
@@ -67,8 +76,12 @@ impl CliBuilder {
                         .with_default_directive(LevelFilter::INFO.into())
                         .with_env_var("RUGIX_LOG")
                         .from_env_lossy(),
-                )
-                .init();
+                );
+            if let Some(level) = self.max_log_level {
+                subscriber.with_max_level(level).init();
+            } else {
+                subscriber.init();
+            }
         }
         if self.start_drawing_thread {
             std::thread::spawn(move || loop {

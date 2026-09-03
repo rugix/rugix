@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Rugix Ctrl:
+
+- Add the `rugix.init.quiet` kernel command-line option to suppress routine early-boot output while retaining errors.
+
 ## Version 1.3.0
 
 Behavior Changes:

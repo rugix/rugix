@@ -1,3 +1,8 @@
+//! Early-boot filesystem, state, and boot-flow initialization for Rugix Ctrl.
+//!
+//! [`main`] prepares the system when `rugix-ctrl` runs as PID 1 and hands
+//! control to the system's underlying init process.
+
 use std::ffi::CString;
 use std::fs;
 use std::io;
@@ -54,6 +59,7 @@ use rugix_common::disk::repart::SchemaPartition;
 use rugix_common::disk::PartitionTable;
 use rugix_common::partitions::mkfs_ext4;
 use rugix_hooks::HooksLoader;
+use rugix_hooks::RunOptions;
 use xscript::run;
 use xscript::vars;
 use xscript::Run;
@@ -66,6 +72,7 @@ use crate::utils::read_deferred_reboot_target;
 use crate::utils::DEFERRED_SPARE_REBOOT_FLAG;
 
 mod error_shell;
+mod kernel_cmdline;
 
 pub fn main() -> SystemResult<()> {
     ensure!(is_init_process(), "process must be the init process");
@@ -80,7 +87,7 @@ pub fn main() -> SystemResult<()> {
             error_shell::prompt_on_init_error();
         }
     }
-    eprintln!("waiting for 30 seconds...");
+    info!("waiting for 30 seconds...");
     thread::sleep(Duration::from_secs(30));
     Ok(())
 }
@@ -90,25 +97,39 @@ const STATE_PROFILES_DIR: &str = "/run/rugix/mounts/data/state/";
 const DEFAULT_STATE_DIR: &str = "/run/rugix/mounts/data/state/default";
 
 fn init() -> SystemResult<()> {
-    println!(include_str!("../assets/BANNER.txt"));
+    let quiet_result = kernel_cmdline::init_quiet();
+    let quiet_enabled = quiet_result.as_ref().copied().unwrap_or(false);
+    let mut cli = rugix_cli::CliBuilder::new();
+    if quiet_enabled {
+        cli.with_max_log_level(tracing::level_filters::LevelFilter::ERROR);
+    }
+    cli.init();
+    if let Err(error) = quiet_result {
+        warn!(error = ?error, "failed to read Rugix init options from kernel cmdline");
+    }
+    if !quiet_enabled {
+        println!(include_str!("../../assets/BANNER.txt"));
+    }
 
-    rugix_cli::CliBuilder::new().init();
+    let hook_options = RunOptions {
+        silent: quiet_enabled,
+    };
 
     const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
     if let Ok(path) = std::env::var("PATH") {
         let mut paths = path.split(':').collect::<Vec<_>>();
         for default_path in DEFAULT_PATH.split(':').rev() {
             if !paths.contains(&default_path) {
-                println!("adding '{}' to PATH", default_path);
+                info!("adding '{}' to PATH", default_path);
                 paths.insert(0, default_path);
             }
         }
         let new_path = paths.join(":");
         std::env::set_var("PATH", &new_path);
-        println!("PATH='{}'", new_path);
+        info!("PATH='{}'", new_path);
     } else {
         std::env::set_var("PATH", DEFAULT_PATH);
-        println!("PATH='{}'", DEFAULT_PATH);
+        info!("PATH='{}'", DEFAULT_PATH);
     }
 
     // Mount essential filesystems.
@@ -118,7 +139,7 @@ fn init() -> SystemResult<()> {
         .load_hooks("boot")
         .whatever("unable to load `boot` hooks")?;
 
-    if let Err(error) = boot_hooks.run_hooks("pre-init", Default::default(), &Default::default()) {
+    if let Err(error) = boot_hooks.run_hooks("pre-init", Default::default(), &hook_options) {
         error!(error = ?error, "error running `boot/pre-init` hooks");
     }
 
@@ -182,7 +203,7 @@ fn init() -> SystemResult<()> {
         .whatever("unable to mount config partition as read-write")?;
 
         if let Some(marker) = bootstrap_marker {
-            bootstrap(&root, &system_config)?;
+            bootstrap(&root, &system_config, &hook_options)?;
             std::fs::remove_file(&marker).whatever("unable to remove bootstrap marker")?;
             info!("Done bootstrapping");
         }
@@ -220,6 +241,7 @@ fn init() -> SystemResult<()> {
         &system_config,
         &system,
         requires_commit,
+        &hook_options,
     ) {
         maybe_exec_underlying_init(&system, current_system_is_committed, &error);
         return Err(error);
@@ -234,6 +256,7 @@ fn setup_state_and_exec_init(
     system_config: &SystemConfig,
     system: &System,
     requires_commit: bool,
+    hook_options: &RunOptions,
 ) -> SystemResult<()> {
     log_ignored_error(
         fs::create_dir_all(MOUNT_POINT_DATA),
@@ -320,7 +343,7 @@ fn setup_state_and_exec_init(
             .whatever("unable to load `state-reset` hooks")?;
 
         reset_hooks
-            .run_hooks("pre-reset", Vars::new(), &Default::default())
+            .run_hooks("pre-reset", Vars::new(), hook_options)
             .whatever("unable to run `pre-reset` hooks")?;
         // The existence of the file indicates that the state shall be reset.
         if backup_name.trim().is_empty() {
@@ -341,7 +364,7 @@ fn setup_state_and_exec_init(
             );
         }
         reset_hooks
-            .run_hooks("post-reset", Vars::new(), &Default::default())
+            .run_hooks("post-reset", Vars::new(), hook_options)
             .whatever("unable to run `post-reset` hooks")?;
     }
     log_ignored_error(
@@ -359,7 +382,7 @@ fn setup_state_and_exec_init(
     setup_persistent_state(&root_dir, state_profile, &state_config)?;
 
     // 9️⃣ Restore the machine id and hand off to Systemd.
-    exec_chroot_init(&root_dir, requires_commit)?;
+    exec_chroot_init(&root_dir, requires_commit, hook_options)?;
 
     Ok(())
 }
@@ -450,13 +473,17 @@ fn load_bootstrap_config() -> SystemResult<BootstrappingConfig> {
     })
 }
 
-fn bootstrap(root: &SystemRoot, system_config: &SystemConfig) -> SystemResult<()> {
+fn bootstrap(
+    root: &SystemRoot,
+    system_config: &SystemConfig,
+    hook_options: &RunOptions,
+) -> SystemResult<()> {
     let bootstrap_hooks = HooksLoader::default()
         .load_hooks("bootstrap")
         .whatever("unable to load bootstrap hooks")?;
 
     bootstrap_hooks
-        .run_hooks("prepare", Vars::new(), &Default::default())
+        .run_hooks("prepare", Vars::new(), hook_options)
         .whatever("unable to run `bootstrap/prepare` hooks")?;
 
     let bootstrap_config = load_bootstrap_config()?;
@@ -506,7 +533,7 @@ fn bootstrap(root: &SystemRoot, system_config: &SystemConfig) -> SystemResult<()
 
     if let Some(schema) = schema {
         bootstrap_hooks
-            .run_hooks("pre-layout", Vars::new(), &Default::default())
+            .run_hooks("pre-layout", Vars::new(), hook_options)
             .whatever("unable to run `bootstrap/pre-layout` hooks")?;
         if let Some((old_table, _)) = bootstrap_partitions(&schema, root)? {
             // Partition is new, let's see whether we need to create a filesystem.
@@ -574,7 +601,7 @@ fn bootstrap(root: &SystemRoot, system_config: &SystemConfig) -> SystemResult<()
             }
         }
         bootstrap_hooks
-            .run_hooks("post-layout", Vars::new(), &Default::default())
+            .run_hooks("post-layout", Vars::new(), hook_options)
             .whatever("unable to run `bootstrap/post-layout` hooks")?;
     }
 
@@ -834,7 +861,7 @@ fn setup_persistent_state(
         match persist {
             PersistConfig::Directory(PersistDirectoryConfig { directory }) => {
                 let directory = validated_state_path(directory.as_ref())?;
-                eprintln!("Setting up bind mounts for directory `{}`...", directory);
+                info!("Setting up bind mounts for directory `{}`...", directory);
                 let system_path = root_dir.join(&directory);
                 let state_path = persist_dir.join(&directory);
                 if system_path.exists() && !system_path.is_dir() {
@@ -868,7 +895,7 @@ fn setup_persistent_state(
             }
             PersistConfig::File(PersistFileConfig { file, default }) => {
                 let file = validated_state_path(file.as_ref())?;
-                eprintln!("Setting up bind mounts for file `{}`...", file);
+                info!("Setting up bind mounts for file `{}`...", file);
                 let system_path = root_dir.join(&file);
                 let state_path = persist_dir.join(&file);
                 if system_path.exists() && !system_path.is_file() {
@@ -979,17 +1006,21 @@ fn restore_machine_id(root_dir: &Path) -> SystemResult<()> {
 /// We follow the example from the manpage of the `pivot_root` system call here.
 ///
 /// We are not using `chroot` as this lead to problems with Docker.
-fn exec_chroot_init(root_dir: &Path, requires_commit: bool) -> SystemResult<()> {
+fn exec_chroot_init(
+    root_dir: &Path,
+    requires_commit: bool,
+    hook_options: &RunOptions,
+) -> SystemResult<()> {
     if root_dir != Path::new("/") {
         restore_machine_id(root_dir)?;
-        println!("Changing current working directory to overlay root directory.");
+        info!("Changing current working directory to overlay root directory.");
         nix::unistd::chdir(root_dir).whatever("unable to switch to overlay directory")?;
-        println!("Pivoting root mount point to current working directory.");
+        info!("Pivoting root mount point to current working directory.");
         nix::unistd::pivot_root(".", ".").whatever("unable to pivot root directory")?;
-        println!("Unmounting the previous root filesystem.");
+        info!("Unmounting the previous root filesystem.");
         nix::mount::umount2(".", MntFlags::MNT_DETACH)
             .whatever("unable to unmount old root directory")?;
-        println!("Changing current working directory to `/`.");
+        info!("Changing current working directory to `/`.");
         nix::unistd::chdir("/").whatever("unable to switch to current working directory")?;
     }
     let boot_hooks = HooksLoader::default()
@@ -1000,7 +1031,7 @@ fn exec_chroot_init(root_dir: &Path, requires_commit: bool) -> SystemResult<()> 
         vars! {
             RUGIX_REQUIRES_COMMIT = if requires_commit { "true" } else { "false" }
         },
-        &Default::default(),
+        hook_options,
     ) {
         error!(error = ?error, "error running `boot/post-init` hooks");
     }
@@ -1009,7 +1040,7 @@ fn exec_chroot_init(root_dir: &Path, requires_commit: bool) -> SystemResult<()> 
 }
 
 fn exec_system_init() -> SystemResult<()> {
-    println!("Starting system init process.");
+    info!("Starting system init process.");
     let systemd_init = &CString::new("/sbin/init").unwrap();
     nix::unistd::execv(systemd_init, &[systemd_init]).whatever("unable to run system init")?;
     Ok(())
@@ -1018,7 +1049,7 @@ fn exec_system_init() -> SystemResult<()> {
 /// Reboot the system to the spare partitions if the deferred spare reboot flag is set.
 fn check_deferred_spare_reboot(system: &System) -> SystemResult<()> {
     if is_flag_set(DEFERRED_SPARE_REBOOT_FLAG) {
-        println!("Executing deferred reboot to spare partitions.");
+        info!("Executing deferred reboot to spare partitions.");
         let recorded_target = read_deferred_reboot_target()?;
         let group_names = system
             .boot_entries()

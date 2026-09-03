@@ -16,7 +16,6 @@ use std::os::fd::AsFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::time::Duration;
 
-use nix::mount::MsFlags;
 use nix::poll::poll;
 use nix::poll::PollFd;
 use nix::poll::PollFlags;
@@ -27,7 +26,6 @@ use nix::sys::termios::tcsetattr;
 use nix::sys::termios::SetArg;
 use nix::sys::termios::Termios;
 use reportify::ResultExt;
-use rugix_common::mount::is_mount_point;
 use tracing::warn;
 
 use crate::system::SystemResult;
@@ -53,7 +51,7 @@ pub fn prompt_on_init_error() {
 }
 
 fn shell_on_error_timeout() -> Option<Duration> {
-    let cmdline = match read_kernel_cmdline() {
+    let cmdline = match super::kernel_cmdline::read() {
         Ok(cmdline) => cmdline,
         Err(error) => {
             warn!(error = ?error, "unable to read kernel cmdline");
@@ -91,31 +89,6 @@ fn parse_shell_on_error_timeout(cmdline: &str) -> Option<Duration> {
         }
     }
     None
-}
-
-fn read_kernel_cmdline() -> io::Result<String> {
-    match fs::read_to_string("/proc/cmdline") {
-        Ok(cmdline) => Ok(cmdline),
-        Err(_) => {
-            mount_proc_for_cmdline()?;
-            fs::read_to_string("/proc/cmdline")
-        }
-    }
-}
-
-fn mount_proc_for_cmdline() -> io::Result<()> {
-    if is_mount_point("/proc") {
-        return Ok(());
-    }
-    fs::create_dir_all("/proc")?;
-    nix::mount::mount(
-        Some("proc"),
-        "/proc",
-        Some("proc"),
-        MsFlags::empty(),
-        None::<&str>,
-    )
-    .map_err(io::Error::from)
 }
 
 fn print_shell_disabled_message() {
