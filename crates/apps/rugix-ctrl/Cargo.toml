@@ -55,7 +55,7 @@ ureq = { version = "3.0.3", default-features = false, features = [
     "rustls-no-provider",
     "rustls-webpki-roots",
 ] }
-rustls = { version = "0.23", default-features = false, features = [
+rustls = { version = "0.23.45", default-features = false, features = [
     "aws_lc_rs",
     "logging",
     "std",

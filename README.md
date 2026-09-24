@@ -112,6 +112,11 @@ To deliberately update the non-Rust toolchain, update the loose specifications i
 and run `mise lock`; commit `mise.toml` and `mise.lock` together. Update Rust by changing
 the dated channel in `rust-toolchain.toml`.
 
+When a dependency advisory fails CI, update the affected crate in `Cargo.lock` with
+`cargo update -p <crate> --precise <fixed-version>`, then run `mise run check`. If the
+crate is a direct dependency, also raise its minimum version in the corresponding
+`Cargo.toml` to exclude affected releases.
+
 ## Run Directly from Git with Nix
 
 The Nix flake exposes each Rugix command as both a package and an app, so no checkout is
