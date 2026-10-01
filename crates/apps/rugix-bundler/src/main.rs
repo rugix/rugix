@@ -39,6 +39,7 @@ use tracing::info;
 use tracing::Level;
 
 mod apps;
+mod grants;
 mod simulation;
 
 #[derive(Debug, Parser)]
@@ -70,6 +71,9 @@ pub enum Cmd {
     /// Manipulate and inspect signatures.
     #[clap(subcommand)]
     Signatures(SignaturesCmd),
+    /// Create and verify detached installation grants.
+    #[clap(subcommand)]
+    Grants(grants::GrantsCommand),
     /// Simulate an update.
     #[clap(subcommand)]
     Simulator(simulation::SimulationCmd),
@@ -333,6 +337,7 @@ fn main() -> BundleResult<()> {
         .apply(&args.logging)
         .init();
     match args.cmd {
+        Cmd::Grants(command) => grants::run(command)?,
         Cmd::Bundle(create_cmd) => {
             let hash = rugix_bundle::builder::pack(&create_cmd.src, &create_cmd.dst)?;
             println!("{hash}");

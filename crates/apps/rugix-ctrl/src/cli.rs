@@ -91,6 +91,17 @@ pub fn main() -> SystemResult<()> {
 
     let args = Args::parse();
     match &args.command {
+        Command::InitializeGrantState => {
+            if !crate::daemon::is_privileged() {
+                bail!("grant state initialization requires root");
+            }
+            let config = load_ctrl_config()?;
+            let policy = config
+                .grants
+                .as_ref()
+                .ok_or_else(|| whatever!("installation grants are not configured"))?;
+            crate::operations::install::grants::initialize(policy)?;
+        }
         Command::State(state_cmd) => match state_cmd {
             StateCommand::Reset {
                 backup,
@@ -124,6 +135,7 @@ pub fn main() -> SystemResult<()> {
                 skip_compatibility_check,
                 root_cert,
                 bundle_hash,
+                grant,
                 reboot: reboot_type,
                 keep_overlay,
                 boot_group,
@@ -151,6 +163,7 @@ pub fn main() -> SystemResult<()> {
                         boot_group: boot_group.clone(),
                     },
                     options: BundleInstallOptions {
+                        grant: read_installation_grant(grant.as_deref())?,
                         bundle_hash: bundle_hash.clone(),
                         root_cert: read_explicit_root_certificate(root_cert.as_deref())?,
                         insecure_skip_bundle_verification: *insecure_skip_bundle_verification,
@@ -431,6 +444,7 @@ pub fn main() -> SystemResult<()> {
                     skip_compatibility_check,
                     root_cert,
                     bundle_hash,
+                    grant,
                     http_max_retries,
                     http_retry_initial_backoff,
                     http_retry_max_backoff,
@@ -450,6 +464,7 @@ pub fn main() -> SystemResult<()> {
                         source,
                         target: InstallTarget::Apps,
                         options: BundleInstallOptions {
+                            grant: read_installation_grant(grant.as_deref())?,
                             bundle_hash: bundle_hash.clone(),
                             root_cert: read_explicit_root_certificate(root_cert.as_deref())?,
                             insecure_skip_bundle_verification: *insecure_skip_bundle_verification,
@@ -693,6 +708,23 @@ fn resolve_cli_bundle_source(
             BundleInput::Seekable(Box::new(input)),
         ))
     }
+}
+
+/// Read a bounded grant on the submitting side; the privileged executor verifies it.
+fn read_installation_grant(path: Option<&Path>) -> SystemResult<Option<Vec<u8>>> {
+    path.map(|path| {
+        let mut bytes = Vec::new();
+        File::open(path)
+            .whatever("unable to open installation grant")?
+            .take(rugix_grants::DEFAULT_MAX_GRANT_SIZE as u64 + 1)
+            .read_to_end(&mut bytes)
+            .whatever("unable to read installation grant")?;
+        if bytes.len() > rugix_grants::DEFAULT_MAX_GRANT_SIZE {
+            bail!("installation grant exceeds size limit");
+        }
+        Ok(bytes)
+    })
+    .transpose()
 }
 
 fn read_explicit_root_certificate(path: Option<&Path>) -> SystemResult<Option<Vec<u8>>> {
@@ -969,6 +1001,8 @@ pub struct Args {
 
 #[derive(Debug, Parser)]
 pub enum Command {
+    /// Initialize durable grant replay state during provisioning (requires root).
+    InitializeGrantState,
     /// Run or inspect the privileged operation daemon.
     Daemon {
         /// Optional daemon inspection command.
@@ -1100,6 +1134,9 @@ pub enum UpdateCommand {
         /// Expected bundle hash.
         #[clap(long)]
         bundle_hash: Option<HashDigest>,
+        /// Detached installation grant in CMS format.
+        #[clap(long)]
+        grant: Option<PathBuf>,
         /// Control how to reboot the system.
         #[clap(long)]
         reboot: Option<UpdateRebootType>,
@@ -1240,6 +1277,9 @@ pub enum AppsCommand {
         /// Expected bundle hash.
         #[clap(long)]
         bundle_hash: Option<HashDigest>,
+        /// Detached installation grant in CMS format.
+        #[clap(long)]
+        grant: Option<PathBuf>,
         /// Maximum number of retry attempts for transient HTTP errors.
         #[clap(long, default_value_t = 5)]
         http_max_retries: u32,

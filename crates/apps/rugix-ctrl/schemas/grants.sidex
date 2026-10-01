@@ -1,0 +1,52 @@
+//! Grant authorization policy and durable replay state.
+
+/// Required detached installation grants.
+#[json(rename_all = "kebab-case")]
+record GrantsConfig {
+    /// Trusted grant-issuing roots. These authorize both system and app installation.
+    roots: [string],
+    /// Additional embedded publisher signature requirements.
+    mode: GrantPolicy,
+    /// Provisioned identity namespace, independent of the submitting caller.
+    namespace: string,
+    /// Provisioned device identity.
+    device: string,
+    /// Provisioned or independently authenticated group memberships.
+    groups?: [string],
+    /// Override the default persistent grant state directory with an absolute path.
+    /// Defaults to the data partition's `.rugix/grants` with Rugix state management,
+    /// or `/var/lib/rugix/grants` otherwise.
+    state_directory?: string,
+    /// Assert that the system clock is trustworthy across power cycles.
+    trusted_system_clock: bool,
+    /// Maximum validity window in seconds. Defaults to 86400.
+    max_lifetime?: u64,
+}
+
+/// Signature requirements in addition to the mandatory detached grant.
+variant GrantPolicy {
+    GrantOnly,
+    EmbeddedAndGrant,
+}
+
+/// Durable installation authorization state. Missing or invalid state fails closed.
+record GrantState {
+    version: u32,
+    /// Provisioned identity bound to this state.
+    namespace: string,
+    device: string,
+    /// One sequence stream for system installations.
+    system?: GrantTransaction,
+    /// One sequence stream shared by application installations.
+    apps?: GrantTransaction,
+}
+
+/// An admitted installation transaction.
+record GrantTransaction {
+    id: string,
+    sequence: u64,
+    /// Hash of authenticated grant fields, independent of JSON and certificate packaging.
+    content_hash: string,
+    /// Consumed before final activation, including interrupted activation attempts.
+    consumed: bool,
+}

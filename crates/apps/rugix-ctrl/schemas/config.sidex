@@ -1,8 +1,12 @@
+import grants::GrantsConfig
+
 /// Rugix Ctrl configuration.
 #[json(rename_all = "kebab-case")]
 record Config {
     /// Signature check configuration.
     signatures?: SignaturesConfig,
+    /// Require a detached grant for every bundle installation.
+    grants?: GrantsConfig,
     /// Component compatibility policy.
     compatibility?: CompatibilityConfig,
     /// Automatically create and retain block indices for full system updates.

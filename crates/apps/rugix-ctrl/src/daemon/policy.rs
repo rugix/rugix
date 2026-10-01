@@ -90,6 +90,7 @@ impl AdmissionPolicy {
 
     fn authorize_install_options(&self, options: &BundleInstallOptions) -> SystemResult<()> {
         let BundleInstallOptions {
+            grant: _,
             bundle_hash,
             root_cert,
             insecure_skip_bundle_verification,
@@ -359,6 +360,7 @@ mod tests {
 
     fn secure_options() -> BundleInstallOptions {
         BundleInstallOptions {
+            grant: None,
             bundle_hash: None,
             root_cert: None,
             insecure_skip_bundle_verification: false,

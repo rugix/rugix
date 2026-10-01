@@ -19,6 +19,7 @@ sidex-serde.workspace = true
 sidex.workspace = true
 serde.workspace = true
 rugix-fs.workspace = true
+rugix-grants.workspace = true
 xz2.workspace = true
 hashbrown.workspace = true
 toml.workspace = true

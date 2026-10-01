@@ -7,6 +7,9 @@
     "signatures": {
       "$ref": "#/$defs/rugix_ctrl.config.SignaturesConfig"
     },
+    "grants": {
+      "$ref": "#/$defs/rugix_ctrl.grants.GrantsConfig"
+    },
     "compatibility": {
       "$ref": "#/$defs/rugix_ctrl.config.CompatibilityConfig"
     },
@@ -41,6 +44,64 @@
       },
       "required": [
         "roots"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.grants.GrantPolicy": {
+      "$id": "rugix_ctrl.grants.GrantPolicy",
+      "enum": [
+        {
+          "tag": "GrantOnly"
+        },
+        {
+          "tag": "EmbeddedAndGrant"
+        }
+      ],
+      "description": "Signature requirements in addition to the mandatory detached grant."
+    },
+    "rugix_ctrl.grants.GrantsConfig": {
+      "$id": "rugix_ctrl.grants.GrantsConfig",
+      "type": "object",
+      "description": "Required detached installation grants.",
+      "properties": {
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mode": {
+          "$ref": "#/$defs/rugix_ctrl.grants.GrantPolicy"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "device": {
+          "type": "string"
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "state-directory": {
+          "type": "string"
+        },
+        "trusted-system-clock": {
+          "type": "boolean"
+        },
+        "max-lifetime": {
+          "type": "integer",
+          "format": "uint64"
+        }
+      },
+      "required": [
+        "roots",
+        "mode",
+        "namespace",
+        "device",
+        "trusted-system-clock"
       ],
       "unevaluatedProperties": false
     }

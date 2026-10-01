@@ -90,6 +90,13 @@ depends = ["test:unit"]
 description = "Run all Rust unit tests with every feature enabled."
 run = "cargo test --workspace --all-features"
 
+[tasks."test:grants"]
+description = "Test grant issuance and CLI/daemon installation in private Linux namespaces."
+run = """
+cargo build -p rugix-ctrl -p rugix-bundler
+python3 scripts/test-install-grants.py
+"""
+
 [tasks."test:system"]
 description = "Run the QEMU-based system test suite (requires a container runtime, QEMU, and OVMF)."
 dir = "tests"

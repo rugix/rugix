@@ -1,0 +1,39 @@
+//! Authority delegated to a certificate's public key.
+//!
+//! The certificate supplies the validity window. Each child certificate must
+//! narrow or preserve every restriction and remain inside its parent's window.
+
+import grant::AudienceTarget
+
+/// Constraints carried by a grant-authority certificate.
+record AuthorityConstraints {
+    /// Constraint format version. Must be 1.
+    version: u32,
+    /// Exact identity namespace.
+    namespace: string,
+    /// Permitted grant audience selectors.
+    audiences: AuthorityAudience,
+    /// Explicit service and operation permissions. An empty list authorizes nothing.
+    permissions: [OperationPermission],
+    /// Maximum grant validity window, in seconds.
+    max_grant_lifetime: u64,
+    /// Number of subordinate CA levels allowed below this certificate. Defaults to zero.
+    max_delegation_depth?: u32,
+}
+
+/// Audience selectors are compared exactly, without inferring group membership.
+#[json(tagged = externally)]
+variant AuthorityAudience {
+    /// Any device or group within the authority's namespace.
+    Any,
+    /// Exact device or group selectors. An empty list authorizes nothing.
+    Targets: [AudienceTarget],
+}
+
+/// One permission. Pairing the identifiers prevents mixing unrelated authorities.
+record OperationPermission {
+    /// Exact identifier of the executing service.
+    verifier: string,
+    /// Globally distinct, versioned permission identifier defined by the operation.
+    operation: string,
+}

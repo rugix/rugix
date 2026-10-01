@@ -11,9 +11,9 @@ description = "CMS signature creation and verification for Rugix"
 [dependencies]
 # CMS (Cryptographic Message Syntax) parsing and creation
 cms = "0.2.3"
-x509-cert = "0.2.5"
-const-oid = { version = "0.9", features = ["db"] }
-der = { version = "0.7", features = ["std", "alloc", "oid"] }
+x509-cert.workspace = true
+const-oid.workspace = true
+der.workspace = true
 spki = "0.7"
 
 # Cryptographic primitives

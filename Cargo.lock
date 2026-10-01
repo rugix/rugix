@@ -1623,6 +1623,7 @@ dependencies = [
  "rugix-common",
  "rugix-compression",
  "rugix-fs",
+ "rugix-grants",
  "serde",
  "serde_json",
  "si-crypto-hashes",
@@ -1651,6 +1652,7 @@ dependencies = [
  "rugix-cli",
  "rugix-common",
  "rugix-compression",
+ "rugix-grants",
  "rugix-pki",
  "rugix-version",
  "serde",
@@ -1748,12 +1750,14 @@ dependencies = [
  "jsonschema",
  "libc",
  "nix 0.29.0",
+ "rcgen",
  "reportify",
  "rugix-bundle",
  "rugix-cli",
  "rugix-common",
  "rugix-component-set",
  "rugix-fs",
+ "rugix-grants",
  "rugix-hooks",
  "rugix-pki",
  "rugix-tasks",
@@ -1787,6 +1791,24 @@ dependencies = [
  "tempfile",
  "tracing",
  "walkdir",
+]
+
+[[package]]
+name = "rugix-grants"
+version = "0.1.0"
+dependencies = [
+ "const-oid",
+ "der",
+ "rcgen",
+ "rugix-pki",
+ "serde",
+ "serde_ignored",
+ "serde_json",
+ "sidex",
+ "sidex-build-rs",
+ "sidex-serde",
+ "thiserror 2.0.18",
+ "x509-cert",
 ]
 
 [[package]]

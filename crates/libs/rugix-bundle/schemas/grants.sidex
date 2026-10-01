@@ -1,0 +1,47 @@
+//! Installation operation authorized by a detached grant.
+
+import manifest::HashDigest
+
+/// Complete detached installation grant before CMS encapsulation.
+alias InstallationGrant: ::rugix_grants::grant::Grant<InstallOperation>
+
+/// Exact installation request. The bundle hash binds all payload destinations.
+record InstallOperation {
+    /// Rugix header hash, including its hash algorithm.
+    bundle_hash: HashDigest,
+    /// Monotonic authorization sequence within the system or apps update scope.
+    sequence: u64,
+    /// Installation target and caller-selected installation behavior.
+    target: InstallTarget,
+}
+
+/// Supported installation targets.
+#[rust(derive(PartialEq, Eq))]
+#[json(tagged = externally)]
+variant InstallTarget {
+    /// Install and activate application payloads.
+    Apps,
+    /// Install system payloads with the specified options.
+    System: SystemInstallOptions,
+}
+
+/// System installation options covered by the grant.
+#[rust(derive(PartialEq, Eq))]
+record SystemInstallOptions {
+    /// Explicit boot group, or the locally selected inactive group when absent.
+    boot_group?: string,
+    /// Whether to retain the target's writable overlay.
+    keep_overlay: bool,
+    /// Explicit reboot behavior, or the bundle's default when absent.
+    reboot?: RebootMode,
+}
+
+/// Post-installation system behavior.
+#[rust(derive(PartialEq, Eq))]
+#[json(tagged = externally)]
+variant RebootMode {
+    Yes,
+    No,
+    Set,
+    Deferred,
+}

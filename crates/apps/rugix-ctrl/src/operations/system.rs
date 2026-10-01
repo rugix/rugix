@@ -87,10 +87,13 @@ impl Operation for RebootSystem {
 
     fn execute(
         self,
-        _context: &ExecutionContext<'_>,
+        context: &ExecutionContext<'_>,
         _input: Self::Input,
         _events: &mut dyn EventSink<Self::Event>,
     ) -> SystemResult<Self::Output> {
+        if self.spare {
+            super::install::grants::require_unconstrained_activation(context.config())?;
+        }
         reboot_system(self.spare)
     }
 }

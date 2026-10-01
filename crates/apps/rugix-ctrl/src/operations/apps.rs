@@ -170,6 +170,7 @@ impl Operation for ActivateApp {
         _input: Self::Input,
         events: &mut dyn EventSink<Self::Event>,
     ) -> SystemResult<Self::Output> {
+        super::install::grants::require_unconstrained_activation(context.config())?;
         context.with_app_manager(|manager| {
             activate_app(
                 manager,
@@ -266,6 +267,7 @@ impl Operation for RollbackApp {
         _input: Self::Input,
         events: &mut dyn EventSink<Self::Event>,
     ) -> SystemResult<Self::Output> {
+        super::install::grants::require_unconstrained_activation(context.config())?;
         context.with_app_manager(|manager| {
             rollback_app(manager, &self.name, self.skip_compatibility_check, events)
         })

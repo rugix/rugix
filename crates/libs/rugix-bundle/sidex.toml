@@ -4,11 +4,17 @@ version = "1"
 description = "Sidex schema for Rugix Ctrl."
 authors = ["Silitics GmbH <info@silitics.com>"]
 
+[dependencies]
+rugix_grants = { path = "../rugix-grants" }
+
 [backend.json-schema]
 
 [backend.rust]
 derive = ["Clone", "Debug"]
 plugins = ["builder", "serde"]
+
+[backend.rust.external]
+rugix_grants = "::rugix_grants"
 
 [backend.rust.types.table]
 "::core::builtins::Map" = "::std::collections::BTreeMap"

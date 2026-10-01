@@ -5,7 +5,11 @@ intended for operators designing update, shutdown, and incident-response procedu
 
 ## System Update Lifecycle
 
-Before changing an inactive target, Rugix verifies the bundle signature and component policy,
+When [installation grants](installation-grants.md) are configured, Rugix also authenticates the
+device audience, validity window, installation options, and durable authorization sequence.
+It reserves the grant before installation side effects and consumes it before activation.
+
+Before changing an inactive target, Rugix verifies the bundle signature or granted hash and component policy,
 resolves every payload destination, rejects active or unavailable slots, and runs update
 preflight. A full system bundle must contain an applicable system-slot payload. Hook execution,
 overlay removal, and bootloader preparation begin only after this preflight succeeds.
