@@ -39,11 +39,12 @@ use crate::payload_db;
 use crate::payload_db::BlockProvider;
 use crate::system::SystemResult;
 
-pub(super) fn install_payloads<S: BundleSource>(
+pub(crate) fn install_payloads<S: BundleSource>(
     config: &Config,
     app_manager: &AppManager,
     mut bundle_reader: BundleReader<S>,
     options: &BundleInstallOptions,
+    mut grant: Option<&mut super::grants::GrantSession>,
     events: &mut dyn EventSink<BundleInstallEvent>,
 ) -> SystemResult<()> {
     validate_app_bundle_header(bundle_reader.header())?;
@@ -69,6 +70,9 @@ pub(super) fn install_payloads<S: BundleSource>(
         check_app_bundle_compatibility(config, &bundle_reader, &touched_apps, events)
     })?;
 
+    if let Some(grant) = grant.as_deref_mut() {
+        grant.admit()?;
+    }
     let mut app_generations = HashMap::new();
     let mut payload_states: HashMap<String, HashMap<String, payload_db::PayloadState>> =
         HashMap::new();
@@ -330,6 +334,9 @@ pub(super) fn install_payloads<S: BundleSource>(
 
     if app_generations.is_empty() {
         warn!("bundle contained no app payloads");
+        if let Some(grant) = grant {
+            grant.consume()?;
+        }
         return Ok(());
     }
 
@@ -377,6 +384,9 @@ pub(super) fn install_payloads<S: BundleSource>(
                 .current_generation(app_name)
                 .whatever("unable to determine active app generation")?,
         });
+    }
+    if let Some(grant) = grant {
+        grant.consume()?;
     }
     if let Err(failure) = run_app_activation_transaction(
         &activation_plan,

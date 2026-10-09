@@ -20,6 +20,7 @@ toml = "0.7.6"
 uuid = { version = "1.11.0", features = ["v4"] }
 
 clap.workspace = true
+const-oid.workspace = true
 nix.workspace = true
 serde.workspace = true
 serde_ignored.workspace = true
@@ -40,6 +41,8 @@ rugix-fs.workspace = true
 si-crypto-hashes.workspace = true
 rugix-hooks.workspace = true
 rugix-pki.workspace = true
+rugix-grants.workspace = true
+rugix-install-grants.workspace = true
 hashbrown.workspace = true
 rugix-version.workspace = true
 jiff = { version = "0.2.14", default-features = false, features = [
@@ -61,6 +64,9 @@ rustls = { version = "0.23.45", default-features = false, features = [
     "std",
     "tls12",
 ] }
+
+[dev-dependencies]
+rcgen.workspace = true
 
 [build-dependencies]
 sidex-build-rs.workspace = true

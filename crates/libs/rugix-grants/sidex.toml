@@ -1,0 +1,14 @@
+[bundle]
+name = "rugix_grants"
+version = "1"
+description = "Signed grants for typed operations."
+authors = ["Silitics GmbH <info@silitics.com>"]
+
+[backend.json-schema]
+
+[backend.rust]
+derive = ["Clone", "Debug", "PartialEq", "Eq"]
+plugins = ["builder", "serde"]
+
+[backend.rust.plugin.serde]
+sidex_serde_path = "::sidex_serde"

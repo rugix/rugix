@@ -7,6 +7,9 @@
     "signatures": {
       "$ref": "#/$defs/rugix_ctrl.config.SignaturesConfig"
     },
+    "grants": {
+      "$ref": "#/$defs/rugix_ctrl.grants.GrantsConfig"
+    },
     "compatibility": {
       "$ref": "#/$defs/rugix_ctrl.config.CompatibilityConfig"
     },
@@ -43,6 +46,75 @@
         "roots"
       ],
       "unevaluatedProperties": false
+    },
+    "rugix_ctrl.grants.GrantAuthorityConfig": {
+      "$id": "rugix_ctrl.grants.GrantAuthorityConfig",
+      "type": "object",
+      "description": "One locally authorized grant issuer and the authority delegated to it.\n\nLocal authority bounds every grant accepted from this issuer. A certificate\ncannot widen it, so a stolen signing key stays inside these limits.",
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rugix_ctrl.grants.InstallPermission"
+          }
+        },
+        "max-lifetime": {
+          "type": "integer",
+          "format": "uint64"
+        }
+      },
+      "required": [
+        "root",
+        "permissions"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.grants.GrantPolicy": {
+      "$id": "rugix_ctrl.grants.GrantPolicy",
+      "enum": [
+        "grant-only",
+        "embedded-and-grant"
+      ],
+      "description": "Signature requirements in addition to the mandatory detached grant."
+    },
+    "rugix_ctrl.grants.GrantsConfig": {
+      "$id": "rugix_ctrl.grants.GrantsConfig",
+      "type": "object",
+      "description": "Required detached installation grants.\n\nWith this section present, every system and app installation requires a grant.",
+      "properties": {
+        "authorities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rugix_ctrl.grants.GrantAuthorityConfig"
+          }
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "identity-helper": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/rugix_ctrl.grants.GrantPolicy"
+        }
+      },
+      "required": [
+        "authorities",
+        "namespace",
+        "identity-helper"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.grants.InstallPermission": {
+      "$id": "rugix_ctrl.grants.InstallPermission",
+      "enum": [
+        "apps",
+        "system"
+      ],
+      "description": "Installation operations that a grant issuer may authorize."
     }
   }
 }

@@ -52,15 +52,26 @@ use crate::system::slots::SystemSlots;
 use crate::system::System;
 use crate::system::SystemResult;
 
-pub(super) fn install_payloads<R: BundleSource>(
-    system: &System,
+/// Resolved destination and overlay policy for a system installation.
+pub(crate) struct SystemInstallTarget<'a> {
+    pub(crate) system: &'a System,
+    pub(crate) boot_group: Option<&'a (BootGroupIdx, &'a BootGroup)>,
+    pub(crate) keep_overlay: bool,
+}
+
+pub(crate) fn install_payloads<R: BundleSource>(
+    target: SystemInstallTarget<'_>,
     config: &crate::config::config::Config,
     mut bundle_reader: BundleReader<R>,
-    boot_group: Option<&(BootGroupIdx, &BootGroup)>,
     options: &BundleInstallOptions,
-    keep_overlay: bool,
+    grant: Option<&mut super::grants::GrantSession>,
     events: &mut dyn EventSink<BundleInstallEvent>,
 ) -> SystemResult<SystemRebootMode> {
+    let SystemInstallTarget {
+        system,
+        boot_group,
+        keep_overlay,
+    } = target;
     run_compatibility_check(options, BundleKind::System, events, |events| {
         check_system_update_compatibility(config, &bundle_reader, events)
     })?;
@@ -82,6 +93,9 @@ pub(super) fn install_payloads<R: BundleSource>(
             )
         },
         || {
+            if let Some(grant) = grant {
+                grant.admit()?;
+            }
             update_hooks
                 .run_hooks("pre-update", hook_vars.clone(), &Default::default())
                 .whatever("error running `pre-update` hooks")

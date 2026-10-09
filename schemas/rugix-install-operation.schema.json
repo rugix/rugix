@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_install_grants.install.InstallOperation",
+  "type": "object",
+  "description": "Authorized installation. The bundle hash binds all payload destinations.",
+  "properties": {
+    "bundleHash": {
+      "$ref": "#/$defs/rugix_install_grants.install.HashDigest"
+    },
+    "target": {
+      "$ref": "#/$defs/rugix_install_grants.install.InstallTarget"
+    }
+  },
+  "required": [
+    "bundleHash",
+    "target"
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "rugix_install_grants.install.BootGroupConstraint": {
+      "$id": "rugix_install_grants.install.BootGroupConstraint",
+      "description": "Permitted boot group selection.",
+      "oneOf": [
+        {
+          "const": "local"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "named": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "rugix_install_grants.install.HashDigest": {
+      "$id": "rugix_install_grants.install.HashDigest",
+      "type": [
+        "string"
+      ]
+    },
+    "rugix_install_grants.install.InstallTarget": {
+      "$id": "rugix_install_grants.install.InstallTarget",
+      "description": "Supported installation targets.\n\nCases that carry a payload must stay externally tagged. Adjacent and internal\ntagging buffer the payload during deserialization, which hides unknown fields\ninside it from the tracking adapter that makes unsupported constraints fail.",
+      "oneOf": [
+        {
+          "const": "apps"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "system": {
+              "$ref": "#/$defs/rugix_install_grants.install.SystemInstallConstraints"
+            }
+          }
+        }
+      ]
+    },
+    "rugix_install_grants.install.RebootConstraint": {
+      "$id": "rugix_install_grants.install.RebootConstraint",
+      "description": "Permitted reboot behavior.",
+      "oneOf": [
+        {
+          "const": "bundle-default"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/rugix_install_grants.install.RebootMode"
+            }
+          }
+        }
+      ]
+    },
+    "rugix_install_grants.install.RebootMode": {
+      "$id": "rugix_install_grants.install.RebootMode",
+      "enum": [
+        "yes",
+        "no",
+        "set",
+        "deferred"
+      ],
+      "description": "Post-installation system behavior.\n\nCases carry no payload, so external tagging encodes them as plain strings."
+    },
+    "rugix_install_grants.install.SystemInstallConstraints": {
+      "$id": "rugix_install_grants.install.SystemInstallConstraints",
+      "type": "object",
+      "description": "System installation options this grant permits.\n\nEvery field is optional. An absent field permits any requested value and a\npresent field requires exactly the described request.",
+      "properties": {
+        "bootGroup": {
+          "$ref": "#/$defs/rugix_install_grants.install.BootGroupConstraint"
+        },
+        "keepOverlay": {
+          "type": "boolean"
+        },
+        "reboot": {
+          "$ref": "#/$defs/rugix_install_grants.install.RebootConstraint"
+        }
+      },
+      "required": [],
+      "unevaluatedProperties": false
+    }
+  }
+}

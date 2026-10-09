@@ -1,0 +1,23 @@
+[package]
+name = "rugix-install-grants"
+edition = "2024"
+authors.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Installation operation contract for detached Rugix grants"
+
+[dependencies]
+const-oid.workspace = true
+rugix-grants.workspace = true
+serde.workspace = true
+si-crypto-hashes.workspace = true
+sidex.workspace = true
+sidex-serde.workspace = true
+
+[build-dependencies]
+sidex-build-rs.workspace = true
+
+[lints]
+workspace = true

@@ -124,6 +124,8 @@ pub fn main() -> SystemResult<()> {
                 skip_compatibility_check,
                 root_cert,
                 bundle_hash,
+                grant,
+                insecure_skip_grant_verification,
                 reboot: reboot_type,
                 keep_overlay,
                 boot_group,
@@ -151,6 +153,8 @@ pub fn main() -> SystemResult<()> {
                         boot_group: boot_group.clone(),
                     },
                     options: BundleInstallOptions {
+                        grant: read_installation_grant(grant.as_deref())?,
+                        insecure_skip_grant_verification: *insecure_skip_grant_verification,
                         bundle_hash: bundle_hash.clone(),
                         root_cert: read_explicit_root_certificate(root_cert.as_deref())?,
                         insecure_skip_bundle_verification: *insecure_skip_bundle_verification,
@@ -431,6 +435,8 @@ pub fn main() -> SystemResult<()> {
                     skip_compatibility_check,
                     root_cert,
                     bundle_hash,
+                    grant,
+                    insecure_skip_grant_verification,
                     http_max_retries,
                     http_retry_initial_backoff,
                     http_retry_max_backoff,
@@ -450,6 +456,8 @@ pub fn main() -> SystemResult<()> {
                         source,
                         target: InstallTarget::Apps,
                         options: BundleInstallOptions {
+                            grant: read_installation_grant(grant.as_deref())?,
+                            insecure_skip_grant_verification: *insecure_skip_grant_verification,
                             bundle_hash: bundle_hash.clone(),
                             root_cert: read_explicit_root_certificate(root_cert.as_deref())?,
                             insecure_skip_bundle_verification: *insecure_skip_bundle_verification,
@@ -693,6 +701,23 @@ fn resolve_cli_bundle_source(
             BundleInput::Seekable(Box::new(input)),
         ))
     }
+}
+
+/// Read a bounded grant on the submitting side; the privileged executor verifies it.
+fn read_installation_grant(path: Option<&Path>) -> SystemResult<Option<Vec<u8>>> {
+    path.map(|path| {
+        let mut bytes = Vec::new();
+        File::open(path)
+            .whatever("unable to open installation grant")?
+            .take(rugix_grants::DEFAULT_MAX_GRANT_SIZE as u64 + 1)
+            .read_to_end(&mut bytes)
+            .whatever("unable to read installation grant")?;
+        if bytes.len() > rugix_grants::DEFAULT_MAX_GRANT_SIZE {
+            bail!("installation grant exceeds size limit");
+        }
+        Ok(bytes)
+    })
+    .transpose()
 }
 
 fn read_explicit_root_certificate(path: Option<&Path>) -> SystemResult<Option<Vec<u8>>> {
@@ -1100,6 +1125,27 @@ pub enum UpdateCommand {
         /// Expected bundle hash.
         #[clap(long)]
         bundle_hash: Option<HashDigest>,
+        /// Detached installation grant in CMS format.
+        ///
+        /// A grant decides how this installation is verified, so it cannot be
+        /// combined with the verification and compatibility options above.
+        #[clap(long, conflicts_with_all = [
+            "insecure_skip_bundle_verification",
+            "insecure_allow_missing_block_index",
+            "insecure_skip_grant_verification",
+            "skip_compatibility_check",
+            "root_cert",
+            "bundle_hash",
+        ])]
+        grant: Option<PathBuf>,
+        /// Install without a grant although grant policy requires one (insecure, do
+        /// not use in production).
+        ///
+        /// Intended for recovering a device whose grant issuer is unreachable. The
+        /// privileged daemon refuses this option unless it is configured with
+        /// `dangerously-insecure`.
+        #[clap(long)]
+        insecure_skip_grant_verification: bool,
         /// Control how to reboot the system.
         #[clap(long)]
         reboot: Option<UpdateRebootType>,
@@ -1240,6 +1286,27 @@ pub enum AppsCommand {
         /// Expected bundle hash.
         #[clap(long)]
         bundle_hash: Option<HashDigest>,
+        /// Detached installation grant in CMS format.
+        ///
+        /// A grant decides how this installation is verified, so it cannot be
+        /// combined with the verification and compatibility options above.
+        #[clap(long, conflicts_with_all = [
+            "insecure_skip_bundle_verification",
+            "insecure_allow_missing_block_index",
+            "insecure_skip_grant_verification",
+            "skip_compatibility_check",
+            "root_cert",
+            "bundle_hash",
+        ])]
+        grant: Option<PathBuf>,
+        /// Install without a grant although grant policy requires one (insecure, do
+        /// not use in production).
+        ///
+        /// Intended for recovering a device whose grant issuer is unreachable. The
+        /// privileged daemon refuses this option unless it is configured with
+        /// `dangerously-insecure`.
+        #[clap(long)]
+        insecure_skip_grant_verification: bool,
         /// Maximum number of retry attempts for transient HTTP errors.
         #[clap(long, default_value_t = 5)]
         http_max_retries: u32,

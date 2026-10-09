@@ -1,0 +1,42 @@
+//! Common envelope for signed operation grants.
+
+/// A constrained grant. All fields are authenticated together.
+record Grant<T> {
+    /// Envelope version. Must be 1.
+    version: u32,
+    /// Identifier unique within the issuing authority.
+    id: string,
+    /// Exact identifier of the service that may execute the operation.
+    service: string,
+    /// Intended recipient.
+    audience: Audience,
+    /// Inclusive start of validity, in seconds since the Unix epoch.
+    not_before: u64,
+    /// Exclusive end of validity, in seconds since the Unix epoch.
+    expires_at: u64,
+    /// Namespaced operation identifier including its contract version.
+    operation_type: string,
+    /// Complete typed operation, including every authority-relevant argument.
+    operation: T,
+}
+
+/// Audience interpreted within a provisioned identity namespace.
+record Audience {
+    /// Namespace selected by the trusted issuer configuration.
+    namespace: string,
+    /// Intended recipient or provisioned group.
+    target: AudienceTarget,
+}
+
+/// Exact matching only. Empty identifiers never match.
+///
+/// Cases that carry a payload must stay externally tagged. Adjacent and internal
+/// tagging buffer the payload during deserialization, which hides unknown fields
+/// inside it from the tracking adapter that makes unsupported constraints fail.
+#[json(tagged = externally, rename_all = "kebab-case")]
+variant AudienceTarget {
+    /// One recipient identity.
+    Recipient: string,
+    /// One group in the verifier's trusted membership records.
+    Group: string,
+}

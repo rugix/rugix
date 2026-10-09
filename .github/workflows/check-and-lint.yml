@@ -22,3 +22,15 @@ jobs:
         run: mise install --locked cargo:cargo-deny github:google/osv-scanner
       - name: Check
         run: mise run --skip-tools check
+
+  installation-grants:
+    name: Installation Grants
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust Toolchain
+        run: rustup show active-toolchain
+      - name: Build
+        run: cargo build --locked -p rugix-ctrl -p rugix-bundler
+      - name: Test Installation Grants
+        run: python3 scripts/test-install-grants.py

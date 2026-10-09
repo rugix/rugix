@@ -14,7 +14,9 @@ homepage = "https://rugix.org/"
 bytes = "1.7.1"
 clap = { version = "4.5.24", features = ["derive"] }
 console = "0.15.10"
+const-oid = { version = "0.9", features = ["db"] }
 ctrlc = { version = "3.4.5", features = ["termination"] }
+der = { version = "0.7", features = ["std", "alloc", "oid", "derive"] }
 flume = { version = "0.11.1", features = ["async"] }
 futures = "0.3.31"
 hashbrown = { version = "0.15.2", features = ["serde"] }
@@ -32,6 +34,7 @@ nix = { version = "0.29", features = [
     "zerocopy",
 ] }
 pin-project = "1.1.8"
+rcgen = "0.13"
 scoped-tls = "1.0.1"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_ignored = "0.1.14"
@@ -41,6 +44,7 @@ thiserror = "2.0.11"
 tokio = { version = "1.43.0", features = ["full"] }
 toml = "0.8.19"
 tracing = "0.1"
+x509-cert = "0.2.5"
 xz2 = "0.1.7"
 
 # In-house crates.
@@ -62,7 +66,9 @@ rugix-common = { path = "crates/libs/rugix-common" }
 rugix-component-set = { path = "crates/libs/rugix-component-set" }
 rugix-compression = { path = "crates/libs/rugix-compression" }
 rugix-fs = { path = "crates/libs/rugix-fs" }
+rugix-grants = { path = "crates/libs/rugix-grants" }
 rugix-hooks = { path = "crates/libs/rugix-hooks" }
+rugix-install-grants = { path = "crates/libs/rugix-install-grants" }
 rugix-tasks = { path = "crates/libs/rugix-tasks" }
 rugix-version = { path = "crates/libs/rugix-version" }
 rugix-pki = { path = "crates/libs/rugix-pki" }

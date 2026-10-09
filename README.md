@@ -50,6 +50,8 @@ Works with Yocto, Buildroot, and other Linux build systems.
 
 For the precise update durability boundaries, interruption behavior, and operator recovery
 expectations implemented by this repository, see [Update Reliability and Recovery](docs/update-reliability.md).
+For the wire format and certificate profile behind device-targeted installation authorization,
+see [Detached Installation Grants](docs/installation-grants.md).
 
 ## Rugix Admin
 
@@ -100,6 +102,7 @@ mise run codegen
 mise run build x86_64-unknown-linux-musl
 mise run package:deb x86_64-unknown-linux-musl
 mise run test:system
+mise run test:grants                   # CLI/daemon installation grants in private Linux namespaces
 ```
 
 Run `mise run doctor` to check host dependencies. Development requires rustup; entering

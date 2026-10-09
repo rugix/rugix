@@ -1643,7 +1643,9 @@ dependencies = [
  "bytes",
  "clap",
  "cms",
+ "const-oid",
  "hex",
+ "jiff",
  "jsonschema",
  "reportify",
  "rugix-bundle",
@@ -1651,6 +1653,8 @@ dependencies = [
  "rugix-cli",
  "rugix-common",
  "rugix-compression",
+ "rugix-grants",
+ "rugix-install-grants",
  "rugix-pki",
  "rugix-version",
  "serde",
@@ -1740,6 +1744,7 @@ version = "0.1.0"
 dependencies = [
  "byte-calc",
  "clap",
+ "const-oid",
  "hashbrown 0.15.5",
  "hex",
  "indexmap",
@@ -1748,13 +1753,16 @@ dependencies = [
  "jsonschema",
  "libc",
  "nix 0.29.0",
+ "rcgen",
  "reportify",
  "rugix-bundle",
  "rugix-cli",
  "rugix-common",
  "rugix-component-set",
  "rugix-fs",
+ "rugix-grants",
  "rugix-hooks",
+ "rugix-install-grants",
  "rugix-pki",
  "rugix-tasks",
  "rugix-version",
@@ -1790,6 +1798,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "rugix-grants"
+version = "0.1.0"
+dependencies = [
+ "const-oid",
+ "der",
+ "rcgen",
+ "rugix-pki",
+ "serde",
+ "serde_ignored",
+ "serde_json",
+ "sidex",
+ "sidex-build-rs",
+ "sidex-serde",
+ "thiserror 2.0.18",
+ "x509-cert",
+]
+
+[[package]]
 name = "rugix-hooks"
 version = "0.1.0"
 dependencies = [
@@ -1797,6 +1823,19 @@ dependencies = [
  "rugix-tasks",
  "tracing",
  "xscript",
+]
+
+[[package]]
+name = "rugix-install-grants"
+version = "0.1.0"
+dependencies = [
+ "const-oid",
+ "rugix-grants",
+ "serde",
+ "si-crypto-hashes",
+ "sidex",
+ "sidex-build-rs",
+ "sidex-serde",
 ]
 
 [[package]]

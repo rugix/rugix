@@ -90,13 +90,16 @@ impl AdmissionPolicy {
 
     fn authorize_install_options(&self, options: &BundleInstallOptions) -> SystemResult<()> {
         let BundleInstallOptions {
+            grant: _,
+            insecure_skip_grant_verification,
             bundle_hash,
             root_cert,
             insecure_skip_bundle_verification,
             insecure_allow_missing_block_index,
             skip_compatibility_check,
         } = options;
-        let has_security_override = bundle_hash.is_some()
+        let has_security_override = *insecure_skip_grant_verification
+            || bundle_hash.is_some()
             || root_cert.is_some()
             || *insecure_skip_bundle_verification
             || *insecure_allow_missing_block_index
@@ -320,6 +323,10 @@ mod tests {
         options.skip_compatibility_check = true;
         overrides.push(options);
 
+        let mut options = secure_options();
+        options.insecure_skip_grant_verification = true;
+        overrides.push(options);
+
         for options in overrides {
             assert!(secure_policy
                 .authorize(&Request::InstallBundle(app_install(options.clone())))
@@ -359,6 +366,8 @@ mod tests {
 
     fn secure_options() -> BundleInstallOptions {
         BundleInstallOptions {
+            grant: None,
+            insecure_skip_grant_verification: false,
             bundle_hash: None,
             root_cert: None,
             insecure_skip_bundle_verification: false,

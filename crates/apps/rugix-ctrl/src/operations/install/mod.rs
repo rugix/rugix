@@ -68,8 +68,12 @@ impl Operation for InstallBundle {
         let Self {
             source,
             target,
-            options,
+            mut options,
         } = self;
+        let mut grant = grants::GrantSession::begin(context.config(), &options, &target)?;
+        if let Some(grant) = &grant {
+            options.bundle_hash = Some(grant.bundle_hash().clone());
+        }
         match target {
             InstallTarget::Apps => {
                 events.emit(BundleInstallEvent::Started);
@@ -80,6 +84,7 @@ impl Operation for InstallBundle {
                         input,
                         options,
                         ResolvedInstallTarget::Apps(manager),
+                        grant.as_mut(),
                         events,
                     )
                 })
@@ -130,6 +135,7 @@ impl Operation for InstallBundle {
                         reboot,
                         keep_overlay,
                     },
+                    grant.as_mut(),
                     events,
                 )
             }
@@ -214,6 +220,10 @@ impl<T: Read + Seek + Send> ReadSeek for T {}
 /// Bundle verification and compatibility options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BundleInstallOptions {
+    #[serde(default)]
+    pub(crate) grant: Option<Vec<u8>>,
+    #[serde(default)]
+    pub(crate) insecure_skip_grant_verification: bool,
     pub(crate) bundle_hash: Option<HashDigest>,
     pub(crate) root_cert: Option<Vec<u8>>,
     pub(crate) insecure_skip_bundle_verification: bool,
@@ -222,6 +232,7 @@ pub(crate) struct BundleInstallOptions {
 }
 
 mod apps;
+pub(crate) mod grants;
 mod system;
 
 enum ResolvedInstallTarget<'a> {
@@ -265,6 +276,7 @@ fn install_bundle(
     input: BundleInput,
     options: BundleInstallOptions,
     target: ResolvedInstallTarget<'_>,
+    mut grant: Option<&mut grants::GrantSession>,
     events: &mut dyn EventSink<BundleInstallEvent>,
 ) -> SystemResult<()> {
     let kind = match &target {
@@ -293,7 +305,14 @@ fn install_bundle(
         kind,
         |bundle_reader| match &target {
             ResolvedInstallTarget::Apps(manager) => {
-                apps::install_payloads(config, manager, bundle_reader, &options, events)?;
+                apps::install_payloads(
+                    config,
+                    manager,
+                    bundle_reader,
+                    &options,
+                    grant.as_deref_mut(),
+                    events,
+                )?;
                 Ok(TargetInstallOutput::Apps)
             }
             ResolvedInstallTarget::System {
@@ -302,12 +321,15 @@ fn install_bundle(
                 keep_overlay,
                 ..
             } => system::install_payloads(
-                system,
+                system::SystemInstallTarget {
+                    system,
+                    boot_group: boot_group.as_ref(),
+                    keep_overlay: *keep_overlay,
+                },
                 config,
                 bundle_reader,
-                boot_group.as_ref(),
                 &options,
-                *keep_overlay,
+                grant.as_deref_mut(),
                 events,
             )
             .map(TargetInstallOutput::System),
@@ -332,6 +354,9 @@ fn install_bundle(
                     stats.bytes_read,
                     stats.total_bytes(),
                 );
+            }
+            if let Some(grant) = grant {
+                grant.consume()?;
             }
             match reboot.unwrap_or(default_reboot) {
                 SystemRebootMode::Yes => {
@@ -595,8 +620,16 @@ fn start_verified_bundle<'source>(
             .whatever("unable to read bundle")?,
     };
     let root_certs = configured_signature_roots(config, options.root_cert.as_deref());
-    let bundle_verified =
-        options.bundle_hash.is_some() || verify_bundle_signature(&root_certs, &bundle_reader)?;
+    // An authenticated hash stands in for a publisher signature unless the grant
+    // policy additionally requires independent publisher approval.
+    let require_embedded = config.grants.as_ref().is_some_and(|policy| {
+        matches!(
+            policy.mode,
+            Some(crate::config::grants::GrantPolicy::EmbeddedAndGrant)
+        )
+    });
+    let bundle_verified = (!require_embedded && options.bundle_hash.is_some())
+        || verify_bundle_signature(&root_certs, &bundle_reader)?;
     if !bundle_verified && !options.insecure_skip_bundle_verification {
         match kind {
             BundleKind::App => {

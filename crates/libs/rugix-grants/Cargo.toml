@@ -1,0 +1,30 @@
+[package]
+name = "rugix-grants"
+edition = "2024"
+authors.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Signed, constrained grants for typed operations"
+
+[dependencies]
+const-oid.workspace = true
+der.workspace = true
+x509-cert.workspace = true
+rugix-pki.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_ignored.workspace = true
+sidex.workspace = true
+sidex-serde.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+sidex-build-rs.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true
+
+[lints]
+workspace = true

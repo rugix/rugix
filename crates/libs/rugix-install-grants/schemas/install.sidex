@@ -1,0 +1,72 @@
+//! Installation operation authorized by a detached grant.
+
+#[rust(type="si_crypto_hashes::HashDigest")]
+#[json(type="string")]
+opaque HashDigest
+
+/// Authorized installation. The bundle hash binds all payload destinations.
+record InstallOperation {
+    /// Rugix bundle header hash, including its hash algorithm.
+    bundle_hash: HashDigest,
+    /// Installation target and the behavior this grant permits.
+    target: InstallTarget,
+}
+
+/// Supported installation targets.
+///
+/// Cases that carry a payload must stay externally tagged. Adjacent and internal
+/// tagging buffer the payload during deserialization, which hides unknown fields
+/// inside it from the tracking adapter that makes unsupported constraints fail.
+#[json(tagged = externally, rename_all = "kebab-case")]
+variant InstallTarget {
+    /// Install and activate application payloads.
+    Apps,
+    /// Install system payloads within the permitted options.
+    System: SystemInstallConstraints,
+}
+
+/// System installation options this grant permits.
+///
+/// Every field is optional. An absent field permits any requested value and a
+/// present field requires exactly the described request.
+record SystemInstallConstraints {
+    /// Permitted boot group selection.
+    boot_group?: BootGroupConstraint,
+    /// Permitted handling of the target's writable overlay.
+    keep_overlay?: bool,
+    /// Permitted reboot behavior.
+    reboot?: RebootConstraint,
+}
+
+/// Permitted boot group selection.
+#[json(tagged = externally, rename_all = "kebab-case")]
+variant BootGroupConstraint {
+    /// The device must select an inactive boot group locally.
+    Local,
+    /// The device must install into exactly this boot group.
+    Named: string,
+}
+
+/// Permitted reboot behavior.
+#[json(tagged = externally, rename_all = "kebab-case")]
+variant RebootConstraint {
+    /// The bundle's default behavior.
+    BundleDefault,
+    /// Exactly this mode.
+    Mode: RebootMode,
+}
+
+/// Post-installation system behavior.
+///
+/// Cases carry no payload, so external tagging encodes them as plain strings.
+#[json(tagged = externally, rename_all = "kebab-case")]
+variant RebootMode {
+    /// Select the installed system and reboot.
+    Yes,
+    /// Leave boot selection unchanged.
+    No,
+    /// Select the installed system without rebooting.
+    Set,
+    /// Record the installed system for a later deferred reboot.
+    Deferred,
+}

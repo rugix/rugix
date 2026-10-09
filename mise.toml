@@ -51,6 +51,15 @@ cp generated/rugix_bundle.compose.ImageOptions.schema.json ../../../schemas/rugi
 cp generated/rugix_bundle.compose.ImageMetadata.schema.json ../../../schemas/rugix-compose-image-metadata.schema.json
 )
 
+(
+cd crates/libs/rugix-install-grants
+mkdir -p generated
+rm -rf generated/*
+sidex generate json-schema generated/
+
+cp generated/rugix_install_grants.install.InstallOperation.schema.json ../../../schemas/rugix-install-operation.schema.json
+)
+
 cargo fmt
 """
 
@@ -88,7 +97,18 @@ depends = ["test:unit"]
 
 [tasks."test:unit"]
 description = "Run all Rust unit tests with every feature enabled."
+# Several tests write an executable and then run it. Writing an executable in one
+# thread while another forks makes the kernel report `ETXTBSY`, so tests that do
+# this must not run in parallel.
+env = { RUST_TEST_THREADS = "1" }
 run = "cargo test --workspace --all-features"
+
+[tasks."test:grants"]
+description = "Test grant issuance and CLI/daemon installation in private Linux namespaces."
+run = """
+cargo build -p rugix-ctrl -p rugix-bundler
+python3 scripts/test-install-grants.py
+"""
 
 [tasks."test:system"]
 description = "Run the QEMU-based system test suite (requires a container runtime, QEMU, and OVMF)."

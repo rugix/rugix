@@ -10,7 +10,9 @@ homepage.workspace = true
 
 [dependencies]
 clap.workspace = true
+const-oid.workspace = true
 hex.workspace = true
+jiff.workspace = true
 jsonschema.workspace = true
 reportify.workspace = true
 rugix-bundle.workspace = true
@@ -31,6 +33,8 @@ serde.workspace = true
 serde_yaml_ng = "0.10"
 cms = "0.2.3"
 rugix-pki.workspace = true
+rugix-grants.workspace = true
+rugix-install-grants.workspace = true
 
 [lints]
 workspace = true
