@@ -359,6 +359,7 @@ fn list_apps(manager: &AppManager) -> SystemResult<IndexMap<String, AppListEntry
                 app.clone(),
                 AppListEntryOutput::new(status)
                     .with_generation(generation)
+                    .with_orchestrator(read_orchestrator(manager, app, generation))
                     .with_metadata(metadata),
             )
         })
@@ -374,9 +375,12 @@ fn query_app(manager: &AppManager, app: String) -> SystemResult<AppInfoOutput> {
     let current = manager
         .current_generation(&app)
         .whatever("unable to read app state")?;
-    let state = manager
+    let lifecycle = manager
         .read_state(&app)
         .whatever("unable to read app state")?;
+    let desired_configuration_revision = manager
+        .desired_configuration_revision(&app)
+        .whatever("unable to read desired app configuration revision")?;
     let generation_entries = generations
         .iter()
         .map(|generation| {
@@ -386,16 +390,41 @@ fn query_app(manager: &AppManager, app: String) -> SystemResult<AppInfoOutput> {
                 .and_then(|generation_dir| AppManager::read_metadata(&generation_dir));
             GenerationInfoOutput::new(
                 generation.meta.number,
-                generation.meta.created_at.clone(),
                 generation.complete,
                 Some(generation.meta.number) == current,
             )
+            .with_created_at(created_at(&generation.meta))
             .with_last_activated(generation.meta.last_activated.clone())
             .with_configuration_revision(generation.meta.configuration_revision)
             .with_metadata(metadata)
         })
         .collect();
-    Ok(AppInfoOutput::new(app, status, state, generation_entries))
+    let orchestrator = read_orchestrator(manager, &app, current);
+    Ok(
+        AppInfoOutput::new(app, status, lifecycle, generation_entries)
+            .with_orchestrator(orchestrator)
+            .with_desired_configuration_revision(desired_configuration_revision),
+    )
+}
+
+/// Read the orchestrator of an app's active generation for inspection output.
+fn read_orchestrator(manager: &AppManager, app: &str, generation: Option<u64>) -> Option<String> {
+    let generation = generation?;
+    match manager.read_orchestrator(app, generation) {
+        Ok(orchestrator) => Some(orchestrator),
+        Err(error) => {
+            tracing::error!(app, generation, error = ?error, "unable to read app manifest");
+            None
+        }
+    }
+}
+
+/// Report a creation timestamp only when the generation recorded one.
+///
+/// `AppManager::list_generations` synthesizes metadata with an empty timestamp for a
+/// generation whose `generation.json` is missing or unreadable.
+fn created_at(generation: &crate::config::apps::AppGeneration) -> Option<String> {
+    Some(generation.created_at.clone()).filter(|created_at| !created_at.is_empty())
 }
 
 fn activate_app(

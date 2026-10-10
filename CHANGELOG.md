@@ -5,6 +5,8 @@
 Behavior Changes:
 
 - App bundles must carry payloads for a single app. Rugix Bundler rejects a manifest declaring app payloads for several apps, and Rugix Ctrl refuses to install such a bundle. No packing command could produce one, so this affects hand-written bundle manifests only. Pack one bundle per app.
+- `rugix-ctrl apps info` reports the persisted lifecycle state as `lifecycle` instead of `state`, so that it is no longer mistaken for the live workload `status` next to it. Both remain objects whose discriminant is `state`.
+- `rugix-ctrl apps info` omits `createdAt` for a generation whose metadata is missing instead of reporting an empty string.
 
 Nix integration:
 
@@ -19,6 +21,11 @@ Rugix Bundler:
 
 Rugix Ctrl:
 
+- Report the orchestrator of the active app generation in `rugix-ctrl apps list` and `rugix-ctrl apps info`, and the desired application configuration revision in `rugix-ctrl apps info`.
+- Publish JSON Schemas for the application inspection output: `apps list` entries, `apps info`, `apps gc`, and `apps config set`.
+- Execute `rugix-ctrl apps generations` through the operation layer, so that it works through the privileged daemon and reports generation metadata like `apps info` does.
+- Fix selection of the most recently activated app generation. Timestamps were compared as strings, and they carry fractional seconds only when those are non-zero, so `rugix-ctrl apps activate APP` without a generation could pick an older generation.
+- Fix the Docker Compose activation diagnostics heading, which contained a literal `{DIAGNOSTIC_LOG_TAIL}` instead of the log tail length.
 - Add opt-in automatic block-index management for delta-enabled full system updates.
 - Add the `rugix.init.quiet` kernel command-line option to suppress routine early-boot output while retaining errors.
 - Add versioned JSON configuration for Rugix Apps, including optional JSON Schema validation, crash-safe application, and rollback of generation/configuration pairs.

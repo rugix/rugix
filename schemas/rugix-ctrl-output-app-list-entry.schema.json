@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.output.AppListEntryOutput",
+  "type": "object",
+  "description": "Entry in the app list output.",
+  "properties": {
+    "status": {
+      "$ref": "#/$defs/rugix_ctrl.apps.AppStatus"
+    },
+    "generation": {
+      "type": "integer",
+      "format": "uint64"
+    },
+    "orchestrator": {
+      "type": "string"
+    },
+    "metadata": {
+      "$ref": "#/$defs/rugix_ctrl.output.JsonValue"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "rugix_ctrl.apps.AppStatus": {
+      "$id": "rugix_ctrl.apps.AppStatus",
+      "description": "Live workload status.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "running"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "unhealthy"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "stopped"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "failed"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "unknown"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        }
+      ]
+    },
+    "rugix_ctrl.output.JsonValue": {
+      "$id": "rugix_ctrl.output.JsonValue"
+    }
+  }
+}

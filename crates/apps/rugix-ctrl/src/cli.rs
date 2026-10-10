@@ -576,28 +576,8 @@ pub fn main() -> SystemResult<()> {
                     )?;
                 }
                 AppsCommand::Generations { app } => {
-                    use crate::config::output::GenerationInfoOutput;
-                    let manager = load_cli_app_manager()?;
-                    let generations = manager
-                        .list_generations(app)
-                        .whatever("unable to list generations")?;
-                    let current = manager
-                        .current_generation(app)
-                        .whatever("unable to read app state")?;
-                    let entries: Vec<_> = generations
-                        .iter()
-                        .map(|gen| {
-                            GenerationInfoOutput::new(
-                                gen.meta.number,
-                                gen.meta.created_at.clone(),
-                                gen.complete,
-                                Some(gen.meta.number) == current,
-                            )
-                            .with_last_activated(gen.meta.last_activated.clone())
-                            .with_configuration_revision(gen.meta.configuration_revision)
-                        })
-                        .collect();
-                    rugix_cli::json::print_json(&entries, false)
+                    let output = execute_operation(QueryApp { name: app.clone() }, ())?;
+                    rugix_cli::json::print_json(&output.generations, false)
                         .whatever("unable to write generations to stdout")?;
                 }
                 AppsCommand::Gc { app, keep } => {

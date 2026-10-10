@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.output.AppConfigurationSetOutput",
+  "type": "object",
+  "description": "Result of setting application configuration.",
+  "properties": {
+    "revision": {
+      "type": "integer",
+      "format": "uint64"
+    }
+  },
+  "required": [
+    "revision"
+  ],
+  "unevaluatedProperties": false
+}

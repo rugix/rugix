@@ -82,6 +82,8 @@ record AppListEntryOutput {
     status: AppStatus,
     /// Currently active generation number, if any.
     generation?: u64,
+    /// Orchestrator declared by the active generation, if any.
+    orchestrator?: string,
     /// Metadata of the active generation, if any.
     metadata?: JsonValue,
 }
@@ -92,8 +94,12 @@ record AppInfoOutput {
     name: string,
     /// Live workload status.
     status: AppStatus,
-    /// Persisted app state.
-    state: AppState,
+    /// Persisted lifecycle state.
+    lifecycle: AppState,
+    /// Orchestrator declared by the active generation, if any.
+    orchestrator?: string,
+    /// Desired configuration revision, applied on the next activation, if any.
+    desired_configuration_revision?: u64,
     /// All generations of the app.
     generations: [GenerationInfoOutput],
 }
@@ -102,8 +108,8 @@ record AppInfoOutput {
 record GenerationInfoOutput {
     /// Generation number.
     number: u64,
-    /// Creation timestamp (RFC 3339).
-    created_at: string,
+    /// Creation timestamp (RFC 3339), absent when generation metadata is missing.
+    created_at?: string,
     /// Whether the generation is complete (fully installed).
     complete: bool,
     /// Timestamp of the last successful activation (RFC 3339), if any.

@@ -1073,19 +1073,40 @@ impl AppManager {
     }
 
     /// Find the most recently activated generation (by `lastActivated` timestamp).
+    ///
+    /// Timestamps are parsed rather than compared as strings, because they carry
+    /// fractional seconds only when those are non-zero: `…:05Z` sorts after
+    /// `…:05.5Z` lexicographically. Generations activated within the same instant
+    /// are ordered by generation number.
     pub fn last_activated_generation(&self, app_name: &str) -> AppsResult<Option<u64>> {
         validate_app_name(app_name)?;
         let generations = self.list_generations(app_name)?;
         let best = generations
             .iter()
-            .filter_map(|g| {
-                g.meta
+            .filter_map(|generation| {
+                let activated = generation
+                    .meta
                     .last_activated
-                    .as_deref()
-                    .map(|ts| (g.meta.number, ts))
+                    .as_deref()?
+                    .parse::<jiff::Timestamp>()
+                    .ok()?;
+                Some((activated, generation.meta.number))
             })
-            .max_by_key(|(_num, ts)| ts.to_owned());
-        Ok(best.map(|(num, _)| num))
+            .max();
+        Ok(best.map(|(_, number)| number))
+    }
+
+    /// Return the desired device-specific configuration revision, if any.
+    pub fn desired_configuration_revision(&self, app_name: &str) -> AppsResult<Option<u64>> {
+        validate_app_name(app_name)?;
+        self.read_configuration_revision(app_name)
+    }
+
+    /// Return the orchestrator declared by a generation.
+    pub fn read_orchestrator(&self, app_name: &str, generation: u64) -> AppsResult<String> {
+        validate_app_name(app_name)?;
+        let manifest = load_manifest(&self.generation_dir_unchecked(app_name, generation))?;
+        Ok(manifest.orchestrator)
     }
 
     /// Find the generation that [`Self::rollback`] would activate.
@@ -1778,6 +1799,38 @@ mod tests {
         assert_eq!(
             manager.read_configuration("example").unwrap(),
             Some(migrated)
+        );
+    }
+
+    /// Verifies the most recently activated generation is found even when timestamps
+    /// differ only in whether they carry fractional seconds.
+    #[test]
+    fn the_last_activated_generation_is_ordered_by_instant() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(tempdir.path().join("apps"), AppsConfig::new());
+        for generation in 1..=3 {
+            setup_generation(&manager, "example", generation, "#!/bin/sh\nexit 0\n");
+        }
+        // Generation 2 activated half a second after generation 3, but sorts before it
+        // as a string, because `Z` is greater than `.`.
+        for (generation, activated) in [
+            (1, "2026-07-13T00:00:00Z"),
+            (3, "2026-07-13T00:00:05Z"),
+            (2, "2026-07-13T00:00:05.5Z"),
+        ] {
+            let dir = manager.generation_dir("example", generation).unwrap();
+            manager
+                .write_generation_metadata(
+                    &dir,
+                    &AppGeneration::new(generation, "2026-07-13T00:00:00Z".to_owned())
+                        .with_last_activated(Some(activated.to_owned())),
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            manager.last_activated_generation("example").unwrap(),
+            Some(2)
         );
     }
 
