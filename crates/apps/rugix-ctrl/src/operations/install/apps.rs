@@ -1,6 +1,5 @@
 //! Application bundle installation.
 
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
@@ -24,7 +23,6 @@ use tracing::info;
 use tracing::warn;
 
 use super::enforce_bundle_component_policy;
-use super::report_compatibility_skip;
 use super::require_compatible_components;
 use super::run_compatibility_check;
 use super::BufferedPipeTarget;
@@ -32,9 +30,7 @@ use super::BundleInstallEvent;
 use super::BundleInstallOptions;
 use super::BundleKind;
 use super::HashWriter;
-use crate::apps::manager::AppDeployment;
 use crate::apps::manager::AppManager;
-use crate::config::apps::AppConfiguration;
 use crate::config::config::Config;
 use crate::operations::EventSink;
 use crate::payload_db;
@@ -48,33 +44,25 @@ pub(super) fn install_payloads<S: BundleSource>(
     options: &BundleInstallOptions,
     events: &mut dyn EventSink<BundleInstallEvent>,
 ) -> SystemResult<()> {
-    validate_app_bundle_header(bundle_reader.header())?;
+    let app_name = validate_app_bundle_header(bundle_reader.header())?;
 
     let bundle_components = bundle_reader.header().components.clone();
     if let Some(components) = &bundle_components {
         crate::components::validate_bundle_components(components)?;
     }
-    let touched_apps = touched_apps(bundle_reader.header());
-    let bundle_components_app = if bundle_components.is_some() {
-        Some(app_bundle_components_owner(bundle_reader.header())?)
-    } else {
-        None
-    };
-    let supplied_configuration = supplied_app_configuration(options, &touched_apps)?;
 
-    let mut app_locks = HashMap::new();
-    for app in &touched_apps {
-        let lock = app_manager.lock_app(app).whatever("unable to lock app")?;
-        app_locks.insert(app.clone(), lock);
-    }
+    let lock = app_manager
+        .lock_app(&app_name)
+        .whatever("unable to lock app")?;
 
     run_compatibility_check(options, BundleKind::App, events, |events| {
-        check_app_bundle_compatibility(config, &bundle_reader, &touched_apps, events)
+        check_app_bundle_compatibility(config, &bundle_reader, &app_name, events)
     })?;
 
-    let mut app_generations = HashMap::new();
-    let mut payload_states: HashMap<String, HashMap<String, payload_db::PayloadState>> =
-        HashMap::new();
+    let (generation, generation_dir) = app_manager
+        .create_generation(&lock, &app_name)
+        .whatever("unable to create app generation")?;
+    let mut payload_states: HashMap<String, payload_db::PayloadState> = HashMap::new();
     let mut progress = |_source: &_| {};
 
     while let Some(payload) = bundle_reader
@@ -83,22 +71,10 @@ pub(super) fn install_payloads<S: BundleSource>(
     {
         let payload_entry = payload.entry();
         if let Some(type_app_file) = &payload_entry.type_app_file {
-            let app_name = type_app_file.app.clone();
             let payload_path = ValidatedRelativePath::new(type_app_file.path.clone())
                 .whatever("invalid app-file path")?;
             let file_mode = type_app_file.mode;
             let delta_encoding = payload_entry.delta_encoding.clone();
-            if !app_generations.contains_key(&app_name) {
-                let lock = app_locks
-                    .get(&app_name)
-                    .ok_or_else(|| whatever!("app payload is missing its preflight lock"))?;
-                let generation = app_manager
-                    .create_generation(lock, &app_name)
-                    .whatever("unable to create app generation")?;
-                app_generations.insert(app_name.clone(), generation);
-            }
-            let (_, generation_dir) = &app_generations[&app_name];
-            let generation_dir = generation_dir.clone();
             ensure_no_symlink_components(&generation_dir, &payload_path)
                 .whatever("app-file path contains a symbolic link")?;
             let file_path = generation_dir.join(&payload_path);
@@ -256,7 +232,7 @@ pub(super) fn install_payloads<S: BundleSource>(
                     .whatever("unable to set app file permissions")?;
             }
 
-            payload_states.entry(app_name.clone()).or_default().insert(
+            payload_states.insert(
                 payload_path.as_str().to_owned(),
                 payload_db::PayloadState {
                     hashes: [(
@@ -272,19 +248,9 @@ pub(super) fn install_payloads<S: BundleSource>(
             continue;
         }
 
-        if let Some(type_app_archive) = &payload_entry.type_app_archive {
-            if !app_generations.contains_key(&type_app_archive.app) {
-                let lock = app_locks
-                    .get(&type_app_archive.app)
-                    .ok_or_else(|| whatever!("app payload is missing its preflight lock"))?;
-                let generation = app_manager
-                    .create_generation(lock, &type_app_archive.app)
-                    .whatever("unable to create app generation")?;
-                app_generations.insert(type_app_archive.app.clone(), generation);
-            }
-            let (_, generation_dir) = &app_generations[&type_app_archive.app];
+        if payload_entry.type_app_archive.is_some() {
             info!(
-                app = type_app_archive.app,
+                app = app_name,
                 "extracting app archive payload {}",
                 payload.idx()
             );
@@ -323,7 +289,7 @@ pub(super) fn install_payloads<S: BundleSource>(
             let archive_file = File::open(temporary_archive.path())
                 .whatever("unable to reopen validated archive for extraction")?;
             tar::Archive::new(archive_file)
-                .unpack(generation_dir)
+                .unpack(&generation_dir)
                 .whatever("unable to extract app archive")?;
             continue;
         }
@@ -331,91 +297,44 @@ pub(super) fn install_payloads<S: BundleSource>(
         payload.skip().whatever("unable to skip payload")?;
     }
 
-    if app_generations.is_empty() {
-        warn!("bundle contained no app payloads");
-        return Ok(());
+    AppManager::save_payload_states(&generation_dir, &payload_states)
+        .whatever("unable to save app payload states")?;
+    info!(app = %app_name, generation, "finalizing app generation");
+    if let Some(bundle_components) = &bundle_components {
+        crate::components::write_bundle_components(
+            bundle_components,
+            &generation_dir.join(".rugix/components"),
+        )
+        .whatever("unable to install app component metadata")?;
     }
+    app_manager
+        .write_generation_metadata(
+            &generation_dir,
+            &crate::config::apps::AppGeneration::new(
+                generation,
+                jiff::Timestamp::now().to_string(),
+            ),
+        )
+        .whatever("unable to write generation metadata")?;
+    AppManager::finalize_generation(&generation_dir)
+        .whatever("unable to finalize app generation")?;
 
-    for app_name in &touched_apps {
-        let Some((generation, generation_dir)) = app_generations.get(app_name) else {
-            continue;
-        };
-        if let Some(states) = payload_states.get(app_name) {
-            AppManager::save_payload_states(generation_dir, states)
-                .whatever("unable to save app payload states")?;
-        }
-        info!(app = %app_name, generation, "finalizing app generation");
-        if bundle_components_app.as_ref() == Some(app_name) {
-            let bundle_components = bundle_components
-                .as_ref()
-                .ok_or_else(|| whatever!("app component metadata disappeared after preflight"))?;
-            crate::components::write_bundle_components(
-                bundle_components,
-                &generation_dir.join(".rugix/components"),
-            )
-            .whatever("unable to install app component metadata")?;
-        }
-        app_manager
-            .write_generation_metadata(
-                generation_dir,
-                &crate::config::apps::AppGeneration::new(
-                    *generation,
-                    jiff::Timestamp::now().to_string(),
-                ),
-            )
-            .whatever("unable to write generation metadata")?;
-        AppManager::finalize_generation(generation_dir)
-            .whatever("unable to finalize app generation")?;
-    }
-
-    // Resolving configuration for every app before the activation transaction means a
-    // document that does not satisfy a new generation's schema fails the installation
-    // without stopping a running workload, and without tearing down an app that was
-    // already switched over earlier in the transaction. Generations are finalized
-    // first, so a rejected document leaves a complete generation that
-    // `apps activate --config` can take over without downloading the bundle again.
-    let mut activation_plan = Vec::new();
-    for app_name in &touched_apps {
-        let Some((generation, _)) = app_generations.get(app_name) else {
-            continue;
-        };
-        let configuration = supplied_configuration
-            .filter(|(app, _)| app == app_name)
-            .map(|(_, configuration)| configuration);
-        let target = app_manager
-            .prepare_configuration(&app_locks[app_name], app_name, *generation, configuration)
-            .whatever("unable to prepare app configuration")?;
-        activation_plan.push(AppActivationPlan {
-            app: app_name.clone(),
-            target,
-            previous: app_manager
-                .current_deployment(app_name)
-                .whatever("unable to determine active app deployment")?,
-        });
-    }
-
-    if let Err(failure) = run_app_activation_transaction(
-        &activation_plan,
-        |plan| app_manager.activate_deployment(&app_locks[&plan.app], &plan.app, plan.target),
-        |plan| match plan.previous {
-            // Restoring the exact pair matters because a successful activation has
-            // already moved the app's desired configuration revision forward.
-            Some(previous) => {
-                app_manager.activate_deployment(&app_locks[&plan.app], &plan.app, previous)
-            }
-            None => match app_manager.current_generation(&plan.app)? {
-                Some(_) => app_manager.deactivate(&app_locks[&plan.app], &plan.app),
-                None => Ok(()),
-            },
-        },
-    ) {
-        bail!(
-            "multi-app activation failed for {:?}: {:?}; rollback outcomes: {:?}",
-            failure.app,
-            failure.error,
-            failure.rollbacks
-        );
-    }
+    // Resolving configuration before activation means a document that does not satisfy
+    // the new generation's schema fails the installation without stopping a running
+    // workload. The generation is finalized first, so a rejected document leaves a
+    // complete generation that `apps activate --config` can take over without
+    // downloading the bundle again.
+    let target = app_manager
+        .prepare_configuration(
+            &lock,
+            &app_name,
+            generation,
+            options.app_configuration.as_ref(),
+        )
+        .whatever("unable to prepare app configuration")?;
+    app_manager
+        .activate_deployment(&lock, &app_name, target)
+        .whatever("unable to activate app generation")?;
 
     Ok(())
 }
@@ -423,120 +342,21 @@ pub(super) fn install_payloads<S: BundleSource>(
 fn check_app_bundle_compatibility<S: BundleSource>(
     config: &Config,
     bundle_reader: &BundleReader<S>,
-    touched_apps: &[String],
+    app_name: &str,
     events: &mut dyn EventSink<BundleInstallEvent>,
 ) -> SystemResult<()> {
     let bundle_components = bundle_reader.header().components.as_ref();
     enforce_bundle_component_policy(config, bundle_components.is_some(), "app")?;
-    if touched_apps.is_empty() {
-        report_compatibility_skip("app", "bundle contains no app payloads", events);
-        return Ok(());
-    }
     if bundle_components.is_none() {
         warn!("app bundle does not declare components, checking removal of touched app components");
     }
     let installed = crate::components::InstalledComponents::load()
         .whatever("unable to load installed components")?;
+    let touched_apps = [app_name.to_owned()];
     let output = installed
-        .check_app_update(touched_apps, bundle_components)
+        .check_app_update(&touched_apps, bundle_components)
         .whatever("unable to check app bundle compatibility")?;
     require_compatible_components(output, events)
-}
-
-fn touched_apps(header: &format::BundleHeader) -> Vec<String> {
-    header
-        .payload_index
-        .iter()
-        .filter_map(|entry| {
-            entry
-                .type_app_file
-                .as_ref()
-                .map(|app_file| app_file.app.as_str())
-                .or_else(|| {
-                    entry
-                        .type_app_archive
-                        .as_ref()
-                        .map(|app_archive| app_archive.app.as_str())
-                })
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(str::to_owned)
-        .collect()
-}
-
-fn app_bundle_components_owner(header: &format::BundleHeader) -> SystemResult<String> {
-    let touched_apps = touched_apps(header);
-    match touched_apps.as_slice() {
-        [] => bail!("app bundle declares components but does not contain app payloads"),
-        [app] => Ok(app.clone()),
-        _ => bail!(
-            "app bundle declares components for multiple apps, which is not supported yet: {:?}",
-            touched_apps
-        ),
-    }
-}
-
-/// Resolved activation of one app, with the deployment to restore on failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AppActivationPlan {
-    app: String,
-    target: AppDeployment,
-    previous: Option<AppDeployment>,
-}
-
-/// Resolve the configuration document supplied for this installation.
-///
-/// A document can only be matched to an app when the bundle installs exactly one,
-/// since the command line does not name the app it applies to.
-fn supplied_app_configuration<'a>(
-    options: &'a BundleInstallOptions,
-    touched_apps: &'a [String],
-) -> SystemResult<Option<(&'a str, &'a AppConfiguration)>> {
-    let Some(configuration) = &options.app_configuration else {
-        return Ok(None);
-    };
-    match touched_apps {
-        [app] => Ok(Some((app.as_str(), configuration))),
-        _ => bail!(
-            "application configuration was supplied for a bundle that installs {} apps: {:?}",
-            touched_apps.len(),
-            touched_apps
-        ),
-    }
-}
-
-#[derive(Debug)]
-struct AppActivationFailure<E> {
-    app: String,
-    error: E,
-    rollbacks: Vec<(String, Result<(), E>)>,
-}
-
-fn run_app_activation_transaction<E>(
-    plans: &[AppActivationPlan],
-    mut activate: impl FnMut(&AppActivationPlan) -> Result<(), E>,
-    mut rollback: impl FnMut(&AppActivationPlan) -> Result<(), E>,
-) -> Result<(), AppActivationFailure<E>> {
-    let mut activated = Vec::new();
-    for plan in plans {
-        if let Err(error) = activate(plan) {
-            let rollbacks = activated
-                .into_iter()
-                .rev()
-                .map(|activated_plan: &AppActivationPlan| {
-                    (activated_plan.app.clone(), rollback(activated_plan))
-                })
-                .collect();
-            return Err(AppActivationFailure {
-                app: plan.app.clone(),
-                error,
-                rollbacks,
-            });
-        }
-        activated.push(plan);
-    }
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -547,7 +367,8 @@ struct AppPayloadDelivery<'a> {
     execute: bool,
 }
 
-fn validate_app_bundle_header(header: &format::BundleHeader) -> SystemResult<()> {
+/// Validate an app bundle header and return the app it installs.
+fn validate_app_bundle_header(header: &format::BundleHeader) -> SystemResult<String> {
     let deliveries = header
         .payload_index
         .iter()
@@ -564,13 +385,15 @@ fn validate_app_bundle_header(header: &format::BundleHeader) -> SystemResult<()>
             execute: entry.type_execute.is_some(),
         })
         .collect::<Vec<_>>();
-    validate_app_deliveries(&deliveries)
+    Ok(validate_app_deliveries(&deliveries)?.to_owned())
 }
 
-fn validate_app_deliveries(deliveries: &[AppPayloadDelivery<'_>]) -> SystemResult<()> {
+/// Validate every app payload delivery and return the app the bundle installs.
+fn validate_app_deliveries<'a>(deliveries: &[AppPayloadDelivery<'a>]) -> SystemResult<&'a str> {
     if deliveries.is_empty() {
         bail!("app bundle does not contain any payloads");
     }
+    let mut installed_app = None;
     for (payload_idx, delivery) in deliveries.iter().enumerate() {
         let delivery_count = [
             delivery.app_file.is_some(),
@@ -599,8 +422,15 @@ fn validate_app_deliveries(deliveries: &[AppPayloadDelivery<'_>]) -> SystemResul
         if let Some(path) = path {
             ValidatedRelativePath::new(path).whatever("invalid app-file path in bundle payload")?;
         }
+        match installed_app {
+            Some(installed) if installed != app => bail!(
+                "app bundle installs more than one app ({installed:?} and {app:?}); \
+                 pack one bundle per app"
+            ),
+            _ => installed_app = Some(app),
+        }
     }
-    Ok(())
+    Ok(installed_app.expect("a bundle with payloads always names an app"))
 }
 
 fn validate_app_archive(file: File) -> SystemResult<()> {
@@ -651,14 +481,10 @@ fn validate_app_archive(file: File) -> SystemResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::fs::File;
 
-    use super::run_app_activation_transaction;
     use super::validate_app_archive;
     use super::validate_app_deliveries;
-    use super::AppActivationPlan;
-    use super::AppDeployment;
     use super::AppPayloadDelivery;
 
     #[test]
@@ -672,12 +498,12 @@ mod tests {
             },
             AppPayloadDelivery {
                 app_file: None,
-                app_archive: Some("other-app"),
+                app_archive: Some("example_app"),
                 slot: false,
                 execute: false,
             },
         ];
-        assert!(validate_app_deliveries(&valid).is_ok());
+        assert_eq!(validate_app_deliveries(&valid).unwrap(), "example_app");
 
         for (app, path) in [
             ("../escape", "file"),
@@ -705,6 +531,29 @@ mod tests {
             execute: false,
         }];
         assert!(validate_app_deliveries(&system_delivery).is_err());
+    }
+
+    /// Verifies an app bundle may only install a single app.
+    #[test]
+    fn app_bundle_payloads_for_several_apps_are_rejected() {
+        let deliveries = [
+            AppPayloadDelivery {
+                app_file: None,
+                app_archive: Some("first-app"),
+                slot: false,
+                execute: false,
+            },
+            AppPayloadDelivery {
+                app_file: None,
+                app_archive: Some("second-app"),
+                slot: false,
+                execute: false,
+            },
+        ];
+
+        let error = validate_app_deliveries(&deliveries).unwrap_err();
+
+        assert!(format!("{error:?}").contains("more than one app"));
     }
 
     #[test]
@@ -763,72 +612,5 @@ mod tests {
                 .unwrap();
         });
         assert!(validate_app_archive(File::open(redirected_write.path()).unwrap()).is_err());
-    }
-
-    fn activation_plan(app: &str, previous: Option<u64>) -> AppActivationPlan {
-        AppActivationPlan {
-            app: app.to_owned(),
-            target: AppDeployment::new(2, None),
-            previous: previous.map(|generation| AppDeployment::new(generation, None)),
-        }
-    }
-
-    #[test]
-    fn multi_app_activation_rolls_back_every_earlier_app_in_reverse_order() {
-        let plans = [
-            activation_plan("a", Some(1)),
-            activation_plan("b", None),
-            activation_plan("c", Some(1)),
-        ];
-
-        for failure_position in 0..plans.len() {
-            let activated = RefCell::new(Vec::new());
-            let rolled_back = RefCell::new(Vec::new());
-            let result = run_app_activation_transaction(
-                &plans,
-                |plan| {
-                    let position = plans
-                        .iter()
-                        .position(|candidate| candidate == plan)
-                        .unwrap();
-                    if position == failure_position {
-                        return Err("injected activation failure");
-                    }
-                    activated.borrow_mut().push(plan.app.clone());
-                    Ok(())
-                },
-                |plan| {
-                    rolled_back.borrow_mut().push(plan.app.clone());
-                    Ok(())
-                },
-            );
-            let failure = result.unwrap_err();
-            assert_eq!(failure.app, plans[failure_position].app);
-            let expected = plans[..failure_position]
-                .iter()
-                .rev()
-                .map(|plan| plan.app.clone())
-                .collect::<Vec<_>>();
-            assert_eq!(*rolled_back.borrow(), expected);
-        }
-    }
-
-    #[test]
-    fn multi_app_activation_reports_each_rollback_failure() {
-        let plans = [activation_plan("a", Some(1)), activation_plan("b", Some(1))];
-        let failure = run_app_activation_transaction(
-            &plans,
-            |plan| {
-                if plan.app == "b" {
-                    Err("activation")
-                } else {
-                    Ok(())
-                }
-            },
-            |_| Err("rollback"),
-        )
-        .unwrap_err();
-        assert_eq!(failure.rollbacks.len(), 1);
-        assert!(failure.rollbacks[0].1.is_err());
     }
 }

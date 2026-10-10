@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Behavior Changes:
+
+- App bundles must carry payloads for a single app. Rugix Bundler rejects a manifest declaring app payloads for several apps, and Rugix Ctrl refuses to install such a bundle. No packing command could produce one, so this affects hand-written bundle manifests only. Pack one bundle per app.
+
 Nix integration:
 
 - Export `nixosModules.rugix` for Rugix Ctrl services, daemon configuration, and app recovery.
@@ -18,7 +22,7 @@ Rugix Ctrl:
 - Add opt-in automatic block-index management for delta-enabled full system updates.
 - Add the `rugix.init.quiet` kernel command-line option to suppress routine early-boot output while retaining errors.
 - Add versioned JSON configuration for Rugix Apps, including optional JSON Schema validation, crash-safe application, and rollback of generation/configuration pairs.
-- Accept `--config` on `rugix-ctrl apps install` and `rugix-ctrl apps activate` to supply an application configuration document validated against the incoming app generation's schema. Application configuration is resolved before any generation is finalized or activated, and re-applying the document an app already runs with no longer restarts its workload.
+- Accept `--config` on `rugix-ctrl apps install` and `rugix-ctrl apps activate` to supply an application configuration document validated against the incoming app generation's schema. Application configuration is resolved before the new generation is activated, and re-applying the document an app already runs with no longer restarts its workload.
 - Add the `overwrite-init` option to the `rpi-tryboot`, `rpi-uboot`, and `grub` boot flows so installed boot artifacts can retain their existing `init` arguments.
 
 Rugix Bundler:
