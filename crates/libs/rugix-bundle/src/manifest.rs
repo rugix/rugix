@@ -75,23 +75,36 @@ pub fn validate_app_name(name: &str) -> BundleResult<()> {
 }
 
 /// Validate every path and app name declared by a bundle manifest.
+///
+/// App payloads must all name the same app. Rugix Ctrl installs an app bundle as one
+/// generation of one app, so a manifest naming several apps has no valid installation.
 pub fn validate_manifest_paths(manifest: &BundleManifest) -> BundleResult<()> {
+    let mut declared_app: Option<&str> = None;
     for (payload_idx, payload) in manifest.payloads.iter().enumerate() {
         ValidatedRelativePath::new(payload.filename.clone())
             .whatever_with(|_| format!("invalid filename for payload {payload_idx}"))?;
-        match &payload.delivery {
+        let app = match &payload.delivery {
             DeliveryConfig::AppFile(config) => {
                 validate_app_name(&config.app)
                     .whatever_with(|_| format!("invalid app name for payload {payload_idx}"))?;
                 ValidatedRelativePath::new(config.path.clone()).whatever_with(|_| {
                     format!("invalid app-file path for payload {payload_idx}")
                 })?;
+                config.app.as_str()
             }
             DeliveryConfig::AppArchive(config) => {
                 validate_app_name(&config.app)
                     .whatever_with(|_| format!("invalid app name for payload {payload_idx}"))?;
+                config.app.as_str()
             }
-            DeliveryConfig::Slot(_) | DeliveryConfig::Execute(_) => {}
+            DeliveryConfig::Slot(_) | DeliveryConfig::Execute(_) => continue,
+        };
+        match declared_app {
+            Some(declared) if declared != app => reportify::bail!(
+                "bundle declares app payloads for more than one app ({declared:?} and {app:?}); \
+                 pack one bundle per app"
+            ),
+            _ => declared_app = Some(app),
         }
     }
     Ok(())
@@ -99,6 +112,7 @@ pub fn validate_manifest_paths(manifest: &BundleManifest) -> BundleResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::AppArchiveDeliveryConfig;
     use super::AppFileDeliveryConfig;
     use super::BundleManifest;
     use super::DeliveryConfig;
@@ -135,5 +149,35 @@ mod tests {
             validate_manifest_paths(&BundleManifest::new(UpdateType::Full, vec![app_file]))
                 .is_err()
         );
+    }
+
+    /// Verifies a bundle may only carry app payloads for a single app.
+    #[test]
+    fn manifest_app_payloads_for_several_apps_are_rejected() {
+        let archive = |app: &str| {
+            Payload::new(
+                DeliveryConfig::AppArchive(AppArchiveDeliveryConfig::new(app.to_owned())),
+                format!("{app}.tar"),
+            )
+        };
+
+        let single = BundleManifest::new(
+            UpdateType::Full,
+            vec![archive("example"), archive("example")],
+        );
+        assert!(validate_manifest_paths(&single).is_ok());
+
+        let several =
+            BundleManifest::new(UpdateType::Full, vec![archive("first"), archive("second")]);
+        let error = validate_manifest_paths(&several).unwrap_err();
+        assert!(format!("{error:?}").contains("more than one app"));
+
+        // Slot payloads alongside an app payload are rejected on the device rather
+        // than here, so they must not interfere with the single-app rule.
+        let mixed = BundleManifest::new(
+            UpdateType::Full,
+            vec![slot_payload("system.img"), archive("example")],
+        );
+        assert!(validate_manifest_paths(&mixed).is_ok());
     }
 }
