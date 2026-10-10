@@ -336,30 +336,6 @@ pub(super) fn install_payloads<S: BundleSource>(
         return Ok(());
     }
 
-    // Resolving configuration before anything is finalized or activated means a
-    // document that does not satisfy a new generation's schema fails the installation
-    // without stopping a running workload, and without tearing down an app that was
-    // already switched over earlier in the activation transaction.
-    let mut activation_plan = Vec::new();
-    for app_name in &touched_apps {
-        let Some((generation, _)) = app_generations.get(app_name) else {
-            continue;
-        };
-        let configuration = supplied_configuration
-            .filter(|(app, _)| app == app_name)
-            .map(|(_, configuration)| configuration);
-        let target = app_manager
-            .prepare_configuration(&app_locks[app_name], app_name, *generation, configuration)
-            .whatever("unable to prepare app configuration")?;
-        activation_plan.push(AppActivationPlan {
-            app: app_name.clone(),
-            target,
-            previous: app_manager
-                .current_deployment(app_name)
-                .whatever("unable to determine active app deployment")?,
-        });
-    }
-
     for app_name in &touched_apps {
         let Some((generation, generation_dir)) = app_generations.get(app_name) else {
             continue;
@@ -390,6 +366,32 @@ pub(super) fn install_payloads<S: BundleSource>(
             .whatever("unable to write generation metadata")?;
         AppManager::finalize_generation(generation_dir)
             .whatever("unable to finalize app generation")?;
+    }
+
+    // Resolving configuration for every app before the activation transaction means a
+    // document that does not satisfy a new generation's schema fails the installation
+    // without stopping a running workload, and without tearing down an app that was
+    // already switched over earlier in the transaction. Generations are finalized
+    // first, so a rejected document leaves a complete generation that
+    // `apps activate --config` can take over without downloading the bundle again.
+    let mut activation_plan = Vec::new();
+    for app_name in &touched_apps {
+        let Some((generation, _)) = app_generations.get(app_name) else {
+            continue;
+        };
+        let configuration = supplied_configuration
+            .filter(|(app, _)| app == app_name)
+            .map(|(_, configuration)| configuration);
+        let target = app_manager
+            .prepare_configuration(&app_locks[app_name], app_name, *generation, configuration)
+            .whatever("unable to prepare app configuration")?;
+        activation_plan.push(AppActivationPlan {
+            app: app_name.clone(),
+            target,
+            previous: app_manager
+                .current_deployment(app_name)
+                .whatever("unable to determine active app deployment")?,
+        });
     }
 
     if let Err(failure) = run_app_activation_transaction(
