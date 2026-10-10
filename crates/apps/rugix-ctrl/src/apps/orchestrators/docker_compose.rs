@@ -151,7 +151,7 @@ impl DockerCompose {
         Self::append_compose_output(
             ctx,
             &mut diagnostics,
-            "docker compose logs --no-color --timestamps --tail {DIAGNOSTIC_LOG_TAIL}",
+            &format!("docker compose logs --no-color --timestamps --tail {log_tail}"),
             &["logs", "--no-color", "--timestamps", "--tail", &log_tail],
         );
 

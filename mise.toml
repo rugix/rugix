@@ -37,6 +37,10 @@ cp generated/rugix_ctrl.component.ComponentDeclaration.schema.json ../../../sche
 cp generated/rugix_ctrl.output.SystemInfoOutput.schema.json ../../../schemas/rugix-ctrl-output-info.schema.json
 cp generated/rugix_ctrl.output.ComponentsOutput.schema.json ../../../schemas/rugix-ctrl-output-components.schema.json
 cp generated/rugix_ctrl.output.ComponentsCheckOutput.schema.json ../../../schemas/rugix-ctrl-output-components-check.schema.json
+cp generated/rugix_ctrl.output.AppListEntryOutput.schema.json ../../../schemas/rugix-ctrl-output-app-list-entry.schema.json
+cp generated/rugix_ctrl.output.AppInfoOutput.schema.json ../../../schemas/rugix-ctrl-output-app-info.schema.json
+cp generated/rugix_ctrl.output.AppGcAppOutput.schema.json ../../../schemas/rugix-ctrl-output-app-gc.schema.json
+cp generated/rugix_ctrl.output.AppConfigurationSetOutput.schema.json ../../../schemas/rugix-ctrl-output-app-configuration-set.schema.json
 )
 
 (

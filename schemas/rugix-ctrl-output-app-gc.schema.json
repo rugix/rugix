@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.output.AppGcAppOutput",
+  "type": "object",
+  "description": "Garbage collection result for a single app.",
+  "properties": {
+    "removed": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64"
+      }
+    }
+  },
+  "required": [
+    "removed"
+  ],
+  "unevaluatedProperties": false
+}

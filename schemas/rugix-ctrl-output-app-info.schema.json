@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.output.AppInfoOutput",
+  "type": "object",
+  "description": "Output of the app info command (`apps info`).",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/rugix_ctrl.apps.AppStatus"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/rugix_ctrl.apps.AppState"
+    },
+    "orchestrator": {
+      "type": "string"
+    },
+    "desiredConfigurationRevision": {
+      "type": "integer",
+      "format": "uint64"
+    },
+    "generations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rugix_ctrl.output.GenerationInfoOutput"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "status",
+    "lifecycle",
+    "generations"
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "rugix_ctrl.apps.AppState": {
+      "$id": "rugix_ctrl.apps.AppState",
+      "description": "Persisted app state.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "inactive"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "switching"
+            },
+            "from": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "fromConfigurationRevision": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "to": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "toConfigurationRevision": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "recovery": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "active"
+            },
+            "generation": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "configurationRevision": {
+              "type": "integer",
+              "format": "uint64"
+            }
+          },
+          "required": [
+            "state",
+            "generation"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "starting"
+            },
+            "generation": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "configurationRevision": {
+              "type": "integer",
+              "format": "uint64"
+            }
+          },
+          "required": [
+            "state",
+            "generation"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "stopping"
+            },
+            "generation": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "configurationRevision": {
+              "type": "integer",
+              "format": "uint64"
+            }
+          },
+          "required": [
+            "state",
+            "generation"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "error"
+            },
+            "from": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "fromConfigurationRevision": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "to": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "toConfigurationRevision": {
+              "type": "integer",
+              "format": "uint64"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "to",
+            "message"
+          ]
+        }
+      ]
+    },
+    "rugix_ctrl.apps.AppStatus": {
+      "$id": "rugix_ctrl.apps.AppStatus",
+      "description": "Live workload status.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "running"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "unhealthy"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "stopped"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "failed"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "unknown"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        }
+      ]
+    },
+    "rugix_ctrl.output.GenerationInfoOutput": {
+      "$id": "rugix_ctrl.output.GenerationInfoOutput",
+      "type": "object",
+      "description": "Information about a generation.",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "format": "uint64"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "lastActivated": {
+          "type": "string"
+        },
+        "configurationRevision": {
+          "type": "integer",
+          "format": "uint64"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "$ref": "#/$defs/rugix_ctrl.output.JsonValue"
+        }
+      },
+      "required": [
+        "number",
+        "complete",
+        "active"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.output.JsonValue": {
+      "$id": "rugix_ctrl.output.JsonValue"
+    }
+  }
+}
