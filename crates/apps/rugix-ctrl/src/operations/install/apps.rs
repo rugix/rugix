@@ -32,7 +32,9 @@ use super::BundleInstallEvent;
 use super::BundleInstallOptions;
 use super::BundleKind;
 use super::HashWriter;
+use crate::apps::manager::AppDeployment;
 use crate::apps::manager::AppManager;
+use crate::config::apps::AppConfiguration;
 use crate::config::config::Config;
 use crate::operations::EventSink;
 use crate::payload_db;
@@ -58,6 +60,7 @@ pub(super) fn install_payloads<S: BundleSource>(
     } else {
         None
     };
+    let supplied_configuration = supplied_app_configuration(options, &touched_apps)?;
 
     let mut app_locks = HashMap::new();
     for app in &touched_apps {
@@ -333,6 +336,30 @@ pub(super) fn install_payloads<S: BundleSource>(
         return Ok(());
     }
 
+    // Resolving configuration before anything is finalized or activated means a
+    // document that does not satisfy a new generation's schema fails the installation
+    // without stopping a running workload, and without tearing down an app that was
+    // already switched over earlier in the activation transaction.
+    let mut activation_plan = Vec::new();
+    for app_name in &touched_apps {
+        let Some((generation, _)) = app_generations.get(app_name) else {
+            continue;
+        };
+        let configuration = supplied_configuration
+            .filter(|(app, _)| app == app_name)
+            .map(|(_, configuration)| configuration);
+        let target = app_manager
+            .prepare_configuration(&app_locks[app_name], app_name, *generation, configuration)
+            .whatever("unable to prepare app configuration")?;
+        activation_plan.push(AppActivationPlan {
+            app: app_name.clone(),
+            target,
+            previous: app_manager
+                .current_deployment(app_name)
+                .whatever("unable to determine active app deployment")?,
+        });
+    }
+
     for app_name in &touched_apps {
         let Some((generation, generation_dir)) = app_generations.get(app_name) else {
             continue;
@@ -365,25 +392,14 @@ pub(super) fn install_payloads<S: BundleSource>(
             .whatever("unable to finalize app generation")?;
     }
 
-    let mut activation_plan = Vec::new();
-    for app_name in &touched_apps {
-        let Some((generation, _)) = app_generations.get(app_name) else {
-            continue;
-        };
-        activation_plan.push(AppActivationPlan {
-            app: app_name.clone(),
-            generation: *generation,
-            previous: app_manager
-                .current_generation(app_name)
-                .whatever("unable to determine active app generation")?,
-        });
-    }
     if let Err(failure) = run_app_activation_transaction(
         &activation_plan,
-        |plan| app_manager.activate_generation(&app_locks[&plan.app], &plan.app, plan.generation),
+        |plan| app_manager.activate_deployment(&app_locks[&plan.app], &plan.app, plan.target),
         |plan| match plan.previous {
+            // Restoring the exact pair matters because a successful activation has
+            // already moved the app's desired configuration revision forward.
             Some(previous) => {
-                app_manager.activate_generation(&app_locks[&plan.app], &plan.app, previous)
+                app_manager.activate_deployment(&app_locks[&plan.app], &plan.app, previous)
             }
             None => match app_manager.current_generation(&plan.app)? {
                 Some(_) => app_manager.deactivate(&app_locks[&plan.app], &plan.app),
@@ -459,11 +475,33 @@ fn app_bundle_components_owner(header: &format::BundleHeader) -> SystemResult<St
     }
 }
 
+/// Resolved activation of one app, with the deployment to restore on failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AppActivationPlan {
     app: String,
-    generation: u64,
-    previous: Option<u64>,
+    target: AppDeployment,
+    previous: Option<AppDeployment>,
+}
+
+/// Resolve the configuration document supplied for this installation.
+///
+/// A document can only be matched to an app when the bundle installs exactly one,
+/// since the command line does not name the app it applies to.
+fn supplied_app_configuration<'a>(
+    options: &'a BundleInstallOptions,
+    touched_apps: &'a [String],
+) -> SystemResult<Option<(&'a str, &'a AppConfiguration)>> {
+    let Some(configuration) = &options.app_configuration else {
+        return Ok(None);
+    };
+    match touched_apps {
+        [app] => Ok(Some((app.as_str(), configuration))),
+        _ => bail!(
+            "application configuration was supplied for a bundle that installs {} apps: {:?}",
+            touched_apps.len(),
+            touched_apps
+        ),
+    }
 }
 
 #[derive(Debug)]
@@ -618,6 +656,7 @@ mod tests {
     use super::validate_app_archive;
     use super::validate_app_deliveries;
     use super::AppActivationPlan;
+    use super::AppDeployment;
     use super::AppPayloadDelivery;
 
     #[test]
@@ -724,24 +763,20 @@ mod tests {
         assert!(validate_app_archive(File::open(redirected_write.path()).unwrap()).is_err());
     }
 
+    fn activation_plan(app: &str, previous: Option<u64>) -> AppActivationPlan {
+        AppActivationPlan {
+            app: app.to_owned(),
+            target: AppDeployment::new(2, None),
+            previous: previous.map(|generation| AppDeployment::new(generation, None)),
+        }
+    }
+
     #[test]
     fn multi_app_activation_rolls_back_every_earlier_app_in_reverse_order() {
         let plans = [
-            AppActivationPlan {
-                app: "a".to_owned(),
-                generation: 2,
-                previous: Some(1),
-            },
-            AppActivationPlan {
-                app: "b".to_owned(),
-                generation: 2,
-                previous: None,
-            },
-            AppActivationPlan {
-                app: "c".to_owned(),
-                generation: 2,
-                previous: Some(1),
-            },
+            activation_plan("a", Some(1)),
+            activation_plan("b", None),
+            activation_plan("c", Some(1)),
         ];
 
         for failure_position in 0..plans.len() {
@@ -778,18 +813,7 @@ mod tests {
 
     #[test]
     fn multi_app_activation_reports_each_rollback_failure() {
-        let plans = [
-            AppActivationPlan {
-                app: "a".to_owned(),
-                generation: 2,
-                previous: Some(1),
-            },
-            AppActivationPlan {
-                app: "b".to_owned(),
-                generation: 2,
-                previous: Some(1),
-            },
-        ];
+        let plans = [activation_plan("a", Some(1)), activation_plan("b", Some(1))];
         let failure = run_app_activation_transaction(
             &plans,
             |plan| {

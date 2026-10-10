@@ -156,6 +156,7 @@ impl Operation for QueryApp {
 pub struct ActivateApp {
     pub(crate) name: String,
     pub(crate) generation: Option<u64>,
+    pub(crate) configuration: Option<AppConfiguration>,
     pub(crate) skip_compatibility_check: bool,
 }
 
@@ -175,6 +176,7 @@ impl Operation for ActivateApp {
                 manager,
                 self.name,
                 self.generation,
+                self.configuration.as_ref(),
                 self.skip_compatibility_check,
                 events,
             )
@@ -400,6 +402,7 @@ fn activate_app(
     manager: &AppManager,
     app: String,
     generation: Option<u64>,
+    configuration: Option<&AppConfiguration>,
     skip_compatibility_check: bool,
     events: &mut dyn EventSink<AppLifecycleEvent>,
 ) -> SystemResult<()> {
@@ -418,7 +421,10 @@ fn activate_app(
     } else {
         check_app_generation_compatibility(manager, &app, generation, events)?;
     }
-    let activation = manager.activate_generation(&lock, &app, generation);
+    let target = manager
+        .prepare_configuration(&lock, &app, generation, configuration)
+        .whatever("unable to prepare app configuration")?;
+    let activation = manager.activate_deployment(&lock, &app, target);
     let state = manager
         .read_state(&app)
         .whatever("unable to read activation result")?;

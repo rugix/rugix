@@ -245,21 +245,14 @@ impl AppManager {
             }
         };
         let generation_dir = self.configuration_generation(app_name)?;
-        let manifest = load_manifest(&generation_dir)?;
-        configuration::validate(&generation_dir, &manifest, value)?;
-
-        let revision = self.allocate_configuration_revision(app_name)?;
-        let path = self.configuration_path(app_name, revision);
-        let content = configuration::serialize(value)?;
-        let configurations_dir = self.configurations_dir(app_name);
-        fs::create_dir_all(&configurations_dir)
-            .whatever("unable to create app configurations directory")?;
-        fs::set_permissions(&configurations_dir, fs::Permissions::from_mode(0o700))
-            .whatever("unable to protect app configurations directory")?;
-        rugix_common::fsutils::atomic_write(&path, &content)
-            .whatever("unable to write app configuration revision")?;
+        let revision = self.store_configuration_in(app_name, &generation_dir, value)?;
 
         match active {
+            // Re-applying the document an active app already runs with would otherwise
+            // restart a healthy workload for nothing.
+            Some(active) if active.configuration_revision == Some(revision) => {
+                info!(app = app_name, revision, "app configuration unchanged");
+            }
             Some(active) => {
                 let target = AppDeployment::new(active.generation, Some(revision));
                 self.do_switch(app_name, Some(active), Some(target), false)?;
@@ -267,6 +260,84 @@ impl AppManager {
             None => self.write_configuration_revision(app_name, Some(revision))?,
         }
         Ok(revision)
+    }
+
+    /// Resolve the deployment a generation should be activated as.
+    ///
+    /// A supplied document is validated against the configuration schema declared by
+    /// `generation` and stored as a revision. This is what allows a generation that
+    /// tightens its schema to be installed together with a document satisfying it,
+    /// since [`Self::set_configuration`] can only validate against the generation an
+    /// app currently runs. Without a document, the app's desired revision is carried
+    /// forward.
+    ///
+    /// The resulting effective configuration is validated against the generation, so
+    /// callers can fail an installation before any workload is stopped.
+    ///
+    /// The caller must hold the [`AppLock`] for this app.
+    #[tracing::instrument(level = "info", skip(self, _lock, configuration), fields(app = app_name))]
+    pub fn prepare_configuration(
+        &self,
+        _lock: &AppLock,
+        app_name: &str,
+        generation: u64,
+        configuration: Option<&AppConfiguration>,
+    ) -> AppsResult<AppDeployment> {
+        validate_app_name(app_name)?;
+        let revision = match configuration {
+            Some(configuration) => {
+                let generation_dir = self.generation_dir_unchecked(app_name, generation);
+                Some(self.store_configuration_in(app_name, &generation_dir, configuration)?)
+            }
+            None => self.read_configuration_revision(app_name)?,
+        };
+        let deployment = AppDeployment::new(generation, revision);
+        self.resolve_configuration(app_name, deployment)?;
+        Ok(deployment)
+    }
+
+    /// Validate a document against a generation and store it as a revision.
+    fn store_configuration_in(
+        &self,
+        app_name: &str,
+        generation_dir: &Path,
+        value: &AppConfiguration,
+    ) -> AppsResult<u64> {
+        let manifest = load_manifest(generation_dir)?;
+        configuration::validate(generation_dir, &manifest, value)?;
+        let content = configuration::serialize(value)?;
+        if let Some(revision) = self.desired_revision_with_content(app_name, &content)? {
+            return Ok(revision);
+        }
+
+        let revision = self.allocate_configuration_revision(app_name)?;
+        let configurations_dir = self.configurations_dir(app_name);
+        fs::create_dir_all(&configurations_dir)
+            .whatever("unable to create app configurations directory")?;
+        fs::set_permissions(&configurations_dir, fs::Permissions::from_mode(0o700))
+            .whatever("unable to protect app configurations directory")?;
+        rugix_common::fsutils::atomic_write(&self.configuration_path(app_name, revision), &content)
+            .whatever("unable to write app configuration revision")?;
+        Ok(revision)
+    }
+
+    /// Return the desired revision if its stored document is `content`.
+    ///
+    /// Reusing it keeps revision numbers stable when a rollout supplies the same
+    /// document on every installation.
+    fn desired_revision_with_content(
+        &self,
+        app_name: &str,
+        content: &[u8],
+    ) -> AppsResult<Option<u64>> {
+        let Some(revision) = self.read_configuration_revision(app_name)? else {
+            return Ok(None);
+        };
+        match fs::read(self.configuration_path(app_name, revision)) {
+            Ok(stored) => Ok((stored == content).then_some(revision)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).whatever("unable to read app configuration revision"),
+        }
     }
 
     /// Check for and recover any interrupted transition for a single app.
@@ -530,7 +601,12 @@ impl AppManager {
         Ok(())
     }
 
-    /// Activate a generation.
+    /// Activate a generation with exactly the given configuration revision.
+    ///
+    /// The deployment is activated as given, which is what lets a caller restore a
+    /// generation together with the revision it previously ran, including no revision
+    /// at all. Use [`Self::prepare_configuration`] to resolve the revision for a new
+    /// activation.
     ///
     /// If another generation is currently active it is deactivated first.
     ///
@@ -539,19 +615,18 @@ impl AppManager {
     /// If rollback also fails, the app enters the `error` state.
     ///
     /// The caller must hold the [`AppLock`] for this app.
-    pub fn activate_generation(
+    pub fn activate_deployment(
         &self,
         _lock: &AppLock,
         app_name: &str,
-        gen_number: u64,
+        target: AppDeployment,
     ) -> AppsResult<()> {
         validate_app_name(app_name)?;
-        let gen_dir = self.generation_dir_unchecked(app_name, gen_number);
+        let gen_dir = self.generation_dir_unchecked(app_name, target.generation);
         if !Self::is_complete(&gen_dir) {
             reportify::bail!("generation is not complete (installation may have been interrupted)");
         }
 
-        let target = AppDeployment::new(gen_number, self.read_configuration_revision(app_name)?);
         self.resolve_configuration(app_name, target)?;
         let from = self.current_deployment(app_name)?;
         self.do_switch(app_name, from, Some(target), false)
@@ -1192,7 +1267,7 @@ impl AppManager {
     }
 
     /// Resolve the active generation and configuration pair from lifecycle state.
-    fn current_deployment(&self, app_name: &str) -> AppsResult<Option<AppDeployment>> {
+    pub fn current_deployment(&self, app_name: &str) -> AppsResult<Option<AppDeployment>> {
         let deployment = match self.read_state(app_name)? {
             AppState::Active(state) => Some(AppDeployment::new(
                 state.generation,
@@ -1292,14 +1367,16 @@ impl AppManager {
 
 /// A generation and the device-specific configuration revision used with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct AppDeployment {
-    generation: u64,
-    configuration_revision: Option<u64>,
+pub struct AppDeployment {
+    /// Generation number.
+    pub generation: u64,
+    /// Configuration revision the generation is deployed with, if any.
+    pub configuration_revision: Option<u64>,
 }
 
 impl AppDeployment {
     /// Construct a deployment pair.
-    fn new(generation: u64, configuration_revision: Option<u64>) -> Self {
+    pub fn new(generation: u64, configuration_revision: Option<u64>) -> Self {
         Self {
             generation,
             configuration_revision,
@@ -1384,6 +1461,7 @@ mod tests {
 
     use super::finalize_generation_with;
     use super::AppDeployment;
+    use super::AppLock;
     use super::AppManager;
 
     fn setup_generation(manager: &AppManager, app: &str, generation: u64, script: &str) {
@@ -1405,6 +1483,33 @@ mod tests {
     fn write_configuration(manager: &AppManager, app: &str, revision: u64, content: &str) {
         std::fs::create_dir_all(manager.configurations_dir(app)).unwrap();
         std::fs::write(manager.configuration_path(app, revision), content).unwrap();
+    }
+
+    /// Activate a generation the way a caller without an explicit document does.
+    fn activate(
+        manager: &AppManager,
+        lock: &AppLock,
+        app: &str,
+        generation: u64,
+    ) -> super::AppsResult<()> {
+        let target = manager.prepare_configuration(lock, app, generation, None)?;
+        manager.activate_deployment(lock, app, target)
+    }
+
+    /// Declare a configuration schema for an existing generation.
+    fn declare_configuration_schema(
+        manager: &AppManager,
+        app: &str,
+        generation: u64,
+        schema: &str,
+    ) {
+        let dir = manager.generation_dir(app, generation).unwrap();
+        std::fs::write(dir.join("config.schema.json"), schema).unwrap();
+        std::fs::write(
+            dir.join("app.toml"),
+            "orchestrator = \"generic\"\n[configuration]\nschema = \"config.schema.json\"\n",
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1564,7 +1669,7 @@ mod tests {
             .unwrap();
         let lock = manager.lock_app("example").unwrap();
 
-        manager.activate_generation(&lock, "example", 2).unwrap();
+        activate(&manager, &lock, "example", 2).unwrap();
         assert!(matches!(
             manager.read_state("example").unwrap(),
             AppState::Active(AppStateActive {
@@ -1608,7 +1713,7 @@ mod tests {
             AppState::Inactive
         ));
 
-        manager.activate_generation(&lock, "example", 1).unwrap();
+        activate(&manager, &lock, "example", 1).unwrap();
         assert!(matches!(
             manager.read_state("example").unwrap(),
             AppState::Active(AppStateActive {
@@ -1616,6 +1721,116 @@ mod tests {
                 configuration_revision: Some(1),
             })
         ));
+    }
+
+    /// Verifies a generation whose schema rejects the carried-forward document can
+    /// still be activated with a document supplied for that generation.
+    #[test]
+    fn activating_a_generation_with_a_stricter_schema_requires_a_matching_document() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(tempdir.path().join("apps"), AppsConfig::new());
+        setup_generation(&manager, "example", 1, "#!/bin/sh\nexit 0\n");
+        setup_generation(&manager, "example", 2, "#!/bin/sh\nexit 0\n");
+        declare_configuration_schema(
+            &manager,
+            "example",
+            2,
+            r#"{"type":"object","required":["endpoint"]}"#,
+        );
+        write_configuration(&manager, "example", 1, r#"{"url":"https://example.com"}"#);
+        manager
+            .write_configuration_revision("example", Some(1))
+            .unwrap();
+        manager
+            .write_state(
+                "example",
+                &AppState::Active(AppStateActive::new(1).with_configuration_revision(Some(1))),
+            )
+            .unwrap();
+        let lock = manager.lock_app("example").unwrap();
+
+        assert!(activate(&manager, &lock, "example", 2).is_err());
+        assert!(matches!(
+            manager.read_state("example").unwrap(),
+            AppState::Active(AppStateActive {
+                generation: 1,
+                configuration_revision: Some(1),
+            })
+        ));
+
+        let migrated =
+            crate::apps::configuration::parse(r#"{"endpoint":"mqtts://example.com"}"#).unwrap();
+        let target = manager
+            .prepare_configuration(&lock, "example", 2, Some(&migrated))
+            .unwrap();
+        assert_eq!(target, AppDeployment::new(2, Some(2)));
+        manager
+            .activate_deployment(&lock, "example", target)
+            .unwrap();
+
+        assert!(matches!(
+            manager.read_state("example").unwrap(),
+            AppState::Active(AppStateActive {
+                generation: 2,
+                configuration_revision: Some(2),
+            })
+        ));
+        assert_eq!(
+            manager.read_configuration("example").unwrap(),
+            Some(migrated)
+        );
+    }
+
+    /// Verifies re-applying an active document leaves the workload alone while new
+    /// content never reuses a collected revision number.
+    #[test]
+    fn setting_an_identical_configuration_reuses_its_revision() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(tempdir.path().join("apps"), AppsConfig::new());
+        setup_generation(
+            &manager,
+            "example",
+            1,
+            "#!/bin/sh\n[ \"$1\" = activate ] && echo x >> \"$RUGIX_APP_DATA_DIR/activations\"\nexit 0\n",
+        );
+        std::fs::create_dir_all(manager.data_dir("example")).unwrap();
+        let activations = manager.data_dir("example").join("activations");
+        let count = || {
+            std::fs::read_to_string(&activations)
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        let lock = manager.lock_app("example").unwrap();
+        let first = crate::apps::configuration::parse(r#"{"enabled":true}"#).unwrap();
+        let second = crate::apps::configuration::parse(r#"{"enabled":false}"#).unwrap();
+
+        activate(&manager, &lock, "example", 1).unwrap();
+        assert_eq!(count(), 1);
+        assert_eq!(
+            manager.set_configuration(&lock, "example", &first).unwrap(),
+            1
+        );
+        assert_eq!(count(), 2);
+        assert_eq!(
+            manager.set_configuration(&lock, "example", &first).unwrap(),
+            1
+        );
+        assert_eq!(count(), 2);
+        assert_eq!(
+            manager
+                .set_configuration(&lock, "example", &second)
+                .unwrap(),
+            2
+        );
+        assert_eq!(count(), 3);
+
+        manager.gc(&lock, "example", 1).unwrap();
+        assert!(!manager.configuration_path("example", 1).exists());
+        assert_eq!(
+            manager.set_configuration(&lock, "example", &first).unwrap(),
+            3
+        );
     }
 
     /// Verifies configuration changes cannot overwrite lifecycle recovery intent.
@@ -1650,17 +1865,12 @@ mod tests {
             1,
             "#!/bin/sh\nif [ \"$1\" = activate ] && grep -q '\"fail\": true' \"$RUGIX_APP_CONFIG_PATH\"; then exit 1; fi\nexit 0\n",
         );
-        let generation_dir = manager.generation_dir("example", 1).unwrap();
-        std::fs::write(
-            generation_dir.join("config.schema.json"),
+        declare_configuration_schema(
+            &manager,
+            "example",
+            1,
             r#"{"type":"object","properties":{"fail":{"type":"boolean"}},"required":["fail"]}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            generation_dir.join("app.toml"),
-            "orchestrator = \"generic\"\n[configuration]\nschema = \"config.schema.json\"\n",
-        )
-        .unwrap();
+        );
         manager
             .write_state("example", &AppState::Active(AppStateActive::new(1)))
             .unwrap();
@@ -1692,12 +1902,6 @@ mod tests {
 
         manager.gc(&lock, "example", 1).unwrap();
         assert!(!manager.configuration_path("example", 2).exists());
-        assert_eq!(
-            manager
-                .set_configuration(&lock, "example", &working)
-                .unwrap(),
-            3
-        );
     }
 
     #[test]
