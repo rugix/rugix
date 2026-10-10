@@ -156,6 +156,7 @@ pub fn main() -> SystemResult<()> {
                         insecure_skip_bundle_verification: *insecure_skip_bundle_verification,
                         insecure_allow_missing_block_index: *insecure_allow_missing_block_index,
                         skip_compatibility_check: *skip_compatibility_check,
+                        app_configuration: None,
                     },
                 };
                 execute_operation(operation, input)?;
@@ -426,6 +427,7 @@ pub fn main() -> SystemResult<()> {
             match cmd {
                 AppsCommand::Install {
                     bundle,
+                    config,
                     insecure_skip_bundle_verification,
                     insecure_allow_missing_block_index,
                     skip_compatibility_check,
@@ -455,6 +457,10 @@ pub fn main() -> SystemResult<()> {
                             insecure_skip_bundle_verification: *insecure_skip_bundle_verification,
                             insecure_allow_missing_block_index: *insecure_allow_missing_block_index,
                             skip_compatibility_check: *skip_compatibility_check,
+                            app_configuration: config
+                                .as_deref()
+                                .map(read_app_configuration)
+                                .transpose()?,
                         },
                     };
                     execute_operation(operation, input)?;
@@ -511,12 +517,17 @@ pub fn main() -> SystemResult<()> {
                 AppsCommand::Activate {
                     app,
                     generation,
+                    config,
                     skip_compatibility_check,
                 } => {
                     execute_operation(
                         ActivateApp {
                             name: app.clone(),
                             generation: *generation,
+                            configuration: config
+                                .as_deref()
+                                .map(read_app_configuration)
+                                .transpose()?,
                             skip_compatibility_check: *skip_compatibility_check,
                         },
                         (),
@@ -698,6 +709,12 @@ fn resolve_cli_bundle_source(
 fn read_explicit_root_certificate(path: Option<&Path>) -> SystemResult<Option<Vec<u8>>> {
     path.map(|path| fs::read(path).whatever("unable to read root certificate"))
         .transpose()
+}
+
+/// Read and parse an application configuration document.
+fn read_app_configuration(path: &Path) -> SystemResult<crate::config::apps::AppConfiguration> {
+    let content = fs::read_to_string(path).whatever("unable to read app configuration file")?;
+    crate::apps::configuration::parse(&content).whatever("unable to parse app configuration")
 }
 
 fn load_cli_app_manager() -> SystemResult<crate::apps::manager::AppManager> {
@@ -1216,6 +1233,14 @@ pub enum AppsCommand {
     Install {
         /// Path of the app bundle, `-` to read from stdin, or an HTTP(S) URL.
         bundle: String,
+        /// JSON configuration file to apply to the installed app.
+        ///
+        /// The document is validated against the schema declared by the new app
+        /// generation, which makes it possible to install a generation whose schema no
+        /// longer accepts the configuration currently stored on the device. Only
+        /// supported for bundles that install a single app.
+        #[clap(long = "config")]
+        config: Option<PathBuf>,
         /// Skip bundle verification (insecure, do not use in production).
         ///
         /// By default, either a valid signature is required or a bundle hash has to be
@@ -1267,6 +1292,12 @@ pub enum AppsCommand {
         app: String,
         /// Generation number (defaults to the most recently activated generation).
         generation: Option<u64>,
+        /// JSON configuration file to activate the generation with.
+        ///
+        /// The document is validated against the schema declared by that generation.
+        /// Without this option, the app's current configuration is carried forward.
+        #[clap(long = "config")]
+        config: Option<PathBuf>,
         /// Skip component compatibility checks.
         #[clap(long)]
         skip_compatibility_check: bool,

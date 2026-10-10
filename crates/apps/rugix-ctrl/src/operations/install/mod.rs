@@ -32,6 +32,7 @@ use super::local::ExecutionContext;
 use super::EventSink;
 use super::Operation;
 use crate::apps::manager::AppManager;
+use crate::config::apps::AppConfiguration;
 use crate::config::config::Config;
 use crate::config::output::ComponentsCheckOutput;
 use crate::http_source::DownloadStats;
@@ -219,6 +220,8 @@ pub(crate) struct BundleInstallOptions {
     pub(crate) insecure_skip_bundle_verification: bool,
     pub(crate) insecure_allow_missing_block_index: bool,
     pub(crate) skip_compatibility_check: bool,
+    /// Device-specific configuration for the app installed by the bundle.
+    pub(crate) app_configuration: Option<AppConfiguration>,
 }
 
 mod apps;

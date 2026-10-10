@@ -18,6 +18,7 @@ Rugix Ctrl:
 - Add opt-in automatic block-index management for delta-enabled full system updates.
 - Add the `rugix.init.quiet` kernel command-line option to suppress routine early-boot output while retaining errors.
 - Add versioned JSON configuration for Rugix Apps, including optional JSON Schema validation, crash-safe application, and rollback of generation/configuration pairs.
+- Accept `--config` on `rugix-ctrl apps install` and `rugix-ctrl apps activate` to supply an application configuration document validated against the incoming app generation's schema. Application configuration is resolved before any generation is finalized or activated, and re-applying the document an app already runs with no longer restarts its workload.
 - Add the `overwrite-init` option to the `rpi-tryboot`, `rpi-uboot`, and `grub` boot flows so installed boot artifacts can retain their existing `init` arguments.
 
 Rugix Bundler:

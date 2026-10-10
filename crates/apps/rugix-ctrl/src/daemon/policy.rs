@@ -95,6 +95,10 @@ impl AdmissionPolicy {
             insecure_skip_bundle_verification,
             insecure_allow_missing_block_index,
             skip_compatibility_check,
+            // Supplying application configuration is not a security override: it is
+            // validated against the app's schema and a client authorized for the
+            // `app-lifecycle` feature can already set configuration directly.
+            app_configuration: _,
         } = options;
         let has_security_override = bundle_hash.is_some()
             || root_cert.is_some()
@@ -336,6 +340,7 @@ mod tests {
             Request::ActivateApp(ActivateApp {
                 name: "example".to_owned(),
                 generation: Some(1),
+                configuration: None,
                 skip_compatibility_check: true,
             })
         };
@@ -364,6 +369,7 @@ mod tests {
             insecure_skip_bundle_verification: false,
             insecure_allow_missing_block_index: false,
             skip_compatibility_check: false,
+            app_configuration: None,
         }
     }
 
