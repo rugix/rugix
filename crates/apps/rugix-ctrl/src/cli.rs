@@ -364,12 +364,13 @@ pub fn main() -> SystemResult<()> {
                 };
                 rugix_cli::json::print_json(
                     &BlockDeviceInfo {
-                        device: device.path().to_string_lossy().into_owned(),
-                        parent: device
+                        device: device.path().to_string_lossy().into_owned().into(),
+                        parent: (device
                             .find_parent()
                             .ok()
                             .flatten()
-                            .map(|parent| parent.path().to_string_lossy().into_owned()),
+                            .map(|parent| parent.path().to_string_lossy().into_owned()))
+                        .map(Into::into),
                         partition: device.is_partition().ok().flatten(),
                     },
                     false,
@@ -400,12 +401,13 @@ pub fn main() -> SystemResult<()> {
                 };
                 rugix_cli::json::print_json(
                     &BlockDeviceInfo {
-                        device: device.path().to_string_lossy().into_owned(),
-                        parent: device
+                        device: device.path().to_string_lossy().into_owned().into(),
+                        parent: (device
                             .find_parent()
                             .ok()
                             .flatten()
-                            .map(|parent| parent.path().to_string_lossy().into_owned()),
+                            .map(|parent| parent.path().to_string_lossy().into_owned()))
+                        .map(Into::into),
                         partition: device.is_partition().ok().flatten(),
                     },
                     false,
@@ -909,9 +911,9 @@ impl EventSink<AppLifecycleEvent> for CliOperationEventSink {
                     return;
                 }
                 let event = Event::AppActivationResult(AppActivationResultEvent {
-                    app,
+                    app: app.into(),
                     generation,
-                    outcome,
+                    outcome: outcome.into(),
                 });
                 let result = serde_json::to_vec(&event)
                     .map_err(io::Error::other)
@@ -942,8 +944,8 @@ fn operation_event_as_cli_event(event: &BundleInstallEvent) -> Option<Event> {
         }
         BundleInstallEvent::CompatibilityCheckSkipped { scope, reason } => Some(
             Event::CompatibilityCheckSkipped(CompatibilityCheckSkippedEvent {
-                scope: scope.clone(),
-                reason: reason.clone(),
+                scope: scope.clone().into(),
+                reason: reason.clone().into(),
             }),
         ),
         BundleInstallEvent::CompatibilityCheckFailed { .. } => None,
@@ -1427,7 +1429,6 @@ fn run_data_wipe(yes: bool, no_reboot: bool) -> SystemResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use indexmap::IndexMap;
 
     use crate::config::system::BootGroupConfig;
     use crate::config::system::FileSlotConfig;
@@ -1446,12 +1447,13 @@ mod tests {
                 (
                     (*name).to_owned(),
                     SlotConfig::File(FileSlotConfig {
-                        path: format!("/tmp/{name}"),
+                        path: format!("/tmp/{name}").into(),
                         immutable: Some(true),
                     }),
                 )
             })
-            .collect::<IndexMap<_, _>>();
+            .map(|(key, value)| (sidex::types::Str::from(key), value))
+            .collect::<sidex::types::Map<_, _>>();
         SystemSlots::from_config(None, Some(&config)).unwrap()
     }
 
@@ -1461,11 +1463,12 @@ mod tests {
         let groups_config = [(
             "a".to_owned(),
             BootGroupConfig {
-                slots: IndexMap::new(),
+                slots: sidex::types::Map::new(),
             },
         )]
         .into_iter()
-        .collect::<IndexMap<_, _>>();
+        .map(|(key, value)| (sidex::types::Str::from(key), value))
+        .collect::<sidex::types::Map<_, _>>();
         let groups = BootGroups::from_config(&slots, Some(&groups_config)).unwrap();
 
         let error = resolve_mark_good_group(&groups, None, None).unwrap_err();

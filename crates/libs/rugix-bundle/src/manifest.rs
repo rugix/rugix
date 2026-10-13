@@ -130,11 +130,12 @@ mod tests {
 
     #[test]
     fn manifest_payload_paths_are_confined() {
-        let valid = BundleManifest::new(UpdateType::Full, vec![slot_payload("system.img")]);
+        let valid = BundleManifest::new(UpdateType::Full, vec![slot_payload("system.img")].into());
         assert!(validate_manifest_paths(&valid).is_ok());
 
         for filename in ["../outside", "/absolute", "directory/./file", "C:\\file"] {
-            let manifest = BundleManifest::new(UpdateType::Full, vec![slot_payload(filename)]);
+            let manifest =
+                BundleManifest::new(UpdateType::Full, vec![slot_payload(filename)].into());
             assert!(validate_manifest_paths(&manifest).is_err(), "{filename:?}");
         }
 
@@ -146,8 +147,11 @@ mod tests {
             "payload".to_owned(),
         );
         assert!(
-            validate_manifest_paths(&BundleManifest::new(UpdateType::Full, vec![app_file]))
-                .is_err()
+            validate_manifest_paths(&BundleManifest::new(
+                UpdateType::Full,
+                vec![app_file].into()
+            ))
+            .is_err()
         );
     }
 
@@ -163,12 +167,14 @@ mod tests {
 
         let single = BundleManifest::new(
             UpdateType::Full,
-            vec![archive("example"), archive("example")],
+            vec![archive("example"), archive("example")].into(),
         );
         assert!(validate_manifest_paths(&single).is_ok());
 
-        let several =
-            BundleManifest::new(UpdateType::Full, vec![archive("first"), archive("second")]);
+        let several = BundleManifest::new(
+            UpdateType::Full,
+            vec![archive("first"), archive("second")].into(),
+        );
         let error = validate_manifest_paths(&several).unwrap_err();
         assert!(format!("{error:?}").contains("more than one app"));
 
@@ -176,7 +182,7 @@ mod tests {
         // than here, so they must not interfere with the single-app rule.
         let mixed = BundleManifest::new(
             UpdateType::Full,
-            vec![slot_payload("system.img"), archive("example")],
+            vec![slot_payload("system.img"), archive("example")].into(),
         );
         assert!(validate_manifest_paths(&mixed).is_ok());
     }

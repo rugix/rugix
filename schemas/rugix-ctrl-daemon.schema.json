@@ -8,8 +8,13 @@
       "type": "string"
     },
     "max-control-frame-size": {
-      "type": "integer",
-      "format": "uint64"
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
     },
     "dangerously-insecure": {
       "type": "boolean"
@@ -22,7 +27,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_ctrl.daemon.DaemonFeatures": {
-      "$id": "rugix_ctrl.daemon.DaemonFeatures",
       "type": "object",
       "description": "Privileged operation families that require explicit daemon opt-in.",
       "properties": {

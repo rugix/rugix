@@ -26,7 +26,7 @@ pub struct BootGroups {
 impl BootGroups {
     pub fn from_config(
         slots: &SystemSlots,
-        config: Option<&IndexMap<String, BootGroupConfig>>,
+        config: Option<&sidex::types::Map<sidex::types::Str, BootGroupConfig>>,
     ) -> SystemResult<Self> {
         let mut groups = Vec::new();
         match config {
@@ -40,8 +40,11 @@ impl BootGroups {
                         map.insert(alias.to_owned(), idx);
                     }
                     groups.push(BootGroup {
-                        name: group_name.to_owned(),
-                        slots: map,
+                        name: group_name.to_owned().into(),
+                        slots: map
+                            .into_iter()
+                            .map(|(key, value)| (key.into(), value))
+                            .collect::<IndexMap<_, _>>(),
                         active: AtomicBool::new(false),
                     })
                 }

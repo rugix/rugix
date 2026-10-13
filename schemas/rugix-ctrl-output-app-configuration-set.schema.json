@@ -5,8 +5,13 @@
   "description": "Result of setting application configuration.",
   "properties": {
     "revision": {
-      "type": "integer",
-      "format": "uint64"
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
     }
   },
   "required": [

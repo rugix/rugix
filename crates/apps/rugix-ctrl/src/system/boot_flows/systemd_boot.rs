@@ -31,7 +31,7 @@ pub struct SystemdBootFlow {
 impl SystemdBootFlow {
     pub fn new(
         system: &super::super::boot_groups::BootGroups,
-        entries_config: &indexmap::IndexMap<String, String>,
+        entries_config: &sidex::types::Map<sidex::types::Str, sidex::types::Str>,
     ) -> BootFlowResult<Self> {
         if entries_config.len() != system.iter().count() {
             bail!("systemd-boot requires exactly one entry for every boot group");
@@ -48,7 +48,7 @@ impl SystemdBootFlow {
             if !entry_ids.insert(entry_id) {
                 bail!("duplicate systemd-boot entry ID {entry_id:?}");
             }
-            entries.push((idx, entry_id.clone()));
+            entries.push((idx, entry_id.to_string()));
         }
         if entries.len() < 2 {
             bail!("systemd-boot boot flow requires at least 2 entries");
@@ -162,8 +162,6 @@ impl BootFlow for SystemdBootFlow {
 mod tests {
     use std::cell::RefCell;
 
-    use indexmap::IndexMap;
-
     use super::decode_loader_efi_var;
     use super::run_bootctl;
     use super::SystemdBootFlow;
@@ -180,12 +178,13 @@ mod tests {
                 (
                     format!("system-{name}"),
                     SlotConfig::File(FileSlotConfig {
-                        path: format!("/tmp/system-{name}"),
+                        path: format!("/tmp/system-{name}").into(),
                         immutable: Some(true),
                     }),
                 )
             })
-            .collect::<IndexMap<_, _>>();
+            .map(|(key, value)| (sidex::types::Str::from(key), value))
+            .collect::<sidex::types::Map<_, _>>();
         let slots = SystemSlots::from_config(None, Some(&slot_config)).unwrap();
         let group_config = ["a", "b"]
             .into_iter()
@@ -195,11 +194,13 @@ mod tests {
                     BootGroupConfig {
                         slots: [("system".to_owned(), format!("system-{name}"))]
                             .into_iter()
+                            .map(|(key, value)| (key.into(), value.into()))
                             .collect(),
                     },
                 )
             })
-            .collect::<IndexMap<_, _>>();
+            .map(|(key, value)| (sidex::types::Str::from(key), value))
+            .collect::<sidex::types::Map<_, _>>();
         let groups = BootGroups::from_config(&slots, Some(&group_config)).unwrap();
         (slots, groups)
     }
@@ -212,11 +213,13 @@ mod tests {
             ("b".to_owned(), "rugix-b.conf".to_owned()),
         ]
         .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
         .collect();
         assert!(SystemdBootFlow::new(&groups, &valid).is_ok());
 
         let missing = [("a".to_owned(), "rugix-a.conf".to_owned())]
             .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
             .collect();
         assert!(SystemdBootFlow::new(&groups, &missing).is_err());
         let duplicate = [
@@ -224,6 +227,7 @@ mod tests {
             ("b".to_owned(), "same.conf".to_owned()),
         ]
         .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
         .collect();
         assert!(SystemdBootFlow::new(&groups, &duplicate).is_err());
         let empty = [
@@ -231,6 +235,7 @@ mod tests {
             ("b".to_owned(), "".to_owned()),
         ]
         .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
         .collect();
         assert!(SystemdBootFlow::new(&groups, &empty).is_err());
     }
@@ -243,6 +248,7 @@ mod tests {
             ("b".to_owned(), "rugix-b.conf".to_owned()),
         ]
         .into_iter()
+        .map(|(key, value)| (key.into(), value.into()))
         .collect();
         let flow = SystemdBootFlow::new(&groups, &config).unwrap();
         let a = groups.find_by_name("a").unwrap().0;

@@ -445,7 +445,12 @@ mod tests {
             ("APP_MISSING".to_owned(), "/missing".to_owned()),
         ]);
         let manifest = AppManifest::new("docker-compose".to_owned()).with_docker_compose(Some(
-            DockerComposeConfig::new().with_environment(Some(environment)),
+            DockerComposeConfig::new().with_environment(Some(
+                environment
+                    .into_iter()
+                    .map(|(key, value)| (key.into(), value.into()))
+                    .collect::<BTreeMap<_, _>>(),
+            )),
         ));
         let configuration = crate::apps::configuration::parse(
             r#"{"url":"https://example.com/$device","enabled":true}"#,

@@ -216,11 +216,11 @@ fn append_configuration(
     let mut declaration = AppConfigurationConfig::new();
     if let Some((content, _)) = schema {
         tar_append_bytes(archive, CONFIG_SCHEMA_FILE, content.as_bytes())?;
-        declaration = declaration.with_schema(Some(CONFIG_SCHEMA_FILE.to_owned()));
+        declaration = declaration.with_schema(Some(CONFIG_SCHEMA_FILE.to_owned().into()));
     }
     if let Some((content, _)) = default {
         tar_append_bytes(archive, CONFIG_DEFAULT_FILE, content.as_bytes())?;
-        declaration = declaration.with_default(Some(CONFIG_DEFAULT_FILE.to_owned()));
+        declaration = declaration.with_default(Some(CONFIG_DEFAULT_FILE.to_owned().into()));
     }
     Ok(manifest.with_configuration(Some(declaration)))
 }
@@ -403,7 +403,7 @@ fn finalize_bundle(
     app: &str,
     payloads: Vec<Payload>,
 ) -> BundleResult<()> {
-    let manifest = BundleManifest::new(UpdateType::Full, payloads);
+    let manifest = BundleManifest::new(UpdateType::Full, payloads.into());
     fs::write(
         bundle_dir.join("rugix-bundle.toml"),
         toml::to_string_pretty(&manifest).whatever("unable to serialize manifest")?,
@@ -470,7 +470,7 @@ pub fn pack_binary(cmd: &super::PackBinaryCmd) -> BundleResult<()> {
     let payloads = vec![
         Payload {
             delivery: DeliveryConfig::AppArchive(AppArchiveDeliveryConfig::new(cmd.app.clone())),
-            filename: "base.tar".to_owned(),
+            filename: "base.tar".to_owned().into(),
             block_encoding: block_encoding.clone(),
             delta_encoding: None,
         },
@@ -479,7 +479,7 @@ pub fn pack_binary(cmd: &super::PackBinaryCmd) -> BundleResult<()> {
                 AppFileDeliveryConfig::new(cmd.app.clone(), binary_name.to_owned())
                     .with_mode(Some(0o755)),
             ),
-            filename: "binary".to_owned(),
+            filename: "binary".to_owned().into(),
             block_encoding: block_encoding.clone(),
             delta_encoding: None,
         },
@@ -521,7 +521,7 @@ pub fn pack_generic(cmd: &super::PackGenericCmd) -> BundleResult<()> {
 
     let payloads = vec![Payload {
         delivery: DeliveryConfig::AppArchive(AppArchiveDeliveryConfig::new(cmd.app.clone())),
-        filename: "base.tar".to_owned(),
+        filename: "base.tar".to_owned().into(),
         block_encoding,
         delta_encoding: None,
     }];

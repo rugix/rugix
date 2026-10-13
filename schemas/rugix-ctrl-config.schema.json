@@ -18,7 +18,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_ctrl.config.CompatibilityConfig": {
-      "$id": "rugix_ctrl.config.CompatibilityConfig",
       "type": "object",
       "properties": {
         "require-bundle-components": {
@@ -29,7 +28,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.config.SignaturesConfig": {
-      "$id": "rugix_ctrl.config.SignaturesConfig",
       "type": "object",
       "properties": {
         "roots": {

@@ -42,15 +42,18 @@ pub fn state_from_system(system: &System) -> SystemResult<SystemInfoOutput> {
                         s.hashes
                             .iter()
                             .map(|(a, h)| (a.name().to_owned(), h.to_string()))
+                            .map(|(key, value)| (key.into(), value.into()))
                             .collect()
                     }),
                     size: slot_state.as_ref().and_then(|s| s.size.map(|s| s.raw)),
-                    updated_at: slot_state
+                    updated_at: (slot_state
                         .as_ref()
-                        .and_then(|s| s.updated_at.map(|t| t.to_string())),
+                        .and_then(|s| s.updated_at.map(|t| t.to_string())))
+                    .map(Into::into),
                 },
             )
         })
+        .map(|(key, value)| (key.into(), value))
         .collect();
     let boot = if system.has_boot_flow() {
         let active_boot_group = system
@@ -65,11 +68,12 @@ pub fn state_from_system(system: &System) -> SystemResult<SystemInfoOutput> {
             .boot_entries()
             .iter()
             .map(|(_, group)| (group.name().to_owned(), BootGroupInfoOutput {}))
+            .map(|(key, value)| (key.into(), value))
             .collect();
         Some(BootInfoOutput {
-            boot_flow: system.boot_flow().name().to_owned(),
-            active_group: active_boot_group,
-            default_group: default_boot_group,
+            boot_flow: system.boot_flow().name().to_owned().into(),
+            active_group: active_boot_group.map(Into::into),
+            default_group: default_boot_group.map(Into::into),
             groups: boot_groups,
         })
     } else {
@@ -106,7 +110,9 @@ fn state_status(
     } else if overlay_failed {
         state_error(OVERLAY_ERROR_MESSAGE)
     } else {
-        StateInfoOutput::Active(StateInfoActiveOutput::new().with_data_partition(data_device))
+        StateInfoOutput::Active(
+            StateInfoActiveOutput::new().with_data_partition(data_device.map(Into::into)),
+        )
     }
 }
 
@@ -114,7 +120,7 @@ fn state_status(
 fn state_error(message: &str) -> StateInfoOutput {
     StateInfoOutput::Error(
         StateInfoErrorOutput::new()
-            .with_message(Some(message.to_owned()))
+            .with_message(Some(message.to_owned().into()))
             .with_ephemeral(Some(true)),
     )
 }

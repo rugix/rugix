@@ -495,7 +495,7 @@ fn bootstrap(
 
     info!("Found bootstrapping marker. Begin bootstrapping");
     let layout = bootstrap_config.layout.unwrap_or_else(|| {
-        SystemLayoutConfig::Default(DefaultLayoutConfig::new(NumBytes::gibibytes(4)))
+        SystemLayoutConfig::Default(DefaultLayoutConfig::new(NumBytes::gibibytes(4).into()))
     });
 
     let ty = root.table.as_ref().unwrap().ty();
@@ -509,9 +509,9 @@ fn bootstrap(
                 .iter()
                 .map(|part| SchemaPartition {
                     number: None,
-                    name: part.name.clone(),
+                    name: part.name.clone().map(Into::into),
                     size: part.size.map(|s| s.raw.into()),
-                    ty: part.ty,
+                    ty: part.ty.map(|value| value.0),
                 })
                 .collect(),
         }),

@@ -17,8 +17,13 @@
       "type": "string"
     },
     "desiredConfigurationRevision": {
-      "type": "integer",
-      "format": "uint64"
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
     },
     "generations": {
       "type": "array",
@@ -36,7 +41,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_ctrl.apps.AppState": {
-      "$id": "rugix_ctrl.apps.AppState",
       "description": "Persisted app state.",
       "oneOf": [
         {
@@ -57,20 +61,40 @@
               "const": "switching"
             },
             "from": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "fromConfigurationRevision": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "to": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "toConfigurationRevision": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "recovery": {
               "type": "boolean"
@@ -87,12 +111,22 @@
               "const": "active"
             },
             "generation": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "configurationRevision": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             }
           },
           "required": [
@@ -107,12 +141,22 @@
               "const": "starting"
             },
             "generation": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "configurationRevision": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             }
           },
           "required": [
@@ -127,12 +171,22 @@
               "const": "stopping"
             },
             "generation": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "configurationRevision": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             }
           },
           "required": [
@@ -147,20 +201,40 @@
               "const": "error"
             },
             "from": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "fromConfigurationRevision": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "to": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "toConfigurationRevision": {
-              "type": "integer",
-              "format": "uint64"
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "uint64",
+              "minimum": 0,
+              "pattern": "^[0-9]+$"
             },
             "message": {
               "type": "string"
@@ -175,7 +249,6 @@
       ]
     },
     "rugix_ctrl.apps.AppStatus": {
-      "$id": "rugix_ctrl.apps.AppStatus",
       "description": "Live workload status.",
       "oneOf": [
         {
@@ -244,13 +317,17 @@
       ]
     },
     "rugix_ctrl.output.GenerationInfoOutput": {
-      "$id": "rugix_ctrl.output.GenerationInfoOutput",
       "type": "object",
       "description": "Information about a generation.",
       "properties": {
         "number": {
-          "type": "integer",
-          "format": "uint64"
+          "type": [
+            "integer",
+            "string"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "pattern": "^[0-9]+$"
         },
         "createdAt": {
           "type": "string"
@@ -262,8 +339,13 @@
           "type": "string"
         },
         "configurationRevision": {
-          "type": "integer",
-          "format": "uint64"
+          "type": [
+            "integer",
+            "string"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "pattern": "^[0-9]+$"
         },
         "active": {
           "type": "boolean"
@@ -279,8 +361,6 @@
       ],
       "unevaluatedProperties": false
     },
-    "rugix_ctrl.output.JsonValue": {
-      "$id": "rugix_ctrl.output.JsonValue"
-    }
+    "rugix_ctrl.output.JsonValue": {}
   }
 }

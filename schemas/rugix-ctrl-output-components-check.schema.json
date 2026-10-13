@@ -35,7 +35,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_ctrl.output.CapabilityOutput": {
-      "$id": "rugix_ctrl.output.CapabilityOutput",
       "type": "object",
       "description": "Provided capability.",
       "properties": {
@@ -55,7 +54,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.CapabilitySelectorOutput": {
-      "$id": "rugix_ctrl.output.CapabilitySelectorOutput",
       "type": "object",
       "description": "Capability selector used by requirements and conflicts.",
       "properties": {
@@ -75,7 +73,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.ClaimOutput": {
-      "$id": "rugix_ctrl.output.ClaimOutput",
       "type": "object",
       "description": "Exclusive resource claim.",
       "properties": {
@@ -89,7 +86,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.ComponentOutput": {
-      "$id": "rugix_ctrl.output.ComponentOutput",
       "type": "object",
       "description": "Component declaration.",
       "properties": {
@@ -134,7 +130,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.ComponentProblemOutput": {
-      "$id": "rugix_ctrl.output.ComponentProblemOutput",
       "description": "Internal consistency problem in the component set.",
       "oneOf": [
         {
@@ -230,7 +225,6 @@
       ]
     },
     "rugix_ctrl.output.ComponentRefOutput": {
-      "$id": "rugix_ctrl.output.ComponentRefOutput",
       "type": "object",
       "description": "Reference to a component and its source, if known.",
       "properties": {
@@ -247,7 +241,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.ComponentRootOutput": {
-      "$id": "rugix_ctrl.output.ComponentRootOutput",
       "type": "object",
       "description": "Root directory scanned for component metadata.",
       "properties": {
@@ -261,8 +254,13 @@
           "type": "string"
         },
         "generation": {
-          "type": "integer",
-          "format": "uint64"
+          "type": [
+            "integer",
+            "string"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "pattern": "^[0-9]+$"
         }
       },
       "required": [
@@ -272,7 +270,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.ComponentSourceKindOutput": {
-      "$id": "rugix_ctrl.output.ComponentSourceKindOutput",
       "enum": [
         "System",
         "Local",
@@ -284,7 +281,6 @@
       "description": "Kind of component source."
     },
     "rugix_ctrl.output.ComponentSourceOutput": {
-      "$id": "rugix_ctrl.output.ComponentSourceOutput",
       "type": "object",
       "description": "Source for a component declaration.",
       "properties": {
@@ -298,8 +294,13 @@
           "type": "string"
         },
         "generation": {
-          "type": "integer",
-          "format": "uint64"
+          "type": [
+            "integer",
+            "string"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "pattern": "^[0-9]+$"
         }
       },
       "required": [
@@ -309,7 +310,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.LoadedComponentOutput": {
-      "$id": "rugix_ctrl.output.LoadedComponentOutput",
       "type": "object",
       "description": "Component loaded from a source.",
       "properties": {

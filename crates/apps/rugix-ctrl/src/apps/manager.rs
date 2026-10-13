@@ -406,11 +406,11 @@ impl AppManager {
                     None => AppDeployment::new(to, to_configuration_revision),
                 };
                 info!(
-                    app = app_name,
+                    app = %app_name,
                     from,
                     to,
                     target = target.generation,
-                    message,
+                    %message,
                     "recovering from error state"
                 );
                 if let Err(e) = self.run_activate(app_name, target, true) {
@@ -592,7 +592,7 @@ impl AppManager {
             fs::read_to_string(&meta_path).whatever("unable to read generation metadata")?;
         let mut gen: AppGeneration =
             serde_json::from_str(&content).whatever("unable to parse generation metadata")?;
-        gen.last_activated = Some(jiff::Timestamp::now().to_string());
+        gen.last_activated = Some(jiff::Timestamp::now().to_string().into());
         gen.configuration_revision = configuration_revision;
         let updated = serde_json::to_string_pretty(&gen)
             .whatever("unable to serialize generation metadata")?;
@@ -1106,7 +1106,7 @@ impl AppManager {
     pub fn read_orchestrator(&self, app_name: &str, generation: u64) -> AppsResult<String> {
         validate_app_name(app_name)?;
         let manifest = load_manifest(&self.generation_dir_unchecked(app_name, generation))?;
-        Ok(manifest.orchestrator)
+        Ok(manifest.orchestrator.into())
     }
 
     /// Find the generation that [`Self::rollback`] would activate.
@@ -1823,7 +1823,7 @@ mod tests {
                 .write_generation_metadata(
                     &dir,
                     &AppGeneration::new(generation, "2026-07-13T00:00:00Z".to_owned())
-                        .with_last_activated(Some(activated.to_owned())),
+                        .with_last_activated(Some(activated.to_owned().into())),
                 )
                 .unwrap();
         }

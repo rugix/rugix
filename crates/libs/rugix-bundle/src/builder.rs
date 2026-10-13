@@ -1,3 +1,4 @@
+use sidex::serde::Serde;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::Component as PathComponent;
@@ -24,10 +25,10 @@ use crate::format::stlv::write_segment_end;
 use crate::format::stlv::write_segment_start;
 use crate::format::{self};
 use crate::manifest::BundleManifest;
-use crate::manifest::HashAlgorithm;
 use crate::manifest::UpdateType;
 use crate::manifest::{self};
 use crate::paths_refer_to_same_file;
+use si_crypto_hashes::HashAlgorithm;
 
 const COMPONENTS_DIR: &str = "components";
 const COMPONENTS_SIZE_LIMIT: u64 = 64 * 1024;
@@ -39,9 +40,10 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
     )
     .whatever("unable to parse bundle manifest")?;
     manifest::validate_manifest_paths(&manifest)?;
-    let hash_algorithm = manifest
-        .hash_algorithm
-        .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256);
+    let hash_algorithm = manifest.hash_algorithm.map_or(
+        si_crypto_hashes::HashAlgorithm::Sha512_256,
+        Serde::into_inner,
+    );
     let mut bundle_header = format::BundleHeader {
         manifest: Some(
             serde_json::to_string(&manifest).whatever("unable to serialize bundle manifest")?,
@@ -79,7 +81,7 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
         bundle_header.payload_index.push(PayloadEntry {
             type_slot: if let manifest::DeliveryConfig::Slot(slot_config) = &payload.delivery {
                 Some(format::SlotPayloadType {
-                    slot: slot_config.slot.clone(),
+                    slot: slot_config.slot.to_string(),
                 })
             } else {
                 None
@@ -88,15 +90,19 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
                 &payload.delivery
             {
                 Some(format::ExecutePayloadType {
-                    handler: execute_delivery_config.handler.clone(),
+                    handler: execute_delivery_config
+                        .handler
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
                 })
             } else {
                 None
             },
             type_app_file: if let manifest::DeliveryConfig::AppFile(config) = &payload.delivery {
                 Some(format::AppFilePayloadType {
-                    app: config.app.clone(),
-                    path: config.path.clone(),
+                    app: config.app.to_string(),
+                    path: config.path.to_string(),
                     mode: config.mode,
                 })
             } else {
@@ -106,7 +112,7 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
                 &payload.delivery
             {
                 Some(format::AppArchivePayloadType {
-                    app: config.app.clone(),
+                    app: config.app.to_string(),
                 })
             } else {
                 None
@@ -129,10 +135,10 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
                         .inputs
                         .iter()
                         .map(|input| format::DeltaEncodingInput {
-                            hashes: input.hashes.clone(),
+                            hashes: input.hashes.iter().map(|hash| hash.0.clone()).collect(),
                         })
                         .collect(),
-                    original_hash: encoding.original_hash.clone(),
+                    original_hash: encoding.original_hash.0.clone(),
                 }),
         });
         prepared_payloads.push(PreparedPayload {

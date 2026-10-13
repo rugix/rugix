@@ -25,33 +25,20 @@ pub(crate) fn parse_component(path: &Path, content: &str) -> SystemResult<Compon
         .extension()
         .and_then(|extension| extension.to_str())
         .unwrap_or_default();
-    let mut unknown_field = None;
-    let declaration = if extension.eq_ignore_ascii_case("json") {
-        let mut deserializer = serde_json::Deserializer::from_str(content);
-        serde_ignored::deserialize(&mut deserializer, |path| {
-            unknown_field.get_or_insert_with(|| path.to_string());
-        })
-        .whatever("unable to parse JSON component file")
-        .field_debug("path", path)?
+    let declaration: ComponentDeclaration = if extension.eq_ignore_ascii_case("json") {
+        sidex::formats::json::from_str_strict(content)
+            .whatever("unable to parse JSON component file")
     } else {
-        let deserializer = toml::Deserializer::new(content);
-        serde_ignored::deserialize(deserializer, |path| {
-            unknown_field.get_or_insert_with(|| path.to_string());
-        })
-        .whatever("unable to parse TOML component file")
-        .field_debug("path", path)?
-    };
-    if let Some(unknown_field) = unknown_field {
-        return Err(whatever!("component declaration contains an unknown field")
-            .field("field", unknown_field)
-            .field_debug("path", path));
+        sidex::formats::toml::from_str_strict(content)
+            .whatever("unable to parse TOML component file")
     }
+    .field_debug("path", path)?;
     component_from_declaration(declaration).field_debug("path", path)
 }
 
 /// Convert a validated format declaration into the compatibility model.
 fn component_from_declaration(declaration: ComponentDeclaration) -> SystemResult<Component> {
-    let component_id = declaration.id;
+    let component_id = String::from(declaration.id);
     let mut component = match declaration.version {
         Some(version) => Component::versioned(component_id.clone(), &version)
             .whatever("invalid component version")
@@ -65,7 +52,7 @@ fn component_from_declaration(declaration: ComponentDeclaration) -> SystemResult
         );
     }
     for claim in declaration.claims.unwrap_or_default() {
-        component = component.with_claim(Claim::new(claim.id));
+        component = component.with_claim(Claim::new(String::from(claim.id)));
     }
     for selector in declaration.requires.unwrap_or_default() {
         component = component.with_requirement(
@@ -83,7 +70,7 @@ fn component_from_declaration(declaration: ComponentDeclaration) -> SystemResult
 
 /// Convert and validate one provided capability.
 fn capability_from_declaration(declaration: CapabilityDeclaration) -> SystemResult<Capability> {
-    let capability_id = declaration.id;
+    let capability_id = String::from(declaration.id);
     match (declaration.version, declaration.value) {
         (None, None) => Ok(Capability::new(capability_id)),
         (Some(version), None) => Capability::versioned(capability_id.clone(), &version)
@@ -101,7 +88,7 @@ fn capability_from_declaration(declaration: CapabilityDeclaration) -> SystemResu
 fn selector_from_declaration(
     declaration: CapabilitySelectorDeclaration,
 ) -> SystemResult<CapabilitySelector> {
-    let capability_id = declaration.id;
+    let capability_id = String::from(declaration.id);
     match (declaration.version, declaration.value) {
         (None, None) => Ok(CapabilitySelector::new(capability_id)),
         (Some(version), None) => CapabilitySelector::versioned(capability_id.clone(), &version)
@@ -188,8 +175,7 @@ versoin = "1.2.3"
         .unwrap_err();
 
         let report = format!("{error:?}");
-        assert!(report.contains("component declaration contains an unknown field"));
-        assert!(report.contains("versoin"));
+        assert!(report.contains("unknown field `versoin`"), "{report}");
     }
 
     /// Verifies that unknown fields in nested JSON declarations are rejected as well.
@@ -205,8 +191,10 @@ versoin = "1.2.3"
         .unwrap_err();
 
         let report = format!("{error:?}");
-        assert!(report.contains("component declaration contains an unknown field"));
-        assert!(report.contains("vale"), "{report}");
+        assert!(
+            report.contains("provides[0].vale: unknown field `vale`"),
+            "{report}"
+        );
     }
 
     /// Verifies that a provided capability has at most one kind of associated data.

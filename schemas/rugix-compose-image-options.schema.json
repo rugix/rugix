@@ -15,7 +15,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_bundle.compose.ImageSourceKind": {
-      "$id": "rugix_bundle.compose.ImageSourceKind",
       "enum": [
         "registry",
         "build",

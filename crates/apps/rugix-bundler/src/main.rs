@@ -497,15 +497,17 @@ fn main() -> BundleResult<()> {
                 let new_path = new_dir.path().join("payloads").join(&new_filename);
                 let hash_algorithm = new_manifest
                     .hash_algorithm
-                    .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256);
-                let old_hash = hash_file(hash_algorithm, &old_path)?;
-                let new_hash = hash_file(hash_algorithm, &new_path)?;
+                    .map_or(si_crypto_hashes::HashAlgorithm::Sha512_256, |algorithm| {
+                        algorithm.0
+                    });
+                let old_hash = hash_file(hash_algorithm.into(), &old_path)?;
+                let new_hash = hash_file(hash_algorithm.into(), &new_path)?;
                 let patch_path = new_dir.path().join("payloads").join(&new_filename_patched);
                 xdelta_compress(&old_path, &new_path, &patch_path)?;
                 std::fs::remove_file(&new_path)
                     .whatever("unable to replace new payload with its delta")?;
                 let new_payload = &mut new_manifest.payloads[new_payload_idx];
-                new_payload.filename = new_filename_patched;
+                new_payload.filename = new_filename_patched.into();
                 new_payload.block_encoding = Some(
                     BlockEncoding::new(ChunkerAlgorithm::Fixed {
                         block_size_kib: 256,
@@ -517,11 +519,12 @@ fn main() -> BundleResult<()> {
                     }),
                 );
                 new_payload.delta_encoding = Some(DeltaEncoding::new(
-                    vec![DeltaEncodingInput {
-                        hashes: vec![old_hash],
-                    }],
+                    (vec![DeltaEncodingInput {
+                        hashes: vec![old_hash.into()].into(),
+                    }])
+                    .into(),
                     DeltaEncodingFormat::Xdelta,
-                    new_hash,
+                    new_hash.into(),
                 ));
             }
             // Compute deltas for app-file payloads with matching paths.
@@ -555,15 +558,17 @@ fn main() -> BundleResult<()> {
                 let new_path = new_dir.path().join("payloads").join(&new_filename);
                 let hash_algorithm = new_manifest
                     .hash_algorithm
-                    .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256);
-                let old_hash = hash_file(hash_algorithm, &old_path)?;
-                let new_hash = hash_file(hash_algorithm, &new_path)?;
+                    .map_or(si_crypto_hashes::HashAlgorithm::Sha512_256, |algorithm| {
+                        algorithm.0
+                    });
+                let old_hash = hash_file(hash_algorithm.into(), &old_path)?;
+                let new_hash = hash_file(hash_algorithm.into(), &new_path)?;
                 let patch_path = new_dir.path().join("payloads").join(&new_filename_patched);
                 xdelta_compress(&old_path, &new_path, &patch_path)?;
                 std::fs::remove_file(&new_path)
                     .whatever("unable to replace new app payload with its delta")?;
                 let new_payload = &mut new_manifest.payloads[new_payload_idx];
-                new_payload.filename = new_filename_patched;
+                new_payload.filename = new_filename_patched.into();
                 new_payload.block_encoding = Some(
                     BlockEncoding::new(ChunkerAlgorithm::Fixed {
                         block_size_kib: 256,
@@ -575,11 +580,12 @@ fn main() -> BundleResult<()> {
                     }),
                 );
                 new_payload.delta_encoding = Some(DeltaEncoding::new(
-                    vec![DeltaEncodingInput {
-                        hashes: vec![old_hash],
-                    }],
+                    (vec![DeltaEncodingInput {
+                        hashes: vec![old_hash.into()].into(),
+                    }])
+                    .into(),
                     DeltaEncodingFormat::Xdelta,
-                    new_hash,
+                    new_hash.into(),
                 ));
             }
             std::fs::write(
@@ -726,7 +732,7 @@ fn delta_payload_filenames(
         .ok_or_else(|| reportify::whatever!("new payload index {new_payload_idx} is out of range"))?
         .filename
         .clone();
-    Ok((old_filename, new_filename))
+    Ok((old_filename.into(), new_filename.into()))
 }
 
 fn slot_payload_index(manifest: &BundleManifest, slot: &str) -> Option<usize> {
@@ -826,11 +832,11 @@ mod tests {
     fn delta_filenames_come_from_their_respective_manifests() {
         let old = BundleManifest::new(
             UpdateType::Full,
-            vec![payload("a", "old-a.img"), payload("b", "old-b.img")],
+            vec![payload("a", "old-a.img"), payload("b", "old-b.img")].into(),
         );
         let new = BundleManifest::new(
             UpdateType::Full,
-            vec![payload("b", "new-b.img"), payload("a", "renamed-a.img")],
+            vec![payload("b", "new-b.img"), payload("a", "renamed-a.img")].into(),
         );
 
         assert_eq!(
@@ -858,7 +864,7 @@ mod tests {
         std::fs::create_dir_all(source_dir.join("payloads/redirect")).unwrap();
         let manifest = BundleManifest::new(
             UpdateType::Full,
-            vec![payload("system", "redirect/system.img")],
+            vec![payload("system", "redirect/system.img")].into(),
         );
         std::fs::write(
             source_dir.join("rugix-bundle.toml"),

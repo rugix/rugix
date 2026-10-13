@@ -24,7 +24,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_ctrl.output.BootGroupInfoOutput": {
-      "$id": "rugix_ctrl.output.BootGroupInfoOutput",
       "type": "object",
       "description": "Information about a boot group.",
       "properties": {},
@@ -32,7 +31,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.BootInfoOutput": {
-      "$id": "rugix_ctrl.output.BootInfoOutput",
       "type": "object",
       "description": "Information about the boot flow.",
       "properties": {
@@ -59,7 +57,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.SlotInfoOutput": {
-      "$id": "rugix_ctrl.output.SlotInfoOutput",
       "type": "object",
       "description": "Information about a slot.",
       "properties": {
@@ -73,8 +70,13 @@
           }
         },
         "size": {
-          "type": "integer",
-          "format": "uint64"
+          "type": [
+            "integer",
+            "string"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "pattern": "^[0-9]+$"
         },
         "updatedAt": {
           "type": "string"
@@ -84,7 +86,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.output.StateInfoOutput": {
-      "$id": "rugix_ctrl.output.StateInfoOutput",
       "description": "Information about the state management mechanism.",
       "oneOf": [
         {

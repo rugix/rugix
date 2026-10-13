@@ -90,7 +90,12 @@ pub fn pack(cmd: &crate::PackDockerComposeCmd) -> BundleResult<()> {
             let environment = parse_configuration_environment(&cmd.configuration_environment)?;
             if !environment.is_empty() {
                 m = m.with_docker_compose(Some(
-                    DockerComposeConfig::new().with_environment(Some(environment)),
+                    DockerComposeConfig::new().with_environment(Some(
+                        environment
+                            .into_iter()
+                            .map(|(key, value)| (key.into(), value.into()))
+                            .collect::<BTreeMap<_, _>>(),
+                    )),
                 ));
             }
             m
@@ -114,7 +119,7 @@ pub fn pack(cmd: &crate::PackDockerComposeCmd) -> BundleResult<()> {
 
     let mut payloads = vec![Payload {
         delivery: DeliveryConfig::AppArchive(AppArchiveDeliveryConfig::new(cmd.app.clone())),
-        filename: "base.tar".to_owned(),
+        filename: "base.tar".to_owned().into(),
         block_encoding: block_encoding.clone(),
         delta_encoding: None,
     }];
@@ -125,7 +130,7 @@ pub fn pack(cmd: &crate::PackDockerComposeCmd) -> BundleResult<()> {
                 cmd.app.clone(),
                 image.app_path.clone(),
             )),
-            filename: image.payload_filename.clone(),
+            filename: image.payload_filename.clone().into(),
             block_encoding: block_encoding.clone(),
             delta_encoding: None,
         });
@@ -343,7 +348,9 @@ fn plan_compose_images(
                         .into_owned(),
                 )
             } else {
-                archive_ref.or_else(|| original_image.clone())
+                archive_ref
+                    .or_else(|| original_image.clone().map(Into::into))
+                    .map(Into::into)
             };
             let Some(source_ref) = source_ref else {
                 bail!("service `{service_name}` needs an `image` or x-rugix.image.ref to bundle");
@@ -451,20 +458,20 @@ fn image_metadata(images: &[PlannedImage], platform: Option<&str>) -> BundleResu
             bail!("image was not packaged before metadata generation");
         };
         entries.push(ImageMetadataEntry {
-            service: image.service.clone(),
+            service: image.service.clone().into(),
             source: image.source,
-            source_ref: image.source_ref.clone(),
-            original_image: image.original_image.clone(),
-            bundle_tag,
-            source_digest: image.source_digest.clone(),
-            image_id: image.image_id.clone(),
-            payload: image.app_path.clone(),
-            platform: platform.map(str::to_owned),
+            source_ref: image.source_ref.clone().into(),
+            original_image: image.original_image.clone().map(Into::into),
+            bundle_tag: bundle_tag.into(),
+            source_digest: image.source_digest.clone().map(Into::into),
+            image_id: image.image_id.clone().map(Into::into),
+            payload: image.app_path.clone().into(),
+            platform: platform.map(str::to_owned).map(Into::into),
         });
     }
     Ok(ImageMetadata {
         schema_version: 1,
-        images: entries,
+        images: entries.into(),
     })
 }
 
@@ -644,7 +651,10 @@ fn parse_x_rugix_options(
         mapping_get(image, "ref"),
         &format!("x-rugix.image.ref for service `{service}`"),
     )?;
-    Ok(Some(RugixImageOptions { source, source_ref }))
+    Ok(Some(RugixImageOptions {
+        source,
+        source_ref: source_ref.map(Into::into),
+    }))
 }
 
 fn parse_build_args(value: Option<&serde_yaml_ng::Value>) -> BundleResult<Vec<String>> {

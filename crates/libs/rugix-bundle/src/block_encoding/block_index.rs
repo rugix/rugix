@@ -48,7 +48,9 @@ pub fn index_for_block_encoding(
     let index_config = BlockIndexConfig {
         hash_algorithm: block_encoding
             .hash_algorithm
-            .unwrap_or(si_crypto_hashes::HashAlgorithm::Sha512_256),
+            .map_or(si_crypto_hashes::HashAlgorithm::Sha512_256, |algorithm| {
+                algorithm.0
+            }),
         chunker: block_encoding.chunker.clone(),
     };
     compute_block_index(index_config, payload_file)

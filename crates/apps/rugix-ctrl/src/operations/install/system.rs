@@ -815,12 +815,13 @@ mod tests {
                 (
                     (*name).to_owned(),
                     SlotConfig::File(FileSlotConfig {
-                        path: format!("/tmp/{name}"),
+                        path: format!("/tmp/{name}").into(),
                         immutable: Some(true),
                     }),
                 )
             })
-            .collect::<IndexMap<_, _>>();
+            .map(|(key, value)| (sidex::types::Str::from(key), value))
+            .collect::<sidex::types::Map<_, _>>();
         SystemSlots::from_config(None, Some(&config)).unwrap()
     }
 
@@ -840,9 +841,18 @@ mod tests {
         let slots = file_slots(&["system-a", "system-b"]);
         let mut aliases = IndexMap::new();
         aliases.insert("system".to_owned(), "system-b".to_owned());
-        let groups_config = [("b".to_owned(), BootGroupConfig { slots: aliases })]
-            .into_iter()
-            .collect::<IndexMap<_, _>>();
+        let groups_config = [(
+            "b".to_owned(),
+            BootGroupConfig {
+                slots: aliases
+                    .into_iter()
+                    .map(|(key, value)| (key.into(), value.into()))
+                    .collect::<::sidex::types::Map<_, _>>(),
+            },
+        )]
+        .into_iter()
+        .map(|(key, value)| (sidex::types::Str::from(key), value))
+        .collect::<sidex::types::Map<_, _>>();
         let groups = BootGroups::from_config(&slots, Some(&groups_config)).unwrap();
         let (_, group) = groups.iter().next().unwrap();
         let target_idx = slots.find_by_name("system-b").unwrap().0;
@@ -892,14 +902,15 @@ mod tests {
         let config = [(
             "optional".to_owned(),
             SlotConfig::Block(BlockSlotConfig {
-                device: Some("/dev/rugix-test-device-does-not-exist".to_owned()),
+                device: Some("/dev/rugix-test-device-does-not-exist".to_owned().into()),
                 partition: None,
                 immutable: Some(true),
                 optional: Some(true),
             }),
         )]
         .into_iter()
-        .collect::<IndexMap<_, _>>();
+        .map(|(key, value)| (sidex::types::Str::from(key), value))
+        .collect::<sidex::types::Map<_, _>>();
         let slots = SystemSlots::from_config(None, Some(&config)).unwrap();
 
         assert!(
@@ -920,11 +931,12 @@ mod tests {
         let groups_config = [(
             "target".to_owned(),
             BootGroupConfig {
-                slots: IndexMap::new(),
+                slots: sidex::types::Map::new(),
             },
         )]
         .into_iter()
-        .collect::<IndexMap<_, _>>();
+        .map(|(key, value)| (sidex::types::Str::from(key), value))
+        .collect::<sidex::types::Map<_, _>>();
         let groups = BootGroups::from_config(&slots, Some(&groups_config)).unwrap();
         let (_, group) = groups.iter().next().unwrap();
         assert!(

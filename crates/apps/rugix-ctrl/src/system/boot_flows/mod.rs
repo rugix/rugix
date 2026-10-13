@@ -704,7 +704,6 @@ impl BootFlow for GrubEfi {
 
 #[cfg(test)]
 mod tests {
-    use indexmap::IndexMap;
     use rugix_common::disk::gpt::Guid;
     use rugix_common::disk::DiskId;
     use rugix_common::disk::NumBlocks;
@@ -734,12 +733,13 @@ mod tests {
                 (
                     format!("system-{index}"),
                     SlotConfig::File(FileSlotConfig {
-                        path: format!("/tmp/system-{index}"),
+                        path: format!("/tmp/system-{index}").into(),
                         immutable: Some(true),
                     }),
                 )
             })
-            .collect::<IndexMap<_, _>>();
+            .map(|(key, value)| (sidex::types::Str::from(key), value))
+            .collect::<sidex::types::Map<_, _>>();
         let slots = SystemSlots::from_config(None, Some(&slot_config)).unwrap();
         let group_config = (0..count)
             .map(|index| {
@@ -748,11 +748,13 @@ mod tests {
                     BootGroupConfig {
                         slots: [("system".to_owned(), format!("system-{index}"))]
                             .into_iter()
+                            .map(|(key, value)| (key.into(), value.into()))
                             .collect(),
                     },
                 )
             })
-            .collect::<IndexMap<_, _>>();
+            .map(|(key, value)| (sidex::types::Str::from(key), value))
+            .collect::<sidex::types::Map<_, _>>();
         let groups = BootGroups::from_config(&slots, Some(&group_config)).unwrap();
         (slots, groups)
     }
@@ -775,7 +777,7 @@ mod tests {
 
         let directory = tempfile::tempdir().unwrap();
         let partition = ConfigPartition::from_config(
-            &PartitionConfig::new().with_path(Some(directory.path().display().to_string())),
+            &PartitionConfig::new().with_path(Some(directory.path().display().to_string().into())),
         )
         .unwrap();
         let flow = from_config(None, Some(&partition), &groups).unwrap();
