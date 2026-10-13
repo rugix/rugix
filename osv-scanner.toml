@@ -1,0 +1,3 @@
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0449"
+reason = "Unmaintained dependency used by Rugix Bundler for Compose files; maintenance risk accepted while retaining YAML compatibility."

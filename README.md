@@ -121,6 +121,10 @@ When a dependency advisory fails CI, update the affected crate in `Cargo.lock` w
 crate is a direct dependency, also raise its minimum version in the corresponding
 `Cargo.toml` to exclude affected releases.
 
+Accepted advisory exceptions are listed by advisory ID with a reason in both
+`deny.toml` and `osv-scanner.toml`. Keep these lists aligned so the dependency policy
+and OSV checks apply the same exceptions.
+
 ## Run Directly from Git with Nix
 
 The Nix flake exposes each Rugix command as both a package and an app, so no checkout is
