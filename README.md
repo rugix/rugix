@@ -91,14 +91,6 @@ mise install
 mise tasks
 ```
 
-Sidex 0.4.0 defines the configuration and CLI data formats. `mise run codegen`
-regenerates the tracked JSON schemas; Cargo build scripts generate Rust bindings.
-Byte sizes in configurations still accept strings such as `system-size = "4GiB"`.
-Component declarations reject unknown fields, including nested fields.
-
-JSON output encodes 64-bit integers above `Number.MAX_SAFE_INTEGER` as decimal
-strings. Consumers must accept both numbers and decimal strings for these fields.
-
 Common workflows are:
 
 ```bash
