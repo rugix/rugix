@@ -22,6 +22,7 @@ Rugix Bundler:
 
 Rugix Ctrl:
 
+- Update Rustls to 0.23.46 to fix four TLS security advisories.
 - Report the orchestrator of the active app generation in `rugix-ctrl apps list` and `rugix-ctrl apps info`, and the desired application configuration revision in `rugix-ctrl apps info`.
 - Publish JSON Schemas for the application inspection output: `apps list` entries, `apps info`, `apps gc`, and `apps config set`.
 - Execute `rugix-ctrl apps generations` through the operation layer, so that it works through the privileged daemon and reports generation metadata like `apps info` does.
