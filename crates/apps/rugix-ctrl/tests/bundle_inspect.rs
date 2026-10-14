@@ -15,6 +15,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use serde::Deserialize;
 use si_crypto_hashes::HashAlgorithm;
@@ -37,7 +38,6 @@ struct Payload {
     header_hash: String,
     file_hash: String,
     delta: Option<Delta>,
-    block_index: Option<BlockIndex>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -57,15 +57,6 @@ enum Delivery {
     AppArchive {
         app: String,
     },
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BlockIndex {
-    chunker: String,
-    hash_algorithm: String,
-    block_count: u64,
-    compression: Option<String>,
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -169,6 +160,17 @@ delivery = {{ type = "app-archive", app = "demo" }}
     }
 }
 
+/// Keep only the metadata prefix, ending immediately after the payload section starts.
+fn metadata_prefix(path: &Path) -> Vec<u8> {
+    let mut bytes = fs::read(path).unwrap();
+    let source =
+        rugix_bundle::reader::BundleSource::from_seekable(std::io::Cursor::new(bytes.clone()))
+            .unwrap();
+    let reader = rugix_bundle::reader::BundleReader::start(source, None).unwrap();
+    bytes.truncate(reader.progress().bytes_read.raw as usize);
+    bytes
+}
+
 /// Execute inspection without initializing a Rugix device or privileged daemon.
 fn inspect(input: &str, stream: Option<&[u8]>) -> Inspection {
     let mut child = Command::new(env!("CARGO_BIN_EXE_rugix-ctrl"))
@@ -189,10 +191,26 @@ fn inspect(input: &str, stream: Option<&[u8]>) -> Inspection {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    if let Some(bytes) = stream {
-        child.stdin.take().unwrap().write_all(bytes).unwrap();
+    // Keep stdin open: inspection must finish without waiting for payloads or EOF.
+    let stdin = stream.map(|bytes| {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(bytes).unwrap();
+        stdin
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "inspection did not finish: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(10));
     }
     let output = child.wait_with_output().unwrap();
+    drop(stdin);
     assert!(
         output.status.success(),
         "{}",
@@ -203,7 +221,7 @@ fn inspect(input: &str, stream: Option<&[u8]>) -> Inspection {
 
 /// Verify output metadata and equivalence of seekable and forward-only inputs.
 #[test]
-fn file_and_stdin_report_payloads_components_and_block_indices() {
+fn file_and_open_stdin_report_declared_payloads_and_components() {
     let fixture = Fixture::new();
     let output = inspect(fixture.path.to_str().unwrap(), None);
     assert_eq!(output.header_hash, fixture.header_hash);
@@ -217,21 +235,11 @@ fn file_and_stdin_report_payloads_components_and_block_indices() {
         }
     );
     assert_eq!(
-        output.payloads[0].block_index,
-        Some(BlockIndex {
-            chunker: "fixed-64".into(),
-            hash_algorithm: "sha256".into(),
-            block_count: 3,
-            compression: Some("xz".into()),
-        })
-    );
-    assert_eq!(
         output.payloads[1].delivery,
         Delivery::Execute {
             handler: vec!["sh".into(), "-e".into()]
         }
     );
-    assert!(output.payloads[1].block_index.is_none());
     assert_eq!(
         output.payloads[2].delivery,
         Delivery::AppFile {
@@ -243,10 +251,6 @@ fn file_and_stdin_report_payloads_components_and_block_indices() {
     let delta = output.payloads[2].delta.as_ref().unwrap();
     assert_eq!(delta.inputs[0].hashes, vec![fixture.base_hash]);
     assert_eq!(delta.output_hash, fixture.output_hash);
-    assert_eq!(
-        output.payloads[2].block_index.as_ref().unwrap().compression,
-        None
-    );
     assert_eq!(
         output.payloads[3].delivery,
         Delivery::AppArchive { app: "demo".into() }
@@ -264,7 +268,11 @@ fn file_and_stdin_report_payloads_components_and_block_indices() {
         assert!(payload.header_hash.starts_with("sha512-256:"));
         assert!(payload.file_hash.starts_with("sha512-256:"));
     }
-    assert_eq!(output, inspect("-", Some(&fs::read(fixture.path).unwrap())));
+    let prefix = metadata_prefix(&fixture.path);
+    assert_eq!(output, inspect("-", Some(&prefix)));
+    let truncated = fixture.directory.path().join("header-only.rugixb");
+    fs::write(&truncated, &prefix).unwrap();
+    assert_eq!(output, inspect(truncated.to_str().unwrap(), None));
 }
 
 /// Generate an untrusted, self-signed signer without needing device trust roots.
@@ -344,6 +352,7 @@ fn signature_diagnostics_do_not_require_valid_or_trusted_signatures() {
     assert!(output.signatures[2].signer_subjects.is_empty());
     assert!(output.signatures[2].header_matches.is_none());
     assert!(output.signatures[2].error.is_some());
+    assert_eq!(output, inspect("-", Some(&metadata_prefix(&input))));
 }
 
 /// A minimal HTTP fixture serving either byte ranges or a forward response.
@@ -391,11 +400,12 @@ impl Server {
                         ));
                     }
                 }
-                let (start, end) = if ranges {
+                let (start, requested_end) = if ranges {
                     requested_range.unwrap_or((0, bytes.len()))
                 } else {
                     (0, bytes.len())
                 };
+                let end = requested_end.min(bytes.len());
                 let status = if ranges && requested_range.is_some() {
                     "206 Partial Content"
                 } else {
@@ -439,8 +449,7 @@ impl Drop for Server {
     }
 }
 
-/// Range inspection skips payload data; servers without ranges still produce identical
-/// output.
+/// Inspect full bundles and metadata prefixes with or without HTTP range support.
 #[test]
 fn http_ranges_and_streaming_fallback_match_local_inspection() {
     let fixture = Fixture::new();
@@ -451,4 +460,8 @@ fn http_ranges_and_streaming_fallback_match_local_inspection() {
     assert!(ranged.sent.load(Ordering::Relaxed) < bytes.len() / 2);
     let streaming = Server::new(bytes, false);
     assert_eq!(inspect(&streaming.url, None), expected);
+    for ranges in [true, false] {
+        let prefix = Server::new(metadata_prefix(&fixture.path), ranges);
+        assert_eq!(inspect(&prefix.url, None), expected);
+    }
 }

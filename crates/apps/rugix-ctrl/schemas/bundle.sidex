@@ -8,7 +8,7 @@ record BundleInspectOutput {
     header_hash: HashDigest,
     hash_algorithm: HashAlgorithm,
     update_type: BundleUpdateTypeOutput,
-    /// Payloads in bundle order.
+    /// Declared payloads in bundle order.
     payloads: [BundlePayloadOutput],
     /// Embedded component declarations, when present.
     components?: [BundleComponentOutput],
@@ -27,7 +27,6 @@ record BundlePayloadOutput {
     /// Hash of the payload file before block encoding; identifies the patch for delta payloads.
     file_hash: HashDigest,
     delta?: BundleDeltaOutput,
-    block_index?: BundleBlockIndexOutput,
 }
 
 #[json(tag = "type", rename_all = "kebab-case")]
@@ -72,20 +71,6 @@ record BundleDeltaInputOutput {
     hashes: [HashDigest],
 }
 
-record BundleBlockIndexOutput {
-    chunker: ChunkerAlgorithm,
-    hash_algorithm: HashAlgorithm,
-    /// Number of entries, including repeated blocks.
-    block_count: u64,
-    /// Compression used for the payload blocks; absent for uncompressed blocks.
-    compression?: BundleCompressionOutput,
-}
-
-#[json(tagged = externally, rename_all = "lowercase")]
-variant BundleCompressionOutput {
-    Xz,
-}
-
 /// Summary of one CMS signature, without cryptographic or certificate-chain verification.
 record BundleSignatureOutput {
     /// Subjects of embedded certificates referenced by CMS signers, excluding intermediates.
@@ -109,7 +94,3 @@ opaque HashDigest
 #[json(type = "string")]
 #[rust(type = "::sidex::serde::Serde<::si_crypto_hashes::HashAlgorithm>")]
 opaque HashAlgorithm
-
-#[json(type = "string")]
-#[rust(type = "::rugix_chunker::ChunkerAlgorithm")]
-opaque ChunkerAlgorithm

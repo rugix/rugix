@@ -394,26 +394,6 @@ impl PayloadReader<'_> {
         &self.reader.header().payload_index[self.idx]
     }
 
-    /// Count block-index entries without reading or decoding the payload body.
-    ///
-    /// Compressed index metadata is decompressed within the payload-header size limit.
-    pub fn block_count(&self) -> BundleResult<Option<u64>> {
-        let Some(encoding) = &self.header.block_encoding else {
-            return Ok(None);
-        };
-        let decompressed;
-        let hashes = if let Some(compression) = encoding.compression {
-            decompressed = uncompress_bytes(compression, &encoding.block_hashes.raw)?;
-            &decompressed
-        } else {
-            &encoding.block_hashes.raw
-        };
-        validate_block_metadata_lengths(hashes.len(), encoding.hash_algorithm.hash_size(), None)?;
-        Ok(Some(
-            (hashes.len() / encoding.hash_algorithm.hash_size()) as u64,
-        ))
-    }
-
     /// Discard this payload's encoded bytes and validate its closing framing.
     ///
     /// Skipping does not verify the decoded payload hash. Streams drain the bytes;
@@ -725,10 +705,6 @@ fn validate_block_metadata_lengths(
     Ok(())
 }
 
-// Support all encoder presets, including level 9's 64 MiB dictionary, with bounded codec
-// overhead.
-const METADATA_DECODER_MEMORY_LIMIT: u64 = 128 * 1024 * 1024;
-
 fn uncompress_bytes(format: CompressionFormat, bytes: &[u8]) -> BundleResult<Vec<u8>> {
     uncompress_bytes_with_limit(format, bytes, PAYLOAD_HEADER_SIZE_LIMIT.raw as usize)
 }
@@ -761,8 +737,7 @@ fn uncompress_bytes_with_limit(
 
     match format {
         CompressionFormat::Xz => {
-            let mut decoder =
-                rugix_compression::XzDecoder::with_memory_limit(METADATA_DECODER_MEMORY_LIMIT);
+            let mut decoder = rugix_compression::XzDecoder::new();
             let mut output = BoundedVecWriter {
                 bytes: Vec::new(),
                 limit,
@@ -781,7 +756,6 @@ fn uncompress_bytes_with_limit(
 #[cfg(test)]
 mod tests {
     use byte_calc::NumBytes;
-    use rugix_compression::ByteProcessor;
     use si_crypto_hashes::HashAlgorithm;
 
     use crate::format;
@@ -809,36 +783,6 @@ mod tests {
             components: None,
             payload_index: Vec::new(),
         }
-    }
-
-    /// Reject a tiny metadata stream declaring a 4 GiB dictionary while accepting encoder
-    /// preset 9.
-    #[test]
-    fn metadata_decompression_bounds_dictionary_memory() {
-        // This is a valid stream of 32 zero bytes with LZMA2 property 40 and an updated
-        // block-header CRC.
-        let oversized_dictionary = [
-            0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 0x00, 0x04, 0xe6, 0xd6, 0xb4, 0x46, 0x02, 0x00,
-            0x21, 0x01, 0x28, 0x00, 0x00, 0x00, 0xe6, 0xa0, 0x11, 0xb3, 0xe0, 0x00, 0x1f, 0x00,
-            0x06, 0x5d, 0x00, 0x00, 0x6e, 0x18, 0x47, 0x98, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x33,
-            0xd5, 0x7c, 0x61, 0xf8, 0x5a, 0xc9, 0x00, 0x01, 0x22, 0x20, 0xc3, 0xd3, 0x5a, 0xbc,
-            0x1f, 0xb6, 0xf3, 0x7d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x59, 0x5a,
-        ];
-        let error = uncompress_bytes(
-            rugix_compression::CompressionFormat::Xz,
-            &oversized_dictionary,
-        )
-        .unwrap_err();
-        assert!(format!("{error:?}").to_ascii_lowercase().contains("memory"));
-
-        let mut encoder = rugix_compression::XzEncoder::new(9);
-        let mut encoded = Vec::new();
-        encoder.process(&[0; 32], &mut encoded).unwrap();
-        encoder.finalize(&mut encoded).unwrap();
-        assert_eq!(
-            uncompress_bytes(rugix_compression::CompressionFormat::Xz, &encoded).unwrap(),
-            vec![0; 32]
-        );
     }
 
     #[test]

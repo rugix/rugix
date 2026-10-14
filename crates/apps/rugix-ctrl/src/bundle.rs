@@ -5,8 +5,6 @@ use reportify::ResultExt;
 use rugix_bundle::format;
 use rugix_bundle::format::decode::decode_slice;
 use rugix_bundle::reader::BundleReader;
-use rugix_bundle::reader::PayloadReader;
-use rugix_compression::CompressionFormat;
 use si_crypto_hashes::HashAlgorithm;
 use si_crypto_hashes::HashDigest;
 
@@ -14,9 +12,7 @@ use crate::components::bundle_component_declarations;
 use crate::components::component_output;
 use crate::config::bundle::BundleAppArchiveDeliveryOutput;
 use crate::config::bundle::BundleAppFileDeliveryOutput;
-use crate::config::bundle::BundleBlockIndexOutput;
 use crate::config::bundle::BundleComponentOutput;
-use crate::config::bundle::BundleCompressionOutput;
 use crate::config::bundle::BundleDeliveryOutput;
 use crate::config::bundle::BundleDeltaInputOutput;
 use crate::config::bundle::BundleDeltaOutput;
@@ -37,17 +33,16 @@ pub(crate) fn inspect(
     source: InstallSource,
     input: BundleInput,
 ) -> SystemResult<BundleInspectOutput> {
-    with_bundle_source(source, input, |source, size_hint, options| {
+    with_bundle_source(source, input, |source, _, options| {
         let reader = BundleReader::start_with_options(source, None, options)
-            .whatever("unable to read bundle")?
-            .with_size_hint(size_hint);
-        inspect_reader(reader)
+            .whatever("unable to read bundle")?;
+        inspect_reader(&reader)
     })
     .map(|result| result.output)
 }
 
-/// Read payload headers and skip their bodies, validating the bundle framing.
-fn inspect_reader(mut reader: BundleReader) -> SystemResult<BundleInspectOutput> {
+/// Describe declared payloads using only the bundle header and signatures.
+fn inspect_reader(reader: &BundleReader) -> SystemResult<BundleInspectOutput> {
     let algorithm = reader.header().hash_algorithm;
     let header_hash = reader.header_hash(algorithm);
     let update_type = if reader.header().is_incremental {
@@ -76,40 +71,37 @@ fn inspect_reader(mut reader: BundleReader) -> SystemResult<BundleInspectOutput>
             signatures
                 .cms_signatures
                 .iter()
-                .map(|signature| signature_output(&reader, &signature.raw))
+                .map(|signature| signature_output(reader, &signature.raw))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let mut payloads = Vec::new();
-    while let Some(payload) = reader
-        .next_payload()
-        .whatever("unable to read payload header")?
-    {
-        let entry = payload.entry();
-        let delta = entry.delta_encoding.as_ref().map(|delta| {
-            BundleDeltaOutput::new(
-                delta
-                    .inputs
-                    .iter()
-                    .map(|input| {
-                        BundleDeltaInputOutput::new(
-                            input.hashes.iter().cloned().map(Into::into).collect(),
-                        )
-                    })
-                    .collect(),
-                delta.original_hash.clone().into(),
+    let payloads = reader
+        .header()
+        .payload_index
+        .iter()
+        .map(|entry| {
+            let delta = entry.delta_encoding.as_ref().map(|delta| {
+                BundleDeltaOutput::new(
+                    delta
+                        .inputs
+                        .iter()
+                        .map(|input| {
+                            BundleDeltaInputOutput::new(
+                                input.hashes.iter().cloned().map(Into::into).collect(),
+                            )
+                        })
+                        .collect(),
+                    delta.original_hash.clone().into(),
+                )
+            });
+            Ok(BundlePayloadOutput::new(
+                delivery_output(entry)?,
+                payload_digest(algorithm, &entry.header_hash.raw)?.into(),
+                payload_digest(algorithm, &entry.file_hash.raw)?.into(),
             )
-        });
-        let output = BundlePayloadOutput::new(
-            delivery_output(entry)?,
-            payload_digest(algorithm, &entry.header_hash.raw)?.into(),
-            payload_digest(algorithm, &entry.file_hash.raw)?.into(),
-        )
-        .with_delta(delta)
-        .with_block_index(block_index_output(&payload)?);
-        payloads.push(output);
-        payload.skip().whatever("unable to skip payload")?;
-    }
+            .with_delta(delta))
+        })
+        .collect::<SystemResult<Vec<_>>>()?;
     Ok(BundleInspectOutput::new(
         header_hash.into(),
         algorithm.into(),
@@ -150,27 +142,6 @@ fn delivery_output(entry: &format::PayloadEntry) -> SystemResult<BundleDeliveryO
         )),
         _ => bail!("payload must declare exactly one delivery mechanism"),
     }
-}
-
-/// Summarize the index without exposing individual block hashes.
-fn block_index_output(payload: &PayloadReader<'_>) -> SystemResult<Option<BundleBlockIndexOutput>> {
-    let Some(encoding) = &payload.header().block_encoding else {
-        return Ok(None);
-    };
-    let block_count = payload
-        .block_count()
-        .whatever("unable to read block index")?
-        .expect("a payload with block encoding has a block count");
-    Ok(Some(
-        BundleBlockIndexOutput::new(
-            encoding.chunker.clone(),
-            encoding.hash_algorithm.into(),
-            block_count,
-        )
-        .with_compression(encoding.compression.map(|compression| match compression {
-            CompressionFormat::Xz => BundleCompressionOutput::Xz,
-        })),
-    ))
 }
 
 /// Preserve usable metadata and diagnostics even when a signature is malformed.
