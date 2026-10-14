@@ -4,6 +4,7 @@
 
 Behavior Changes:
 
+- Accept unknown fields in TOML and JSON component declarations, including nested fields, so older Rugix versions can read declarations extended by newer versions. Log a warning with the declaration path and unknown field paths.
 - App bundles must carry payloads for a single app. Rugix Bundler rejects a manifest declaring app payloads for several apps, and Rugix Ctrl refuses to install such a bundle. No packing command could produce one, so this affects hand-written bundle manifests only. Pack one bundle per app.
 - `rugix-ctrl apps info` reports the persisted lifecycle state as `lifecycle` instead of `state`, so that it is no longer mistaken for the live workload `status` next to it. Both remain objects whose discriminant is `state`.
 - `rugix-ctrl apps info` omits `createdAt` for a generation whose metadata is missing instead of reporting an empty string.

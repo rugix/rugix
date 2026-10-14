@@ -21,19 +21,39 @@ use crate::system::SystemResult;
 /// Parse and validate one TOML or JSON component declaration.
 #[tracing::instrument(level = "debug", skip(content))]
 pub(crate) fn parse_component(path: &Path, content: &str) -> SystemResult<Component> {
+    let (component, unknown_fields) = parse_component_with_unknown(path, content)?;
+    if !unknown_fields.is_empty() {
+        tracing::warn!(
+            path = %path.display(),
+            fields = ?unknown_fields,
+            "unknown fields in component declaration"
+        );
+    }
+    Ok(component)
+}
+
+/// Parse and validate a declaration, retaining unknown field paths for diagnostics.
+fn parse_component_with_unknown(
+    path: &Path,
+    content: &str,
+) -> SystemResult<(Component, Vec<String>)> {
     let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
         .unwrap_or_default();
-    let declaration: ComponentDeclaration = if extension.eq_ignore_ascii_case("json") {
-        sidex::formats::json::from_str_strict(content)
+    let (declaration, unknown_fields) = if extension.eq_ignore_ascii_case("json") {
+        sidex::formats::json::from_str_with_unknown::<ComponentDeclaration>(content)
             .whatever("unable to parse JSON component file")
     } else {
-        sidex::formats::toml::from_str_strict(content)
+        sidex::formats::toml::from_str_with_unknown::<ComponentDeclaration>(content)
             .whatever("unable to parse TOML component file")
     }
     .field_debug("path", path)?;
-    component_from_declaration(declaration).field_debug("path", path)
+    let component = component_from_declaration(declaration).field_debug("path", path)?;
+    Ok((
+        component,
+        unknown_fields.iter().map(ToString::to_string).collect(),
+    ))
 }
 
 /// Convert a validated format declaration into the compatibility model.
@@ -162,39 +182,121 @@ id = "app.legacy"
         assert_eq!(component.provides()[0].value_str(), Some("enabled"));
     }
 
-    /// Verifies that misspelled fields do not silently change a component declaration.
+    /// Unknown top-level fields are accepted and reported in both formats.
     #[test]
-    fn rejects_unknown_component_fields() {
-        let error = parse_component(
-            Path::new("component.toml"),
-            r#"
-id = "app.web"
-versoin = "1.2.3"
-"#,
-        )
-        .unwrap_err();
+    fn accepts_and_reports_unknown_component_fields() {
+        for (path, content) in [
+            (
+                "component.toml",
+                "id = \"app.web\"\nversion = \"1.2.3\"\nfuture = { enabled = true }",
+            ),
+            (
+                "component.json",
+                r#"{"id":"app.web","version":"1.2.3","future":{"enabled":true}}"#,
+            ),
+        ] {
+            let (component, unknown_fields) =
+                parse_component_with_unknown(Path::new(path), content).unwrap();
 
-        let report = format!("{error:?}");
-        assert!(report.contains("unknown field `versoin`"), "{report}");
+            assert_eq!(component.id().as_str(), "app.web");
+            assert_eq!(component.version().unwrap().to_string(), "1.2.3");
+            assert_eq!(unknown_fields, ["future"]);
+        }
     }
 
-    /// Verifies that unknown fields in nested JSON declarations are rejected as well.
+    /// Nested unknown fields retain their full paths without changing known data.
     #[test]
-    fn rejects_unknown_nested_component_fields() {
-        let error = parse_component(
-            Path::new("component.json"),
-            r#"{
-                "id": "app.web",
-                "provides": [{"id": "service.http", "vale": "enabled"}]
-            }"#,
-        )
-        .unwrap_err();
+    fn accepts_and_reports_unknown_nested_component_fields() {
+        for (path, content) in [
+            (
+                "component.toml",
+                r#"
+id = "app.web"
+provides = [{ id = "service.http" }, { id = "service.https", value = "enabled", future = true }]
+claims = [{ id = "network.tcp.8080", future = true }]
+requires = [{ id = "host.arch", value = "aarch64", future = true }]
+conflicts = [{ id = "app.legacy", future = true }]
+"#,
+            ),
+            (
+                "component.json",
+                r#"{
+                    "id": "app.web",
+                    "provides": [
+                        {"id": "service.http"},
+                        {"id": "service.https", "value": "enabled", "future": true}
+                    ],
+                    "claims": [{"id": "network.tcp.8080", "future": true}],
+                    "requires": [{"id": "host.arch", "value": "aarch64", "future": true}],
+                    "conflicts": [{"id": "app.legacy", "future": true}]
+                }"#,
+            ),
+        ] {
+            let (component, mut unknown_fields) =
+                parse_component_with_unknown(Path::new(path), content).unwrap();
 
-        let report = format!("{error:?}");
-        assert!(
-            report.contains("provides[0].vale: unknown field `vale`"),
-            "{report}"
-        );
+            assert_eq!(component.provides()[1].value_str(), Some("enabled"));
+            assert_eq!(component.claims()[0].id().as_str(), "network.tcp.8080");
+            assert_eq!(component.requires()[0].value_str(), Some("aarch64"));
+            assert_eq!(component.conflicts()[0].id().as_str(), "app.legacy");
+            unknown_fields.sort();
+            assert_eq!(
+                unknown_fields,
+                [
+                    "claims[0].future",
+                    "conflicts[0].future",
+                    "provides[1].future",
+                    "requires[0].future",
+                ]
+            );
+        }
+    }
+
+    /// Accepting unknown fields preserves type, required-field, and version checks.
+    #[test]
+    fn rejects_invalid_component_declarations_with_unknown_fields() {
+        for (toml, json, expected) in [
+            ("id = 42", r#"{"id":42}"#, "expected a string"),
+            (
+                "version = \"1.2.3\"",
+                r#"{"version":"1.2.3"}"#,
+                "missing field `id`",
+            ),
+            (
+                "id = \"app.web\"\nprovides = [{}]",
+                r#"{"id":"app.web","provides":[{}]}"#,
+                "missing field `id`",
+            ),
+            (
+                "id = \"app.web\"\nversion = \"\"",
+                r#"{"id":"app.web","version":""}"#,
+                "invalid component version",
+            ),
+            (
+                "id = \"app.web\"\nprovides = [{ id = \"service.http\", version = \"\" }]",
+                r#"{"id":"app.web","provides":[{"id":"service.http","version":""}]}"#,
+                "invalid capability version",
+            ),
+            (
+                "id = \"app.web\"\nrequires = [{ id = \"service.http\", version = \"\" }]",
+                r#"{"id":"app.web","requires":[{"id":"service.http","version":""}]}"#,
+                "invalid capability version requirement",
+            ),
+            (
+                "id = \"app.web\"\nconflicts = [{ id = \"service.http\", version = \"\" }]",
+                r#"{"id":"app.web","conflicts":[{"id":"service.http","version":""}]}"#,
+                "invalid capability version requirement",
+            ),
+        ] {
+            let toml = format!("future = true\n{toml}");
+            let json = json.replacen('{', "{\"future\":true,", 1);
+            for (path, content) in [("component.toml", toml), ("component.json", json)] {
+                let error = parse_component(Path::new(path), &content).unwrap_err();
+                let report = format!("{error:?}");
+                assert!(report.contains(expected), "{path}: {report}");
+                assert!(report.contains(path), "{report}");
+            }
+        }
     }
 
     /// Verifies that a provided capability has at most one kind of associated data.
