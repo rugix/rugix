@@ -11,7 +11,6 @@ use reportify::bail;
 use reportify::whatever;
 use reportify::ErrorExt;
 use reportify::ResultExt;
-use rugix_bundle::block_encoding::block_index::BlockIndexConfig;
 use rugix_bundle::format;
 use rugix_bundle::reader::BundleProgress;
 use rugix_bundle::reader::BundleReader;
@@ -64,8 +63,8 @@ pub(crate) fn install_payloads(
     run_compatibility_check(options, BundleKind::System, events, |events| {
         check_system_update_compatibility(config, &bundle_reader, events)
     })?;
-    let automatic_delta_updates =
-        automatic_delta_updates_enabled(config, bundle_reader.header().is_incremental);
+    let compute_missing_block_indices =
+        auto_index_enabled(config, bundle_reader.header().is_incremental);
 
     let update_hooks = HooksLoader::default()
         .load_hooks("update-install")
@@ -171,22 +170,13 @@ pub(crate) fn install_payloads(
                     payload.idx(),
                     slot.name()
                 );
-                let block_index_config =
-                    payload
-                        .header()
-                        .block_encoding
-                        .as_ref()
-                        .map(|encoding| BlockIndexConfig {
-                            chunker: encoding.chunker.clone(),
-                            hash_algorithm: encoding.hash_algorithm,
-                        });
                 let block_provider =
                     if let Some(block_encoding) = payload.header().block_encoding.as_ref() {
                         Some(prepare_block_provider(
                             system,
                             slot_idx,
                             block_encoding,
-                            automatic_delta_updates,
+                            compute_missing_block_indices,
                         )?)
                     } else if options.insecure_allow_missing_block_index {
                         None
@@ -379,13 +369,7 @@ pub(crate) fn install_payloads(
                         Ok(decoded_payload_info)
                     },
                     |decoded_payload_info| {
-                        if automatic_delta_updates {
-                            store_installed_block_index(
-                                slot,
-                                &decoded_payload_info,
-                                block_index_config.as_ref(),
-                            )?;
-                        }
+                        store_installed_block_index(slot, &decoded_payload_info)?;
                         payload_db::save_slot_state(
                             slot.name(),
                             &SlotState {
@@ -458,7 +442,7 @@ fn prepare_block_provider(
     system: &System,
     target_slot_idx: SlotIdx,
     block_encoding: &format::BlockEncoding,
-    automatic_delta_updates: bool,
+    compute_missing_block_indices: bool,
 ) -> SystemResult<BlockProvider> {
     let mut provider = BlockProvider::new(
         block_encoding.chunker.clone(),
@@ -478,7 +462,7 @@ fn prepare_block_provider(
             SlotKind::File { path } => path,
             SlotKind::Custom { .. } => continue,
         };
-        if automatic_delta_updates && source_path.exists() {
+        if compute_missing_block_indices && source_path.exists() {
             payload_db::ensure_index(
                 source_slot.name(),
                 source_path,
@@ -491,38 +475,27 @@ fn prepare_block_provider(
     Ok(provider)
 }
 
-/// Store an installed payload's index or compute one when decoding did not yield it.
+/// Retain a verified index for an installed block or file slot payload.
 fn store_installed_block_index(
     slot: &Slot,
     decoded_payload_info: &DecodedPayloadInfo,
-    block_index_config: Option<&BlockIndexConfig>,
 ) -> SystemResult<()> {
-    let slot_file = match slot.kind() {
-        SlotKind::Block(_) => Some(slot.require_available_block()?.path()),
-        SlotKind::File { path } => Some(path.as_path()),
-        SlotKind::Custom { .. } => None,
-    };
-    let Some(slot_file) = slot_file else {
+    if matches!(slot.kind(), SlotKind::Custom { .. }) {
         return Ok(());
-    };
+    }
     if let Some(block_index) = &decoded_payload_info.block_index {
         payload_db::store_index(slot.name(), block_index)?;
-    } else if let Some(config) = block_index_config {
-        payload_db::ensure_index(
-            slot.name(),
-            slot_file,
-            &config.chunker,
-            &config.hash_algorithm,
-        )?;
     }
     Ok(())
 }
 
-fn automatic_delta_updates_enabled(
-    config: &crate::config::config::Config,
-    is_incremental: bool,
-) -> bool {
-    !is_incremental && config.automatic_delta_updates.unwrap_or(false)
+fn auto_index_enabled(config: &crate::config::config::Config, is_incremental: bool) -> bool {
+    !is_incremental
+        && config
+            .install
+            .as_ref()
+            .and_then(|install| install.auto_index)
+            .unwrap_or(false)
 }
 
 fn check_system_update_compatibility(
@@ -767,7 +740,7 @@ mod tests {
 
     use indexmap::IndexMap;
 
-    use super::automatic_delta_updates_enabled;
+    use super::auto_index_enabled;
     use super::clear_target_overlay_with;
     use super::finalize_payload_and_record;
     use super::preflight_system_deliveries;
@@ -823,15 +796,15 @@ mod tests {
         SystemSlots::from_config(None, Some(&config)).unwrap()
     }
 
-    /// Verifies that automatic delta indexing is opt-in and limited to full updates.
+    /// Verifies that computing missing indices is opt-in and limited to full updates.
     #[test]
-    fn automatic_delta_updates_apply_only_to_full_updates_when_enabled() {
+    fn compute_missing_block_indices_apply_only_to_full_updates_when_enabled() {
         let disabled = Config::default();
-        assert!(!automatic_delta_updates_enabled(&disabled, false));
+        assert!(!auto_index_enabled(&disabled, false));
 
-        let enabled: Config = toml::from_str("automatic-delta-updates = true").unwrap();
-        assert!(automatic_delta_updates_enabled(&enabled, false));
-        assert!(!automatic_delta_updates_enabled(&enabled, true));
+        let enabled: Config = toml::from_str("[install]\nauto-index = true").unwrap();
+        assert!(auto_index_enabled(&enabled, false));
+        assert!(!auto_index_enabled(&enabled, true));
     }
 
     #[test]

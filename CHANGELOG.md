@@ -27,7 +27,7 @@ Rugix Ctrl:
 - Execute `rugix-ctrl apps generations` through the operation layer, so that it works through the privileged daemon and reports generation metadata like `apps info` does.
 - Fix selection of the most recently activated app generation. Timestamps were compared as strings, and they carry fractional seconds only when those are non-zero, so `rugix-ctrl apps activate APP` without a generation could pick an older generation.
 - Fix the Docker Compose activation diagnostics heading, which contained a literal `{DIAGNOSTIC_LOG_TAIL}` instead of the log tail length.
-- Add opt-in automatic block-index management for delta-enabled full system updates.
+- Always retain verified block indices from installed system slot payloads for later delta updates. Add `install.auto-index` to opt into computing missing source-slot indices during full system updates. Do not retain an index after applying a static delta payload.
 - Add the `rugix.init.quiet` kernel command-line option to suppress routine early-boot output while retaining errors.
 - Add versioned JSON configuration for Rugix Apps, including optional JSON Schema validation, crash-safe application, and rollback of generation/configuration pairs.
 - Accept `--config` on `rugix-ctrl apps install` and `rugix-ctrl apps activate` to supply an application configuration document validated against the incoming app generation's schema. Application configuration is resolved before the new generation is activated, and re-applying the document an app already runs with no longer restarts its workload.

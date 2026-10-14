@@ -10,8 +10,8 @@
     "compatibility": {
       "$ref": "#/$defs/rugix_ctrl.config.CompatibilityConfig"
     },
-    "automatic-delta-updates": {
-      "type": "boolean"
+    "install": {
+      "$ref": "#/$defs/rugix_ctrl.config.InstallConfig"
     }
   },
   "required": [],
@@ -21,6 +21,16 @@
       "type": "object",
       "properties": {
         "require-bundle-components": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.config.InstallConfig": {
+      "type": "object",
+      "properties": {
+        "auto-index": {
           "type": "boolean"
         }
       },

@@ -5,8 +5,16 @@ record Config {
     signatures?: SignaturesConfig,
     /// Component compatibility policy.
     compatibility?: CompatibilityConfig,
-    /// Automatically create and retain block indices for full system updates.
-    automatic_delta_updates?: bool,
+    /// Installation settings.
+    install?: InstallConfig,
+}
+
+#[json(rename_all = "kebab-case")]
+record InstallConfig {
+    /// Compute missing source-slot block indices when installing a full system update.
+    ///
+    /// Disabled by default. Verified indices from installed payloads are always retained.
+    auto_index?: bool,
 }
 
 #[json(rename_all = "kebab-case")]
