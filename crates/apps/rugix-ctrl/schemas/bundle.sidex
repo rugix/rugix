@@ -13,6 +13,9 @@ record BundleInspectOutput {
     /// Embedded component declarations, when present.
     components?: [BundleComponentOutput],
     signatures: [BundleSignatureOutput],
+    /// Embedded manifest as parsed JSON, retaining unknown fields and original names.
+    /// Omitted when absent or when it cannot be read as a JSON object.
+    manifest?: BundleManifestOutput,
 }
 
 #[json(tagged = externally, rename_all = "lowercase")]
@@ -94,3 +97,6 @@ opaque HashDigest
 #[json(type = "string")]
 #[rust(type = "::sidex::serde::Serde<::si_crypto_hashes::HashAlgorithm>")]
 opaque HashAlgorithm
+
+/// Parsed embedded manifest object, independent of the current manifest schema.
+alias BundleManifestOutput: [string: json]

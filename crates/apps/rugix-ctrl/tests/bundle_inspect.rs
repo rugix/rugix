@@ -17,8 +17,14 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use rugix_bundle::format;
+use rugix_bundle::format::stlv::write_segment_start;
+use rugix_bundle::format::tags;
 use serde::Deserialize;
 use si_crypto_hashes::HashAlgorithm;
+use sidex::types::JsonValue;
+use sidex::types::Map;
+use sidex::types::Str;
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -29,7 +35,10 @@ struct Inspection {
     payloads: Vec<Payload>,
     components: Option<Vec<ComponentFile>>,
     signatures: Vec<Signature>,
+    manifest: Option<Manifest>,
 }
+
+type Manifest = Map<Str, JsonValue>;
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -173,6 +182,11 @@ fn metadata_prefix(path: &Path) -> Vec<u8> {
 
 /// Execute inspection without initializing a Rugix device or privileged daemon.
 fn inspect(input: &str, stream: Option<&[u8]>) -> Inspection {
+    inspect_with_diagnostics(input, stream).0
+}
+
+/// Capture manifest warnings separately from the public JSON output.
+fn inspect_with_diagnostics(input: &str, stream: Option<&[u8]>) -> (Inspection, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_rugix-ctrl"))
         .args([
             "bundle",
@@ -216,7 +230,10 @@ fn inspect(input: &str, stream: Option<&[u8]>) -> Inspection {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap()
+    (
+        serde_json::from_slice(&output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
 }
 
 /// Verify output metadata and equivalence of seekable and forward-only inputs.
@@ -225,6 +242,15 @@ fn file_and_open_stdin_report_declared_payloads_and_components() {
     let fixture = Fixture::new();
     let output = inspect(fixture.path.to_str().unwrap(), None);
     assert_eq!(output.header_hash, fixture.header_hash);
+    let manifest: rugix_bundle::manifest::BundleManifest = toml::from_str(
+        &fs::read_to_string(fixture.directory.path().join("rugix-bundle.toml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        output.manifest.as_ref().unwrap(),
+        &sidex::formats::json::from_str::<Manifest>(&serde_json::to_string(&manifest).unwrap())
+            .unwrap()
+    );
     assert_eq!(output.hash_algorithm, "sha512_256");
     assert_eq!(output.update_type, "incremental");
     assert_eq!(output.payloads.len(), 4);
@@ -273,6 +299,48 @@ fn file_and_open_stdin_report_declared_payloads_and_components() {
     let truncated = fixture.directory.path().join("header-only.rugixb");
     fs::write(&truncated, &prefix).unwrap();
     assert_eq!(output, inspect(truncated.to_str().unwrap(), None));
+}
+
+/// Preserve unknown manifest fields and 64-bit integers; absent or unreadable manifests
+/// leave the header summary available from an open stdin metadata prefix.
+#[test]
+fn embedded_manifest_preserves_json_and_handles_optional_metadata() {
+    let fixture = Fixture::new();
+    let source =
+        rugix_bundle::reader::BundleSource::from_seekable(fs::File::open(&fixture.path).unwrap())
+            .unwrap();
+    let reader = rugix_bundle::reader::BundleReader::start(source, None).unwrap();
+    let mut header = reader.header().clone();
+    let manifest = r#"{"update-type":"future","payloads":[{"filename":"image","block-encoding":{"compression":{"type":"future"}}}],"custom-number":18446744073709551615,"nested":{"decimal":1.25,"items":[true,null,"value"]}}"#;
+    for (manifest, expected, warning) in [
+        (Some(manifest), Some(manifest), false),
+        (None, None, false),
+        (Some("{invalid JSON"), None, true),
+        (Some("[]"), None, true),
+    ] {
+        header.manifest = manifest.map(str::to_owned);
+        let mut bytes = Vec::new();
+        write_segment_start(&mut bytes, tags::BUNDLE).unwrap();
+        bytes.extend(format::encode::to_vec(&header, tags::BUNDLE_HEADER));
+        write_segment_start(&mut bytes, tags::PAYLOADS).unwrap();
+        let (output, diagnostics) = inspect_with_diagnostics("-", Some(&bytes));
+        assert_eq!(
+            diagnostics.contains("unable to inspect embedded bundle manifest"),
+            warning
+        );
+        assert_eq!(
+            output.manifest,
+            expected.map(|value| sidex::formats::json::from_str::<Manifest>(value).unwrap())
+        );
+        if let Some(manifest) = &output.manifest {
+            assert_eq!(
+                manifest.get("custom-number").unwrap().as_u64(),
+                Some(u64::MAX)
+            );
+        }
+        assert_eq!(output.update_type, "incremental");
+        assert_eq!(output.payloads.len(), 4);
+    }
 }
 
 /// Generate an untrusted, self-signed signer without needing device trust roots.

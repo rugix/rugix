@@ -7,6 +7,7 @@ use rugix_bundle::format::decode::decode_slice;
 use rugix_bundle::reader::BundleReader;
 use si_crypto_hashes::HashAlgorithm;
 use si_crypto_hashes::HashDigest;
+use tracing::warn;
 
 use crate::components::bundle_component_declarations;
 use crate::components::component_output;
@@ -18,6 +19,7 @@ use crate::config::bundle::BundleDeltaInputOutput;
 use crate::config::bundle::BundleDeltaOutput;
 use crate::config::bundle::BundleExecuteDeliveryOutput;
 use crate::config::bundle::BundleInspectOutput;
+use crate::config::bundle::BundleManifestOutput;
 use crate::config::bundle::BundlePayloadOutput;
 use crate::config::bundle::BundleSignatureOutput;
 use crate::config::bundle::BundleSlotDeliveryOutput;
@@ -43,6 +45,18 @@ pub(crate) fn inspect(
 
 /// Describe declared payloads using only the bundle header and signatures.
 fn inspect_reader(reader: &BundleReader) -> SystemResult<BundleInspectOutput> {
+    let manifest =
+        reader
+            .header()
+            .manifest
+            .as_deref()
+            .and_then(|manifest| match manifest_output(manifest) {
+                Ok(manifest) => Some(manifest),
+                Err(error) => {
+                    warn!(%error, "unable to inspect embedded bundle manifest");
+                    None
+                }
+            });
     let algorithm = reader.header().hash_algorithm;
     let header_hash = reader.header_hash(algorithm);
     let update_type = if reader.header().is_incremental {
@@ -109,7 +123,13 @@ fn inspect_reader(reader: &BundleReader) -> SystemResult<BundleInspectOutput> {
         payloads.into(),
         signatures.into(),
     )
-    .with_components(components.map(Into::into)))
+    .with_components(components.map(Into::into))
+    .with_manifest(manifest))
+}
+
+/// Decode the embedded object without interpreting manifest fields or encoding settings.
+fn manifest_output(manifest: &str) -> SystemResult<BundleManifestOutput> {
+    sidex::formats::json::from_str(manifest).whatever("invalid manifest JSON object")
 }
 
 /// Attach the bundle's hash algorithm to a declared payload digest.
