@@ -226,7 +226,7 @@ pub struct VerificationResult {
 }
 
 /// Extract all certificates from a SignedData structure.
-fn extract_certificates(signed_data: &SignedData) -> PkiResult<Vec<Certificate>> {
+pub(crate) fn extract_certificates(signed_data: &SignedData) -> PkiResult<Vec<Certificate>> {
     let certs_opt = signed_data.certificates.as_ref();
     let Some(certs) = certs_opt else {
         return Err(PkiError::NoCertificates);
@@ -255,7 +255,7 @@ fn extract_certificates(signed_data: &SignedData) -> PkiResult<Vec<Certificate>>
 }
 
 /// Find the signer certificate from the embedded certificates.
-fn find_signer_certificate<'a>(
+pub(crate) fn find_signer_certificate<'a>(
     certificates: &'a [Certificate],
     signer_id: &SignerIdentifier,
 ) -> PkiResult<&'a Certificate> {

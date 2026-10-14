@@ -1319,3 +1319,28 @@ fn test_ed25519_large_data() {
         .expect("failed to verify large Ed25519 signature");
     assert_eq!(result.content, data);
 }
+
+/// Inspection preserves metadata from a cryptographically invalid signature and excludes
+/// intermediates.
+#[test]
+fn inspect_cms_does_not_verify_signatures_or_include_intermediate_subjects() {
+    let pki = TestPki::new();
+    let signer = CmsSignerBuilder::new(&pki.signer_cert_pem, &pki.signer_key_pem)
+        .unwrap()
+        .with_intermediate_cert(&pki.root_cert_pem)
+        .unwrap()
+        .build()
+        .unwrap();
+    let mut signature = signer.sign(b"inspection content").unwrap();
+    let verifier = CmsVerifier::new(&pki.root_cert_pem).unwrap();
+    verifier.verify(&signature).unwrap();
+    *signature.last_mut().unwrap() ^= 1;
+    assert!(verifier.verify(&signature).is_err());
+    let inspection = rugix_pki::inspect_cms(&signature).unwrap();
+    assert_eq!(
+        inspection.content.as_deref(),
+        Some(b"inspection content".as_slice())
+    );
+    assert_eq!(inspection.signer_subjects, vec!["CN=Test Signer"]);
+    assert!(inspection.errors.is_empty());
+}

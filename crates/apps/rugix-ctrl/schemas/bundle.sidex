@@ -1,0 +1,115 @@
+//! Metadata reported by bundle inspection, independent of bundle configuration.
+
+import output::ComponentOutput
+
+/// Metadata obtained from a bundle's header and signatures.
+record BundleInspectOutput {
+    /// Hash of the bundle header, including its algorithm prefix.
+    header_hash: HashDigest,
+    hash_algorithm: HashAlgorithm,
+    update_type: BundleUpdateTypeOutput,
+    /// Payloads in bundle order.
+    payloads: [BundlePayloadOutput],
+    /// Embedded component declarations, when present.
+    components?: [BundleComponentOutput],
+    signatures: [BundleSignatureOutput],
+}
+
+#[json(tagged = externally, rename_all = "lowercase")]
+variant BundleUpdateTypeOutput {
+    Full,
+    Incremental,
+}
+
+record BundlePayloadOutput {
+    delivery: BundleDeliveryOutput,
+    header_hash: HashDigest,
+    /// Hash of the payload file before block encoding; identifies the patch for delta payloads.
+    file_hash: HashDigest,
+    delta?: BundleDeltaOutput,
+    block_index?: BundleBlockIndexOutput,
+}
+
+#[json(tag = "type", rename_all = "kebab-case")]
+variant BundleDeliveryOutput {
+    Slot: BundleSlotDeliveryOutput,
+    Execute: BundleExecuteDeliveryOutput,
+    AppFile: BundleAppFileDeliveryOutput,
+    AppArchive: BundleAppArchiveDeliveryOutput,
+}
+
+record BundleSlotDeliveryOutput {
+    /// Logical destination slot.
+    slot: string,
+}
+
+record BundleExecuteDeliveryOutput {
+    /// Command and arguments receiving the payload on standard input.
+    handler: [string],
+}
+
+record BundleAppFileDeliveryOutput {
+    app: string,
+    /// Relative path within the application generation directory.
+    path: string,
+    /// Declared Unix file mode, if any.
+    mode?: u32,
+}
+
+record BundleAppArchiveDeliveryOutput {
+    app: string,
+}
+
+record BundleDeltaOutput {
+    /// Required inputs, each identified by one or more hashes.
+    inputs: [BundleDeltaInputOutput],
+    /// Hash of the reconstructed output.
+    output_hash: HashDigest,
+}
+
+record BundleDeltaInputOutput {
+    /// Hashes identifying the same input content.
+    hashes: [HashDigest],
+}
+
+record BundleBlockIndexOutput {
+    chunker: ChunkerAlgorithm,
+    hash_algorithm: HashAlgorithm,
+    /// Number of entries, including repeated blocks.
+    block_count: u64,
+    /// Compression used for the payload blocks; absent for uncompressed blocks.
+    compression?: BundleCompressionOutput,
+}
+
+#[json(tagged = externally, rename_all = "lowercase")]
+variant BundleCompressionOutput {
+    Xz,
+}
+
+/// Summary of one CMS signature, without cryptographic or certificate-chain verification.
+record BundleSignatureOutput {
+    /// Subjects of embedded certificates referenced by CMS signers, excluding intermediates.
+    signer_subjects: [string],
+    /// Whether the signed digest matches the header; absent if it could not be compared.
+    header_matches?: bool,
+    /// Problem encountered while inspecting this signature.
+    error?: string,
+}
+
+record BundleComponentOutput {
+    /// Path relative to the bundle's components directory.
+    path: string,
+    component: ComponentOutput,
+}
+
+#[json(type = "string")]
+#[rust(type = "::sidex::serde::Serde<::si_crypto_hashes::HashDigest>")]
+opaque HashDigest
+
+#[json(type = "string")]
+#[rust(type = "::sidex::serde::Serde<::si_crypto_hashes::HashAlgorithm>")]
+opaque HashAlgorithm
+
+#[json(type = "string")]
+#[rust(type = "::rugix_chunker::ChunkerAlgorithm")]
+opaque ChunkerAlgorithm

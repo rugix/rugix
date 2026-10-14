@@ -6,6 +6,7 @@
 //! # Features
 //!
 //! - Create CMS SignedData structures with embedded content
+//! - Inspect encapsulated content and claimed signer subjects without verification
 //! - Verify CMS signatures against a trusted root certificate
 //! - Certificate chain validation
 //! - Support for ECDSA (P-256, P-384), RSA PKCS#1 v1.5, RSA-PSS, and Ed25519 signatures
@@ -40,10 +41,13 @@
 //! assert_eq!(result.content, b"Hello, World!");
 //! ```
 
+mod inspect;
 mod pem;
 mod sign;
 mod verify;
 
+pub use inspect::CmsInspection;
+pub use inspect::inspect_cms;
 pub use sign::CmsSigner;
 pub use sign::CmsSignerBuilder;
 pub use sign::RsaHashAlgorithm;

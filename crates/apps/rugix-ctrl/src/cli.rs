@@ -175,6 +175,28 @@ pub fn main() -> SystemResult<()> {
                 execute_operation(operation, input)?;
             }
         },
+        Command::Bundle(BundleCommand::Inspect { bundle, json, http }) => {
+            let retry = RetryConfig {
+                max_retries: http.http_max_retries,
+                initial_backoff: Duration::from_secs(http.http_retry_initial_backoff),
+                max_backoff: Duration::from_secs(http.http_retry_max_backoff),
+            };
+            let fetch = HttpFetchConfig {
+                stall_timeout: Duration::from_secs(http.http_stall_timeout.get()),
+                max_range_size: http.http_max_range_size,
+                concurrency: http.http_concurrency,
+            };
+            let (source, input) = resolve_cli_bundle_source(
+                bundle,
+                http.disable_range_queries,
+                retry,
+                fetch,
+                "unable to open bundle",
+            )?;
+            let output = crate::bundle::inspect(source, input)?;
+            rugix_cli::json::print_json(&output, *json)
+                .whatever("unable to write bundle inspection to stdout")?;
+        }
         Command::System(sys_cmd) => match sys_cmd {
             SystemCommand::Info { json } => {
                 let output = execute_operation(QuerySystem, ())?;
@@ -1004,6 +1026,9 @@ pub enum Command {
     /// Install and inspect over-the-air updates.
     #[clap(subcommand)]
     Update(UpdateCommand),
+    /// Inspect update bundles.
+    #[clap(subcommand)]
+    Bundle(BundleCommand),
     /// Manage the system.
     #[clap(subcommand)]
     System(SystemCommand),
@@ -1180,6 +1205,46 @@ pub enum UpdateRebootType {
     /// to be shutoff after installing the update. On the next boot, Rugix will then try
     /// to boot into the new version.
     Deferred,
+}
+
+#[derive(Debug, Parser)]
+pub enum BundleCommand {
+    /// Inspect bundle metadata without installing or verifying signatures.
+    Inspect {
+        /// Bundle path, HTTP(S) URL, or - to read from standard input.
+        bundle: String,
+        /// Output compact JSON instead of pretty-printed JSON.
+        #[clap(long)]
+        json: bool,
+        #[clap(flatten)]
+        http: InspectHttpOptions,
+    },
+}
+
+/// HTTP source controls for bundle inspection.
+#[derive(Debug, clap::Args)]
+pub struct InspectHttpOptions {
+    /// Disable HTTP range queries and read the bundle as a stream.
+    #[clap(long)]
+    disable_range_queries: bool,
+    /// Maximum idle wait for incoming HTTP data, in seconds.
+    #[clap(long, default_value = "60")]
+    http_stall_timeout: NonZeroU64,
+    /// Maximum bytes per HTTP range request, for example 256KiB or 1MiB.
+    #[clap(long, default_value = "1MiB", value_parser = parse_max_range_size)]
+    http_max_range_size: NonZeroUsize,
+    /// Maximum concurrent HTTP range requests.
+    #[clap(long, default_value = "4")]
+    http_concurrency: NonZeroUsize,
+    /// Maximum retry attempts for transient HTTP errors.
+    #[clap(long, default_value_t = 5)]
+    http_max_retries: u32,
+    /// Initial HTTP retry backoff, in seconds.
+    #[clap(long, default_value_t = 1)]
+    http_retry_initial_backoff: u64,
+    /// Maximum HTTP retry backoff, in seconds.
+    #[clap(long, default_value_t = 30)]
+    http_retry_max_backoff: u64,
 }
 
 #[derive(Debug, Parser)]

@@ -130,8 +130,15 @@ pub struct XzDecoder {
 
 impl XzDecoder {
     pub fn new() -> Self {
-        let stream =
-            xz2::stream::Stream::new_stream_decoder(u64::MAX, 0).expect("options should be valid");
+        Self::with_memory_limit(u64::MAX)
+    }
+
+    /// Limit decoder memory independently of the size of the decompressed output.
+    ///
+    /// Streams requiring more memory return an error during processing.
+    pub fn with_memory_limit(memory_limit: u64) -> Self {
+        let stream = xz2::stream::Stream::new_stream_decoder(memory_limit, 0)
+            .expect("a decoder memory limit with no extra flags is valid");
         Self {
             buffer: Vec::with_capacity(32 * 1024),
             stream,

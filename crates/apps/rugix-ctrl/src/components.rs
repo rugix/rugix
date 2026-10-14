@@ -396,7 +396,8 @@ pub fn validate_bundle_components(bundle_components: &BundleComponents) -> Syste
     bundle_component_declarations(bundle_components).map(|_| ())
 }
 
-fn bundle_component_declarations(
+/// Parse and validate component files embedded in a bundle.
+pub(crate) fn bundle_component_declarations(
     bundle_components: &BundleComponents,
 ) -> SystemResult<Vec<(String, Component)>> {
     let mut paths = HashSet::new();
@@ -603,7 +604,8 @@ fn remove_component_root(root: &Path) -> SystemResult<()> {
     .field_debug("path", root)
 }
 
-fn component_output(component: &Component) -> ComponentOutput {
+/// Convert a component to its public inventory representation.
+pub(crate) fn component_output(component: &Component) -> ComponentOutput {
     ComponentOutput::new(
         component.id().to_string(),
         component.provides().iter().map(capability_output).collect(),

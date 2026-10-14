@@ -1,0 +1,364 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.bundle.BundleInspectOutput",
+  "type": "object",
+  "description": "Metadata obtained from a bundle's header and signatures.",
+  "properties": {
+    "headerHash": {
+      "$ref": "#/$defs/rugix_ctrl.bundle.HashDigest"
+    },
+    "hashAlgorithm": {
+      "$ref": "#/$defs/rugix_ctrl.bundle.HashAlgorithm"
+    },
+    "updateType": {
+      "$ref": "#/$defs/rugix_ctrl.bundle.BundleUpdateTypeOutput"
+    },
+    "payloads": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rugix_ctrl.bundle.BundlePayloadOutput"
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rugix_ctrl.bundle.BundleComponentOutput"
+      }
+    },
+    "signatures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/rugix_ctrl.bundle.BundleSignatureOutput"
+      }
+    }
+  },
+  "required": [
+    "headerHash",
+    "hashAlgorithm",
+    "updateType",
+    "payloads",
+    "signatures"
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "rugix_ctrl.bundle.BundleBlockIndexOutput": {
+      "type": "object",
+      "properties": {
+        "chunker": {
+          "$ref": "#/$defs/rugix_ctrl.bundle.ChunkerAlgorithm"
+        },
+        "hashAlgorithm": {
+          "$ref": "#/$defs/rugix_ctrl.bundle.HashAlgorithm"
+        },
+        "blockCount": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "pattern": "^[0-9]+$"
+        },
+        "compression": {
+          "$ref": "#/$defs/rugix_ctrl.bundle.BundleCompressionOutput"
+        }
+      },
+      "required": [
+        "chunker",
+        "hashAlgorithm",
+        "blockCount"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.bundle.BundleComponentOutput": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "component": {
+          "$ref": "#/$defs/rugix_ctrl.output.ComponentOutput"
+        }
+      },
+      "required": [
+        "path",
+        "component"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.bundle.BundleCompressionOutput": {
+      "enum": [
+        "xz"
+      ]
+    },
+    "rugix_ctrl.bundle.BundleDeliveryOutput": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "slot"
+            },
+            "slot": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "slot"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "execute"
+            },
+            "handler": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "handler"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "app-file"
+            },
+            "app": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "integer",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
+            }
+          },
+          "required": [
+            "type",
+            "app",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "app-archive"
+            },
+            "app": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "app"
+          ]
+        }
+      ]
+    },
+    "rugix_ctrl.bundle.BundleDeltaInputOutput": {
+      "type": "object",
+      "properties": {
+        "hashes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rugix_ctrl.bundle.HashDigest"
+          }
+        }
+      },
+      "required": [
+        "hashes"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.bundle.BundleDeltaOutput": {
+      "type": "object",
+      "properties": {
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rugix_ctrl.bundle.BundleDeltaInputOutput"
+          }
+        },
+        "outputHash": {
+          "$ref": "#/$defs/rugix_ctrl.bundle.HashDigest"
+        }
+      },
+      "required": [
+        "inputs",
+        "outputHash"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.bundle.BundlePayloadOutput": {
+      "type": "object",
+      "properties": {
+        "delivery": {
+          "$ref": "#/$defs/rugix_ctrl.bundle.BundleDeliveryOutput"
+        },
+        "headerHash": {
+          "$ref": "#/$defs/rugix_ctrl.bundle.HashDigest"
+        },
+        "fileHash": {
+          "$ref": "#/$defs/rugix_ctrl.bundle.HashDigest"
+        },
+        "delta": {
+          "$ref": "#/$defs/rugix_ctrl.bundle.BundleDeltaOutput"
+        },
+        "blockIndex": {
+          "$ref": "#/$defs/rugix_ctrl.bundle.BundleBlockIndexOutput"
+        }
+      },
+      "required": [
+        "delivery",
+        "headerHash",
+        "fileHash"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.bundle.BundleSignatureOutput": {
+      "type": "object",
+      "description": "Summary of one CMS signature, without cryptographic or certificate-chain verification.",
+      "properties": {
+        "signerSubjects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headerMatches": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "signerSubjects"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.bundle.BundleUpdateTypeOutput": {
+      "enum": [
+        "full",
+        "incremental"
+      ]
+    },
+    "rugix_ctrl.bundle.ChunkerAlgorithm": {
+      "type": "string"
+    },
+    "rugix_ctrl.bundle.HashAlgorithm": {
+      "type": "string"
+    },
+    "rugix_ctrl.bundle.HashDigest": {
+      "type": "string"
+    },
+    "rugix_ctrl.output.CapabilityOutput": {
+      "type": "object",
+      "description": "Provided capability.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.output.CapabilitySelectorOutput": {
+      "type": "object",
+      "description": "Capability selector used by requirements and conflicts.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.output.ClaimOutput": {
+      "type": "object",
+      "description": "Exclusive resource claim.",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "unevaluatedProperties": false
+    },
+    "rugix_ctrl.output.ComponentOutput": {
+      "type": "object",
+      "description": "Component declaration.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "provides": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rugix_ctrl.output.CapabilityOutput"
+          }
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rugix_ctrl.output.ClaimOutput"
+          }
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rugix_ctrl.output.CapabilitySelectorOutput"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rugix_ctrl.output.CapabilitySelectorOutput"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "provides",
+        "claims",
+        "requires",
+        "conflicts"
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

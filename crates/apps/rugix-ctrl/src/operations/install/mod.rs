@@ -243,8 +243,8 @@ enum TargetInstallOutput {
     System(SystemRebootMode),
 }
 
-struct BundleSourceResult<T> {
-    output: T,
+pub(crate) struct BundleSourceResult<T> {
+    pub(crate) output: T,
     download_stats: Option<DownloadStats>,
 }
 
@@ -525,7 +525,8 @@ fn require_compatible_components(
     bail!("component compatibility check failed")
 }
 
-fn with_bundle_source<T>(
+/// Open the shared file, stream, or HTTP input for a bundle operation.
+pub(crate) fn with_bundle_source<T>(
     source: InstallSource,
     input: BundleInput,
     install: impl FnOnce(BundleSource, Option<NumBytes>, ReaderOptions) -> SystemResult<T>,

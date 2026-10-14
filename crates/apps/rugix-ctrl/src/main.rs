@@ -5,6 +5,7 @@
 
 pub mod apps;
 pub mod boot;
+pub mod bundle;
 pub mod cli;
 pub mod components;
 pub mod config;
