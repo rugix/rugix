@@ -30,7 +30,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_ctrl.system.BootFlowConfig": {
-      "$id": "rugix_ctrl.system.BootFlowConfig",
       "description": "Boot flow configuration",
       "oneOf": [
         {
@@ -100,7 +99,9 @@
             },
             "default-attempts": {
               "type": "integer",
-              "format": "uint32"
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
             }
           },
           "required": [
@@ -121,7 +122,9 @@
             },
             "default-attempts": {
               "type": "integer",
-              "format": "uint32"
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
             }
           },
           "required": [
@@ -139,11 +142,15 @@
             },
             "boot-part-a": {
               "type": "integer",
-              "format": "uint32"
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
             },
             "boot-part-b": {
               "type": "integer",
-              "format": "uint32"
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
             }
           },
           "required": [
@@ -161,11 +168,15 @@
             },
             "boot-part-a": {
               "type": "integer",
-              "format": "uint32"
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
             },
             "boot-part-b": {
               "type": "integer",
-              "format": "uint32"
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
             }
           },
           "required": [
@@ -208,7 +219,6 @@
       ]
     },
     "rugix_ctrl.system.BootGroupConfig": {
-      "$id": "rugix_ctrl.system.BootGroupConfig",
       "type": "object",
       "description": "Boot group configuration.",
       "properties": {
@@ -225,7 +235,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.system.DataPartitionDriverConfig": {
-      "$id": "rugix_ctrl.system.DataPartitionDriverConfig",
       "description": "Data partition driver configuration.\n\nThe driver owns the data partition's lifecycle: bootstrap-time format,\nper-boot mount, and cryptographic erasure on wipe. When unset, the\npartition is treated as a plain Ext4 filesystem.",
       "oneOf": [
         {
@@ -285,7 +294,9 @@
               "type": "array",
               "items": {
                 "type": "integer",
-                "format": "uint32"
+                "format": "uint32",
+                "maximum": 4294967295,
+                "minimum": 0
               }
             },
             "device": {
@@ -332,7 +343,6 @@
       ]
     },
     "rugix_ctrl.system.PartitionConfig": {
-      "$id": "rugix_ctrl.system.PartitionConfig",
       "type": "object",
       "description": "Partition configuration.",
       "properties": {
@@ -344,7 +354,9 @@
         },
         "partition": {
           "type": "integer",
-          "format": "uint32"
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0
         },
         "mount-script": {
           "type": "string"
@@ -366,7 +378,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.system.SlotConfig": {
-      "$id": "rugix_ctrl.system.SlotConfig",
       "description": "System slot configuration.",
       "oneOf": [
         {
@@ -380,7 +391,9 @@
             },
             "partition": {
               "type": "integer",
-              "format": "uint32"
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
             },
             "immutable": {
               "type": "boolean"

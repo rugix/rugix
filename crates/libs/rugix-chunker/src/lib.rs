@@ -114,6 +114,8 @@ impl FromStr for ChunkerAlgorithm {
     }
 }
 
+sidex::types::impl_text!(ChunkerAlgorithm);
+
 impl serde::Serialize for ChunkerAlgorithm {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

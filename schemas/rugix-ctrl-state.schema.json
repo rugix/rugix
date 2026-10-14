@@ -21,7 +21,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_ctrl.state.OverlayConfig": {
-      "$id": "rugix_ctrl.state.OverlayConfig",
       "enum": [
         "persist",
         "discard",
@@ -31,14 +30,12 @@
       "description": "Configuration of the root overlay."
     },
     "rugix_ctrl.state.OverlayFallbackConfig": {
-      "$id": "rugix_ctrl.state.OverlayFallbackConfig",
       "enum": [
         "in-memory"
       ],
       "description": "Overlay storage to use when setting up the configured overlay fails."
     },
     "rugix_ctrl.state.PersistConfig": {
-      "$id": "rugix_ctrl.state.PersistConfig",
       "description": "Configuration to persist a file or directory.",
       "anyOf": [
         {

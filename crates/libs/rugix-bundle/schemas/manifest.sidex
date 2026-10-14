@@ -1,8 +1,8 @@
-#[rust(type="si_crypto_hashes::HashAlgorithm")]
+#[rust(type="::sidex::serde::Serde<::si_crypto_hashes::HashAlgorithm>")]
 #[json(type="string")]
 opaque HashAlgorithm
 
-#[rust(type="si_crypto_hashes::HashDigest")]
+#[rust(type="::sidex::serde::Serde<::si_crypto_hashes::HashDigest>")]
 #[json(type="string")]
 opaque HashDigest
 
@@ -10,7 +10,7 @@ opaque HashDigest
 #[json(type="string")]
 opaque ChunkerAlgorithm
 
-#[rust(type="byte_calc::NumBytes")]
+#[rust(type="::sidex::serde::Serde<::byte_calc::NumBytes>")]
 #[json(type="number")]
 opaque NumBytes
 

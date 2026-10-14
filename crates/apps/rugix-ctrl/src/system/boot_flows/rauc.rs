@@ -3,6 +3,7 @@
 use hashbrown::HashMap;
 use reportify::bail;
 use reportify::ResultExt;
+use sidex::types::Str;
 
 use crate::boot::fwenv::load_vars;
 use crate::boot::fwenv::set_vars;
@@ -37,7 +38,7 @@ fn rauc_boot_flow(
         Some(group_names) => group_names.clone(),
         None => boot_entries
             .iter()
-            .map(|(_, group)| group.name().to_uppercase())
+            .map(|(_, group)| Str::from(group.name().to_uppercase()))
             .collect(),
     };
     validate_group_names(&group_names, boot_entries.len())?;
@@ -50,7 +51,7 @@ fn rauc_boot_flow(
                 *idx,
                 RaucBootGroup {
                     idx: *idx,
-                    name: group_names[no].clone(),
+                    name: group_names[no].clone().into(),
                 },
             )
         })
@@ -58,7 +59,7 @@ fn rauc_boot_flow(
     Ok(RaucBootFlow { groups })
 }
 
-fn validate_group_names(group_names: &[String], boot_group_count: usize) -> BootFlowResult<()> {
+fn validate_group_names(group_names: &[Str], boot_group_count: usize) -> BootFlowResult<()> {
     if group_names.len() != boot_group_count {
         bail!("the number of RAUC group names must match the number of boot groups");
     }

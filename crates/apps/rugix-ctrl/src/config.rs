@@ -1,3 +1,5 @@
+//! Sidex configuration types and Rugix Ctrl configuration loading.
+
 use std::fs;
 use std::path::Path;
 
@@ -25,4 +27,58 @@ pub fn load_ctrl_config() -> SystemResult<config::Config> {
     } else {
         config::Config::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bootstrapping::BootstrappingConfig;
+    use super::bootstrapping::SystemLayoutConfig;
+
+    /// Existing byte-size strings and integers load through both Sidex readers.
+    #[test]
+    fn bootstrapping_sizes_load_in_toml_and_json() {
+        for (toml, json) in [
+            (
+                r#"[layout]
+type = "default"
+system-size = "4GiB"
+"#,
+                r#"{"layout":{"type":"default","system-size":"4GiB"}}"#,
+            ),
+            (
+                "[layout]\ntype = \"default\"\nsystem-size = 4294967296",
+                r#"{"layout":{"type":"default","system-size":4294967296}}"#,
+            ),
+        ] {
+            let configs = [
+                sidex::formats::toml::from_str::<BootstrappingConfig>(toml).unwrap(),
+                sidex::formats::json::from_str::<BootstrappingConfig>(json).unwrap(),
+            ];
+            for config in configs {
+                let Some(SystemLayoutConfig::Default(layout)) = config.layout else {
+                    panic!("expected default layout");
+                };
+                assert_eq!(layout.system_size.0, byte_calc::NumBytes::new(4 << 30));
+            }
+        }
+    }
+
+    /// Unknown fields in a tagged configuration retain their full paths.
+    #[test]
+    fn bootstrapping_unknown_fields_are_reported() {
+        let (_, toml_unknown) = sidex::formats::toml::from_str_with_unknown::<BootstrappingConfig>(
+            "[layout]\ntype = \"default\"\nsystem-size = 4294967296\nsystem-szie = 1",
+        )
+        .unwrap();
+        let (_, json_unknown) = sidex::formats::json::from_str_with_unknown::<BootstrappingConfig>(
+            r#"{"layout":{"type":"default","system-size":4294967296,"system-szie":1}}"#,
+        )
+        .unwrap();
+        for unknown in [toml_unknown, json_unknown] {
+            assert_eq!(
+                unknown.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                ["layout.system-szie"]
+            );
+        }
+    }
 }

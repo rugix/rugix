@@ -41,7 +41,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_ctrl.component.CapabilityDeclaration": {
-      "$id": "rugix_ctrl.component.CapabilityDeclaration",
       "type": "object",
       "description": "A capability provided by a component.",
       "properties": {
@@ -61,7 +60,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.component.CapabilitySelectorDeclaration": {
-      "$id": "rugix_ctrl.component.CapabilitySelectorDeclaration",
       "type": "object",
       "description": "A selector matching a provided capability.",
       "properties": {
@@ -81,7 +79,6 @@
       "unevaluatedProperties": false
     },
     "rugix_ctrl.component.ClaimDeclaration": {
-      "$id": "rugix_ctrl.component.ClaimDeclaration",
       "type": "object",
       "description": "An exclusive resource claim.",
       "properties": {

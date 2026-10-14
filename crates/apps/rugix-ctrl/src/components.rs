@@ -81,7 +81,7 @@ impl InstalledComponents {
 
     /// Build inventory output for all loaded components.
     pub fn output(&self) -> ComponentsOutput {
-        ComponentsOutput::new(self.root_outputs(), self.component_outputs())
+        ComponentsOutput::new(self.root_outputs().into(), self.component_outputs().into())
     }
 
     /// Build inventory output for components with the given component ID.
@@ -95,7 +95,10 @@ impl InstalledComponents {
         if components.is_empty() {
             bail!("component {component_id:?} not found");
         }
-        Ok(ComponentsOutput::new(self.root_outputs(), components))
+        Ok(ComponentsOutput::new(
+            self.root_outputs().into(),
+            components.into(),
+        ))
     }
 
     /// Check the loaded component set for internal consistency.
@@ -114,8 +117,8 @@ impl InstalledComponents {
             .map(|problem| self.problem_output(problem))
             .collect();
         ComponentsCheckOutput::new(
-            self.root_outputs(),
-            self.component_outputs(),
+            self.root_outputs().into(),
+            self.component_outputs().into(),
             consistent,
             problems,
         )
@@ -304,7 +307,7 @@ impl InstalledComponents {
             Problem::DuplicateComponent { id } => {
                 ComponentProblemOutput::DuplicateComponent(DuplicateComponentProblemOutput::new(
                     id.to_string(),
-                    self.sources_for_component(id),
+                    self.sources_for_component(id).into(),
                 ))
             }
             Problem::DuplicateClaim { id, components } => {
@@ -499,13 +502,13 @@ impl ComponentLocation {
 
     fn root_output(&self) -> ComponentRootOutput {
         ComponentRootOutput::new(self.kind.clone(), self.path.to_string_lossy().into_owned())
-            .with_app(self.app.clone())
+            .with_app(self.app.clone().map(Into::into))
             .with_generation(self.generation)
     }
 
     fn source_output(&self) -> ComponentSourceOutput {
         ComponentSourceOutput::new(self.kind.clone(), self.path.to_string_lossy().into_owned())
-            .with_app(self.app.clone())
+            .with_app(self.app.clone().map(Into::into))
             .with_generation(self.generation)
     }
 }
@@ -608,7 +611,7 @@ fn component_output(component: &Component) -> ComponentOutput {
         component.requires().iter().map(selector_output).collect(),
         component.conflicts().iter().map(selector_output).collect(),
     )
-    .with_version(component.version().map(ToString::to_string))
+    .with_version(component.version().map(ToString::to_string).map(Into::into))
 }
 
 fn claim_output(claim: &Claim) -> ClaimOutput {
@@ -617,14 +620,24 @@ fn claim_output(claim: &Claim) -> ClaimOutput {
 
 fn capability_output(capability: &Capability) -> CapabilityOutput {
     CapabilityOutput::new(capability.id().to_string())
-        .with_version(capability.version().map(ToString::to_string))
-        .with_value(capability.value_str().map(str::to_owned))
+        .with_version(
+            capability
+                .version()
+                .map(ToString::to_string)
+                .map(Into::into),
+        )
+        .with_value(capability.value_str().map(str::to_owned).map(Into::into))
 }
 
 fn selector_output(selector: &CapabilitySelector) -> CapabilitySelectorOutput {
     CapabilitySelectorOutput::new(selector.id().to_string())
-        .with_version(selector.version_req().map(ToString::to_string))
-        .with_value(selector.value_str().map(str::to_owned))
+        .with_version(
+            selector
+                .version_req()
+                .map(ToString::to_string)
+                .map(Into::into),
+        )
+        .with_value(selector.value_str().map(str::to_owned).map(Into::into))
 }
 
 fn find_component_files(root: &Path) -> SystemResult<Vec<PathBuf>> {

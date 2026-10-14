@@ -1,9 +1,9 @@
 //! Bootstrapping configuration.
 
-#[rust(type="byte_calc::NumBytes")]
+#[rust(type="::sidex::serde::Serde<::byte_calc::NumBytes>")]
 opaque NumBytes
 
-#[rust(type="rugix_common::disk::PartitionType")]
+#[rust(type="::sidex::serde::Serde<::rugix_common::disk::PartitionType>")]
 opaque PartitionType
 
 /// Bootstrapping configuration.

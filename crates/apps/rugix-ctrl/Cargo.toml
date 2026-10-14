@@ -22,11 +22,9 @@ uuid = { version = "1.11.0", features = ["v4"] }
 clap.workspace = true
 nix.workspace = true
 serde.workspace = true
-serde_ignored.workspace = true
 tracing.workspace = true
 
-sidex-serde.workspace = true
-sidex.workspace = true
+sidex = { workspace = true, features = ["serde_json-1", "toml"] }
 xscript.workspace = true
 
 reportify.workspace = true

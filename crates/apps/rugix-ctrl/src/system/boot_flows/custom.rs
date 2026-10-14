@@ -188,8 +188,6 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
-    use indexmap::IndexMap;
-
     use super::CustomBootFlow;
     use crate::config::system::BootGroupConfig;
     use crate::config::system::FileSlotConfig;
@@ -205,12 +203,13 @@ mod tests {
                 (
                     format!("system-{name}"),
                     SlotConfig::File(FileSlotConfig {
-                        path: format!("/tmp/system-{name}"),
+                        path: format!("/tmp/system-{name}").into(),
                         immutable: Some(true),
                     }),
                 )
             })
-            .collect::<IndexMap<_, _>>();
+            .map(|(key, value)| (sidex::types::Str::from(key), value))
+            .collect::<sidex::types::Map<_, _>>();
         let slots = SystemSlots::from_config(None, Some(&slot_config)).unwrap();
         let group_config = ["a", "b"]
             .into_iter()
@@ -220,11 +219,13 @@ mod tests {
                     BootGroupConfig {
                         slots: [("system".to_owned(), format!("system-{name}"))]
                             .into_iter()
+                            .map(|(key, value)| (key.into(), value.into()))
                             .collect(),
                     },
                 )
             })
-            .collect::<IndexMap<_, _>>();
+            .map(|(key, value)| (sidex::types::Str::from(key), value))
+            .collect::<sidex::types::Map<_, _>>();
         let groups = BootGroups::from_config(&slots, Some(&group_config)).unwrap();
         let active = groups.find_by_name(active_name).unwrap().0;
         System::for_boot_flow_test(

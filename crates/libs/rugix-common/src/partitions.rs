@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::Path;
 
 use reportify::Report;
@@ -42,7 +43,7 @@ pub fn mkfs_vfat(dev: impl AsRef<Path>, label: impl AsRef<str>) -> Result<(), Re
 pub fn mkfs_ext4(
     dev: impl AsRef<Path>,
     label: impl AsRef<str>,
-    additional_options: &[String],
+    additional_options: &[impl AsRef<OsStr>],
 ) -> Result<(), Report<DiskError>> {
     let mut cmd = cmd_os!("mkfs.ext4", "-F", "-L", label.as_ref(), dev.as_ref());
     cmd.extend_args(additional_options);

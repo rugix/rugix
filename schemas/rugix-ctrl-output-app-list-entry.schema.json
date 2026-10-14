@@ -8,8 +8,13 @@
       "$ref": "#/$defs/rugix_ctrl.apps.AppStatus"
     },
     "generation": {
-      "type": "integer",
-      "format": "uint64"
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
     },
     "orchestrator": {
       "type": "string"
@@ -24,7 +29,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_ctrl.apps.AppStatus": {
-      "$id": "rugix_ctrl.apps.AppStatus",
       "description": "Live workload status.",
       "oneOf": [
         {
@@ -92,8 +96,6 @@
         }
       ]
     },
-    "rugix_ctrl.output.JsonValue": {
-      "$id": "rugix_ctrl.output.JsonValue"
-    }
+    "rugix_ctrl.output.JsonValue": {}
   }
 }

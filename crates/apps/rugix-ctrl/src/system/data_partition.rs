@@ -80,7 +80,7 @@ pub fn resolve_driver(config: &PartitionConfig) -> Box<dyn DataPartitionDriver> 
         };
     }
     if let Some(mount_script) = &config.mount_script {
-        return Box::new(LegacyMountScriptDriver::new(mount_script.clone()));
+        return Box::new(LegacyMountScriptDriver::new(mount_script.clone().into()));
     }
     Box::new(PlaintextExt4Driver::default())
 }
@@ -94,8 +94,16 @@ pub struct PlaintextExt4Driver {
 impl PlaintextExt4Driver {
     pub fn new(config: PlaintextExt4DriverConfig) -> Self {
         Self {
-            label: config.label.unwrap_or_else(|| DEFAULT_LABEL.to_owned()),
-            additional_options: config.additional_options.unwrap_or_default(),
+            label: config
+                .label
+                .unwrap_or_else(|| DEFAULT_LABEL.to_owned().into())
+                .into(),
+            additional_options: config
+                .additional_options
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>(),
         }
     }
 }

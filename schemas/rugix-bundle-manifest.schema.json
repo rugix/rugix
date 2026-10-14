@@ -23,7 +23,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_bundle.manifest.BlockEncoding": {
-      "$id": "rugix_bundle.manifest.BlockEncoding",
       "type": "object",
       "properties": {
         "chunker": {
@@ -45,13 +44,9 @@
       "unevaluatedProperties": false
     },
     "rugix_bundle.manifest.ChunkerAlgorithm": {
-      "$id": "rugix_bundle.manifest.ChunkerAlgorithm",
-      "type": [
-        "string"
-      ]
+      "type": "string"
     },
     "rugix_bundle.manifest.Compression": {
-      "$id": "rugix_bundle.manifest.Compression",
       "oneOf": [
         {
           "type": "object",
@@ -59,7 +54,11 @@
             "type": {
               "const": "xz"
             },
-            "level": {}
+            "level": {
+              "type": "integer",
+              "maximum": 255,
+              "minimum": 0
+            }
           },
           "required": [
             "type"
@@ -68,7 +67,6 @@
       ]
     },
     "rugix_bundle.manifest.DeliveryConfig": {
-      "$id": "rugix_bundle.manifest.DeliveryConfig",
       "oneOf": [
         {
           "type": "object",
@@ -117,7 +115,9 @@
             },
             "mode": {
               "type": "integer",
-              "format": "uint32"
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0
             }
           },
           "required": [
@@ -144,7 +144,6 @@
       ]
     },
     "rugix_bundle.manifest.DeltaEncoding": {
-      "$id": "rugix_bundle.manifest.DeltaEncoding",
       "type": "object",
       "properties": {
         "inputs": {
@@ -168,13 +167,11 @@
       "unevaluatedProperties": false
     },
     "rugix_bundle.manifest.DeltaEncodingFormat": {
-      "$id": "rugix_bundle.manifest.DeltaEncodingFormat",
       "enum": [
         "xdelta"
       ]
     },
     "rugix_bundle.manifest.DeltaEncodingInput": {
-      "$id": "rugix_bundle.manifest.DeltaEncodingInput",
       "type": "object",
       "properties": {
         "hashes": {
@@ -190,19 +187,12 @@
       "unevaluatedProperties": false
     },
     "rugix_bundle.manifest.HashAlgorithm": {
-      "$id": "rugix_bundle.manifest.HashAlgorithm",
-      "type": [
-        "string"
-      ]
+      "type": "string"
     },
     "rugix_bundle.manifest.HashDigest": {
-      "$id": "rugix_bundle.manifest.HashDigest",
-      "type": [
-        "string"
-      ]
+      "type": "string"
     },
     "rugix_bundle.manifest.Payload": {
-      "$id": "rugix_bundle.manifest.Payload",
       "type": "object",
       "properties": {
         "delivery": {
@@ -225,7 +215,6 @@
       "unevaluatedProperties": false
     },
     "rugix_bundle.manifest.UpdateType": {
-      "$id": "rugix_bundle.manifest.UpdateType",
       "enum": [
         "full",
         "incremental"

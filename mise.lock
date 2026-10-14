@@ -131,33 +131,38 @@ url_api = "https://api.github.com/repos/google/osv-scanner/releases/assets/45124
 url = "https://github.com/google/osv-scanner/releases/download/v2.4.0/multiple.intoto.jsonl"
 
 [[tools."github:silitics/sidex"]]
-version = "0.2.6"
+version = "0.4.1"
 backend = "github:silitics/sidex"
 
 [tools."github:silitics/sidex"."platforms.linux-arm64"]
-checksum = "sha256:7cb5fc5479fd8e19bfe3b2b592090c3c1508391342d62f587e27437e0cf156f2"
-url = "https://github.com/silitics/sidex/releases/download/v0.2.6/sidex-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/418108325"
+checksum = "sha256:ce2b31cb3586f1e32def9a0e71bea7dc6ff25e75bdd6c8d5a2bd073bd9718237"
+url = "https://github.com/silitics/sidex/releases/download/v0.4.1/sidex-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/639393881"
 
 [tools."github:silitics/sidex"."platforms.linux-arm64-musl"]
-checksum = "sha256:7cb5fc5479fd8e19bfe3b2b592090c3c1508391342d62f587e27437e0cf156f2"
-url = "https://github.com/silitics/sidex/releases/download/v0.2.6/sidex-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/418108325"
+checksum = "sha256:ac8897e26546be06e3b8236d9622348e6f8a0c8eb555b8be9a8f99b90b6f6bb1"
+url = "https://github.com/silitics/sidex/releases/download/v0.4.1/sidex-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/639393875"
 
 [tools."github:silitics/sidex"."platforms.linux-x64"]
-checksum = "sha256:3378bd69864a4e696274636457531f456be6010e79d4d8d7df562e4b58586d50"
-url = "https://github.com/silitics/sidex/releases/download/v0.2.6/sidex-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/418108377"
+checksum = "sha256:d11e190fbd79c7d6fa60948032b3863d147305cf3ffa1f709f84084a232055cd"
+url = "https://github.com/silitics/sidex/releases/download/v0.4.1/sidex-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/639393880"
 
 [tools."github:silitics/sidex"."platforms.linux-x64-musl"]
-checksum = "sha256:3378bd69864a4e696274636457531f456be6010e79d4d8d7df562e4b58586d50"
-url = "https://github.com/silitics/sidex/releases/download/v0.2.6/sidex-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/418108377"
+checksum = "sha256:1a3f761ceb1103d42d1830cb99011edd64206af959ca0cb219ebdb2a14733ce2"
+url = "https://github.com/silitics/sidex/releases/download/v0.4.1/sidex-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/639393901"
 
 [tools."github:silitics/sidex"."platforms.macos-arm64"]
-checksum = "sha256:1623ed712e8347efb67b68ff013e6fa7cf4930bc7692c21b54206b92bf739d31"
-url = "https://github.com/silitics/sidex/releases/download/v0.2.6/sidex-aarch64-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/418107874"
+checksum = "sha256:e7e0d10b072714e6774e15f092c8a16d8a32763e8a456a4e2aa19eb2959b0e04"
+url = "https://github.com/silitics/sidex/releases/download/v0.4.1/sidex-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/639393874"
+
+[tools."github:silitics/sidex"."platforms.macos-x64"]
+checksum = "sha256:0146960fd3ac5203754168e8bc972d91d0297329a74ec80b9a36c3bd4b372ac3"
+url = "https://github.com/silitics/sidex/releases/download/v0.4.1/sidex-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/silitics/sidex/releases/assets/639393876"
 
 [[tools.python]]
 version = "3.11.15"

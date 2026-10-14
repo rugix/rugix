@@ -6,7 +6,9 @@
   "properties": {
     "schemaVersion": {
       "type": "integer",
-      "format": "uint32"
+      "format": "uint32",
+      "maximum": 4294967295,
+      "minimum": 0
     },
     "images": {
       "type": "array",
@@ -22,7 +24,6 @@
   "unevaluatedProperties": false,
   "$defs": {
     "rugix_bundle.compose.ImageMetadataEntry": {
-      "$id": "rugix_bundle.compose.ImageMetadataEntry",
       "type": "object",
       "description": "Provenance and packaged reference of one service image.",
       "properties": {
@@ -64,7 +65,6 @@
       "unevaluatedProperties": false
     },
     "rugix_bundle.compose.ImageSourceKind": {
-      "$id": "rugix_bundle.compose.ImageSourceKind",
       "enum": [
         "registry",
         "build",

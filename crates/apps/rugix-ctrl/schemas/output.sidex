@@ -1,8 +1,7 @@
 import apps::AppStatus
 import apps::AppState
 
-#[rust(type = "::serde_json::Value")]
-opaque JsonValue
+alias JsonValue: json
 
 /// Information about the system.
 record SystemInfoOutput {

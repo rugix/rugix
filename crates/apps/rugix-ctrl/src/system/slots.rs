@@ -2,7 +2,6 @@ use std::ops::Index;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use indexmap::IndexMap;
 use reportify::bail;
 use reportify::whatever;
 use tracing::warn;
@@ -39,7 +38,7 @@ impl SystemSlots {
                     let optional = block_slot_config.optional.unwrap_or(false);
                     // Human-readable identifier for diagnostics when the slot is absent.
                     let intended = if let Some(device) = &block_slot_config.device {
-                        device.clone()
+                        device.to_string()
                     } else if let Some(partition) = &block_slot_config.partition {
                         format!("partition {partition} of the root device")
                     } else {
@@ -68,7 +67,12 @@ impl SystemSlots {
                     path: file_slot_config.path.clone().into(),
                 },
                 SlotConfig::Custom(custom_slot_config) => SlotKind::Custom {
-                    handler: custom_slot_config.handler.clone(),
+                    handler: custom_slot_config
+                        .handler
+                        .clone()
+                        .into_iter()
+                        .map(Into::into)
+                        .collect::<Vec<_>>(),
                 },
             };
             slots.push(Slot::new(name.to_owned(), kind, config.clone()));
@@ -78,7 +82,7 @@ impl SystemSlots {
 
     pub fn from_config(
         root: Option<&SystemRoot>,
-        config: Option<&IndexMap<String, SlotConfig>>,
+        config: Option<&sidex::types::Map<sidex::types::Str, SlotConfig>>,
     ) -> SystemResult<Self> {
         match config {
             Some(config) => Self::from_iter(

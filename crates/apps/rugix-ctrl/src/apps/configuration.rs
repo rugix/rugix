@@ -161,7 +161,7 @@ mod tests {
         )
         .unwrap();
         let manifest = AppManifest::new("generic".to_owned()).with_configuration(Some(
-            AppConfigurationConfig::new().with_schema(Some("config.schema.json".to_owned())),
+            AppConfigurationConfig::new().with_schema(Some("config.schema.json".to_owned().into())),
         ));
         let valid_path = tempdir.path().join("valid.json");
         std::fs::write(&valid_path, r#"{"url":"https://example.com"}"#).unwrap();

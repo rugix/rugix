@@ -15,7 +15,6 @@ reportify.workspace = true
 si-crypto-hashes.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-sidex-serde.workspace = true
 sidex.workspace = true
 serde.workspace = true
 rugix-fs.workspace = true

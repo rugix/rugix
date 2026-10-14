@@ -9,9 +9,3 @@ authors = ["Silitics GmbH <info@silitics.com>"]
 [backend.rust]
 derive = ["Clone", "Debug"]
 plugins = ["builder", "serde"]
-
-[backend.rust.plugin.serde]
-sidex_serde_path = "::sidex_serde"
-
-[backend.rust.types.table]
-"::core::builtins::Map" = "indexmap::IndexMap"

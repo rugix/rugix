@@ -34,7 +34,6 @@ nix = { version = "0.29", features = [
 pin-project = "1.1.8"
 scoped-tls = "1.0.1"
 serde = { version = "1.0.217", features = ["derive"] }
-serde_ignored = "0.1.14"
 serde_json = "1.0.138"
 sha2 = "0.10.8"
 thiserror = "2.0.11"
@@ -49,9 +48,8 @@ byte-calc = { version = "0.2.0", features = ["serde", "bytes"] }
 reportify = "0.2.2"
 si-crypto-hashes = { version = "0.1.2", features = ["serde", "legacy"] }
 si-observability = { version = "0.1.2", features = ["clap4"] }
-sidex = { git = "https://github.com/silitics/sidex.git" }
-sidex-build-rs = { git = "https://github.com/silitics/sidex.git" }
-sidex-serde = { git = "https://github.com/silitics/sidex.git" }
+sidex = { git = "https://github.com/silitics/sidex.git", tag = "v0.4.1", features = ["serde-1"] }
+sidex-build-rs = { git = "https://github.com/silitics/sidex.git", tag = "v0.4.1" }
 xscript = { version = "0.4.0", features = ["tokio"] }
 
 # Rugix-specific crates.

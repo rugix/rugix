@@ -6,7 +6,7 @@ lockfile = true
 [tools]
 python = "3.11"
 uv = "latest"
-"github:silitics/sidex" = { version = "latest", exe = "sidex" }
+"github:silitics/sidex" = { version = "0.4.1", exe = "sidex" }
 "cargo:cargo-deny" = "latest"
 "github:google/osv-scanner" = { version = "latest", exe = "osv-scanner" }
 "github:cross-rs/cross" = { version = "latest", exe = "cross", os = ["linux/x64"] }

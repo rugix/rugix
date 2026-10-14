@@ -359,8 +359,8 @@ fn list_apps(manager: &AppManager) -> SystemResult<IndexMap<String, AppListEntry
                 app.clone(),
                 AppListEntryOutput::new(status)
                     .with_generation(generation)
-                    .with_orchestrator(read_orchestrator(manager, app, generation))
-                    .with_metadata(metadata),
+                    .with_orchestrator(read_orchestrator(manager, app, generation).map(Into::into))
+                    .with_metadata(metadata.map(Into::into)),
             )
         })
         .collect();
@@ -393,16 +393,16 @@ fn query_app(manager: &AppManager, app: String) -> SystemResult<AppInfoOutput> {
                 generation.complete,
                 Some(generation.meta.number) == current,
             )
-            .with_created_at(created_at(&generation.meta))
+            .with_created_at(created_at(&generation.meta).map(Into::into))
             .with_last_activated(generation.meta.last_activated.clone())
             .with_configuration_revision(generation.meta.configuration_revision)
-            .with_metadata(metadata)
+            .with_metadata(metadata.map(Into::into))
         })
         .collect();
     let orchestrator = read_orchestrator(manager, &app, current);
     Ok(
         AppInfoOutput::new(app, status, lifecycle, generation_entries)
-            .with_orchestrator(orchestrator)
+            .with_orchestrator(orchestrator.map(Into::into))
             .with_desired_configuration_revision(desired_configuration_revision),
     )
 }
@@ -424,7 +424,9 @@ fn read_orchestrator(manager: &AppManager, app: &str, generation: Option<u64>) -
 /// `AppManager::list_generations` synthesizes metadata with an empty timestamp for a
 /// generation whose `generation.json` is missing or unreadable.
 fn created_at(generation: &crate::config::apps::AppGeneration) -> Option<String> {
-    Some(generation.created_at.clone()).filter(|created_at| !created_at.is_empty())
+    Some(generation.created_at.clone())
+        .filter(|created_at| !created_at.is_empty())
+        .map(Into::into)
 }
 
 fn activate_app(
@@ -554,7 +556,7 @@ fn garbage_collect_apps(
         let removed = manager
             .gc(&lock, name, keep)
             .whatever("unable to garbage collect")?;
-        results.insert(name.clone(), AppGcAppOutput::new(removed));
+        results.insert(name.clone(), AppGcAppOutput::new(removed.into()));
     }
     Ok(results)
 }
