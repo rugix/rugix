@@ -539,10 +539,10 @@ fn remove_app(
     manager
         .remove_app(&lock, app)
         .whatever("unable to remove app")?;
-    manager
-        .store()
-        .gc()
-        .whatever("unable to collect store garbage")?;
+    // Garbage collection waits for unrelated installations, which must not hold up
+    // operations on this app.
+    drop(lock);
+    collect_store_garbage(manager);
     Ok(())
 }
 
@@ -563,14 +563,18 @@ fn garbage_collect_apps(
             .whatever("unable to garbage collect")?;
         results.insert(name.clone(), AppGcAppOutput::new(removed.into()));
     }
-    manager
-        .remove_orphaned_refs()
-        .whatever("unable to remove orphaned refs")?;
-    manager
-        .store()
-        .gc()
-        .whatever("unable to collect store garbage")?;
+    collect_store_garbage(manager);
     Ok(results)
+}
+
+/// Free store space of removed generations after app removals succeeded.
+///
+/// Failures are logged, because they do not undo the removals and the next garbage
+/// collection retries.
+fn collect_store_garbage(manager: &AppManager) {
+    if let Err(error) = manager.collect_store_garbage() {
+        warn!("unable to collect store garbage: {error:?}");
+    }
 }
 
 fn check_app_generation_compatibility(

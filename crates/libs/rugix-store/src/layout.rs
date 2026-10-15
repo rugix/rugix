@@ -5,6 +5,8 @@ use std::fs::File;
 use std::io::ErrorKind;
 use std::io::Write;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -57,19 +59,27 @@ impl Layout {
     }
 
     /// Lock the store, creating it if necessary.
+    ///
+    /// The store is private to its owner, which also keeps other users from blocking
+    /// garbage collection by locking the store.
     pub(crate) fn create_and_lock(&self, mode: LockMode) -> StoreResult<StoreLock> {
-        fs::create_dir_all(&self.root).whatever("unable to create store directory")?;
+        if let Some(parent) = self.root.parent() {
+            fs::create_dir_all(parent).whatever("unable to create store directory")?;
+        }
+        match fs::DirBuilder::new().mode(0o700).create(&self.root) {
+            Err(error) if error.kind() != ErrorKind::AlreadyExists => {
+                return Err(error).whatever("unable to create store directory");
+            }
+            _ => {}
+        }
         let file = fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
+            .mode(0o600)
             .open(self.lock_path())
             .whatever("unable to open store lock")?;
         lock_file(file, mode)
-    }
-
-    fn lock_path(&self) -> PathBuf {
-        self.root.join("lock")
     }
 
     /// Flush all data on the store's file system to disk.
@@ -83,10 +93,12 @@ impl Layout {
         self.root.join("tmp")
     }
 
+    /// Path of the ref `name`.
     pub(crate) fn ref_path(&self, name: &RefName) -> PathBuf {
         self.refs_dir().join(name.as_path())
     }
 
+    /// Path of a chunk with the given hash and compression.
     pub(crate) fn chunk_path(
         &self,
         algorithm: HashAlgorithm,
@@ -106,12 +118,13 @@ impl Layout {
         algorithm: HashAlgorithm,
         hash: &[u8],
     ) -> Option<(PathBuf, Option<CompressionFormat>)> {
-        [Some(CompressionFormat::Xz), None]
+        CHUNK_COMPRESSIONS
             .into_iter()
             .map(|compression| (self.chunk_path(algorithm, hash, compression), compression))
             .find(|(path, _)| path.exists())
     }
 
+    /// Path of the object with the given ID.
     pub(crate) fn object_path(&self, object: &ObjectId) -> PathBuf {
         hashed_path(&self.root.join("objects"), object.algorithm(), object.raw())
     }
@@ -169,7 +182,10 @@ impl Layout {
         Ok(refs)
     }
 
-    /// Remove the ref `name` or all refs below it, and prune empty directories.
+    /// Remove the ref `name` or all refs below it.
+    ///
+    /// Leaves empty directories behind, because a concurrent writer may be about to
+    /// place a ref into them. Garbage collection prunes them.
     pub(crate) fn remove_refs(&self, name: &RefName) -> StoreResult<()> {
         let path = self.ref_path(name);
         let result = match fs::symlink_metadata(&path) {
@@ -178,21 +194,18 @@ impl Layout {
             Err(error) => Err(error),
         };
         match result {
-            Ok(()) => {}
             Err(error)
-                if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {}
-            Err(error) => return Err(error).whatever("unable to remove ref"),
-        }
-        let refs_dir = self.refs_dir();
-        let mut parent = path.parent();
-        while let Some(directory) = parent.filter(|directory| *directory != refs_dir) {
-            // Removal fails for directories still holding other refs, ending the pruning.
-            if fs::remove_dir(directory).is_err() {
-                break;
+                if !matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) =>
+            {
+                Err(error).whatever("unable to remove ref")
             }
-            parent = directory.parent();
+            _ => Ok(()),
         }
-        Ok(())
+    }
+
+    /// Remove empty directories below `refs/`. Requires the exclusive lock.
+    pub(crate) fn prune_refs(&self) -> StoreResult<()> {
+        prune_empty_dirs(&self.refs_dir())
     }
 
     /// Atomically and durably point the ref `name` at `object`.
@@ -214,15 +227,21 @@ impl Layout {
             .expect("ref paths are below the refs directory");
         fs::create_dir_all(parent).whatever("unable to create ref directory")?;
         fs::rename(&staged, &path).whatever("unable to move ref into place")?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .whatever("unable to synchronize ref directory")
+        // Synchronizing only the parent would not cover newly created directories.
+        self.sync()
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        self.root.join("lock")
     }
 
     fn refs_dir(&self) -> PathBuf {
         self.root.join("refs")
     }
 }
+
+/// Compressions of chunks, in the order in which they are probed.
+const CHUNK_COMPRESSIONS: [Option<CompressionFormat>; 2] = [Some(CompressionFormat::Xz), None];
 
 /// Committed chunk file.
 pub(crate) struct ChunkFile {
@@ -232,6 +251,7 @@ pub(crate) struct ChunkFile {
     pub(crate) path: PathBuf,
 }
 
+/// Lock an open lock file.
 fn lock_file(file: File, mode: LockMode) -> StoreResult<StoreLock> {
     let arg = match mode {
         LockMode::Shared => FlockArg::LockShared,
@@ -280,6 +300,7 @@ fn hashed_files(base: &Path) -> StoreResult<Vec<(HashAlgorithm, String, PathBuf)
     Ok(files)
 }
 
+/// List a directory, treating a missing directory as empty.
 fn read_dir_if_exists(path: &Path) -> StoreResult<Vec<fs::DirEntry>> {
     match fs::read_dir(path) {
         Ok(entries) => entries
@@ -290,12 +311,16 @@ fn read_dir_if_exists(path: &Path) -> StoreResult<Vec<fs::DirEntry>> {
     }
 }
 
+/// Decode a hex-encoded hash of the given algorithm.
 fn decode_hash(algorithm: HashAlgorithm, hex: &str) -> Option<Vec<u8>> {
     hex::decode(hex)
         .ok()
         .filter(|hash| hash.len() == algorithm.hash_size())
 }
 
+/// Collect the refs at or below `path`, which is the ref `name`.
+///
+/// Refs removed concurrently are skipped.
 fn collect_refs(path: &Path, name: String, refs: &mut Vec<(String, ObjectId)>) -> StoreResult<()> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -305,7 +330,11 @@ fn collect_refs(path: &Path, name: String, refs: &mut Vec<(String, ObjectId)>) -
         Err(error) => return Err(error).whatever("unable to read ref"),
     };
     if !metadata.is_dir() {
-        let content = fs::read_to_string(path).whatever("unable to read ref")?;
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error).whatever("unable to read ref"),
+        };
         let object = parse_ref(&content).whatever_with(|_| format!("invalid ref {name}"))?;
         refs.push((name, object));
         return Ok(());
@@ -320,6 +349,27 @@ fn collect_refs(path: &Path, name: String, refs: &mut Vec<(String, ObjectId)>) -
             format!("{name}/{child}")
         };
         collect_refs(&entry.path(), child_name, refs)?;
+    }
+    Ok(())
+}
+
+/// Remove the empty directories below `path`, deepest first.
+fn prune_empty_dirs(path: &Path) -> StoreResult<()> {
+    for entry in read_dir_if_exists(path)? {
+        if !entry
+            .file_type()
+            .whatever("unable to read ref directory entry")?
+            .is_dir()
+        {
+            continue;
+        }
+        prune_empty_dirs(&entry.path())?;
+        match fs::remove_dir(entry.path()) {
+            Err(error) if error.kind() != ErrorKind::DirectoryNotEmpty => {
+                return Err(error).whatever("unable to remove empty ref directory");
+            }
+            _ => {}
+        }
     }
     Ok(())
 }

@@ -11,8 +11,8 @@
 //! - [`Store::open`] reads a stored file through an [`ObjectReader`].
 //! - [`Store::block_provider`] offers stored chunks as local block candidates when
 //!   installing a bundle.
-//! - [`Store::remove`] removes refs and [`Store::gc`] deletes everything that no ref
-//!   reaches.
+//! - [`Store::gc`] removes refs its caller no longer needs and deletes everything that no
+//!   remaining ref reaches.
 //!
 //! # Layout
 //!
@@ -45,9 +45,11 @@
 //!
 //! Writers, readers, and block providers hold a shared lock on `lock`. Garbage
 //! collection holds it exclusively, so it never deletes data in use and can empty
-//! `tmp/`. Everything reachable from a ref survives garbage collection. Resolving,
-//! listing, and removing refs needs no lock, because refs are replaced atomically
-//! and removing a ref only makes data eligible for deletion.
+//! `tmp/`. Writers hold the lock until their ref is written, so garbage collection
+//! sees every ref of a finished writer and none of an unfinished one. Everything
+//! reachable from a ref that the caller retains survives garbage collection.
+//! Resolving, listing, and removing refs needs no lock, because refs are replaced
+//! atomically and removing a ref only makes data eligible for deletion.
 //!
 //! [`PayloadTarget`]: rugix_bundle::reader::PayloadTarget
 //! [block index]: rugix_bundle::format::BlockIndex
@@ -69,15 +71,15 @@ use crate::layout::LockMode;
 use crate::object::Object;
 
 mod chunk;
-mod gc;
 mod layout;
+mod maintenance;
 mod object;
 mod provider;
 mod reader;
 mod writer;
 
-pub use gc::GcSummary;
-pub use gc::StoreInfo;
+pub use maintenance::GcSummary;
+pub use maintenance::StoreInfo;
 pub use provider::StoreBlockProvider;
 pub use reader::ObjectReader;
 pub use writer::ObjectWriter;
@@ -124,7 +126,8 @@ impl Store {
     /// Start adding a file that is split with `chunker` and hashed with `hash_algorithm`.
     ///
     /// Use the chunker and hash algorithm of a bundle payload when writing its blocks
-    /// with [`ObjectWriter::write_block`](rugix_bundle::reader::PayloadTarget).
+    /// through the writer's [`PayloadTarget`](rugix_bundle::reader::PayloadTarget)
+    /// implementation.
     pub fn writer(
         &self,
         chunker: ChunkerAlgorithm,
@@ -185,24 +188,26 @@ impl Store {
         self.layout.remove_refs(name)
     }
 
-    /// Delete all objects and chunks that no ref reaches and empty `tmp/`.
+    /// Remove the refs for which `retain` returns `false`, then delete all objects and
+    /// chunks that no remaining ref reaches, and empty `tmp/`.
     ///
-    /// Waits until no writer, reader, or block provider is alive. Calling this while
-    /// holding one of them in the same process therefore never returns.
-    pub fn gc(&self) -> StoreResult<GcSummary> {
-        gc::collect(&self.layout)
+    /// `retain` sees the name of each ref while no writer is alive. Waits until no
+    /// writer, reader, or block provider is alive. Calling this while holding one of
+    /// them in the same process therefore never returns.
+    pub fn gc(&self, retain: impl Fn(&str) -> bool) -> StoreResult<GcSummary> {
+        maintenance::collect(&self.layout, retain)
     }
 
     /// Check that all referenced objects and their chunks are intact.
     ///
     /// Returns a description of every problem found.
     pub fn verify(&self) -> StoreResult<Vec<String>> {
-        gc::verify(&self.layout)
+        maintenance::verify(&self.layout)
     }
 
     /// Summarize the contents of the store.
     pub fn info(&self) -> StoreResult<StoreInfo> {
-        gc::info(&self.layout)
+        maintenance::info(&self.layout)
     }
 }
 
@@ -265,7 +270,8 @@ mod tests {
     }
 
     /// Verifies that files share stored chunks and read back intact, and that garbage
-    /// collection deletes exactly the data no ref reaches.
+    /// collection deletes exactly the data no retained ref reaches, including data of
+    /// interrupted writers.
     #[test]
     fn shared_chunks_are_stored_once_and_collected_when_unreferenced() {
         let directory = tempfile::tempdir().unwrap();
@@ -274,14 +280,18 @@ mod tests {
         let second = [first.as_slice(), &random_bytes(2, 256 * 1024)].concat();
         write(&store, "a/file", &first);
         write(&store, "b/file", &second);
+        write(&store, "empty", &[]);
         let mut uncommitted = store
             .writer(DEFAULT_CHUNKER, DEFAULT_HASH_ALGORITHM)
             .unwrap();
         uncommitted.write_all(&random_bytes(3, 256 * 1024)).unwrap();
         drop(uncommitted);
+        let crashed = directory.path().join("store/tmp/write-crashed");
+        fs::create_dir_all(&crashed).unwrap();
+        fs::write(crashed.join("chunk"), b"staged").unwrap();
 
         let info = store.info().unwrap();
-        assert_eq!(info.refs, 2);
+        assert_eq!(info.refs, 3);
         assert_eq!(
             info.referenced_size.raw,
             (first.len() + second.len()) as u64
@@ -291,17 +301,20 @@ mod tests {
         assert!(info.stored_size.raw < (second.len() + 320 * 1024) as u64);
         assert_eq!(read(&store, "a/file"), first);
         assert_eq!(read(&store, "b/file"), second);
+        assert!(read(&store, "empty").is_empty());
 
-        store.remove(&name("a")).unwrap();
-        assert_eq!(store.gc().unwrap().removed_objects, 1);
+        let summary = store.gc(|name| name != "a/file").unwrap();
+        assert_eq!((summary.removed_refs, summary.removed_objects), (1, 1));
+        assert!(!crashed.exists());
+        assert!(!directory.path().join("store/refs/a").exists());
         assert_eq!(read(&store, "b/file"), second);
         assert!(store.verify().unwrap().is_empty());
 
-        store.remove(&name("b/file")).unwrap();
-        store.gc().unwrap();
+        store.remove(&name("b")).unwrap();
+        store.remove(&name("empty")).unwrap();
+        store.gc(|_| true).unwrap();
         let info = store.info().unwrap();
         assert_eq!((info.refs, info.objects, info.chunks), (0, 0, 0));
-        assert!(!directory.path().join("store/refs/b").exists());
     }
 
     /// Verifies that bundle blocks keep their compressed bundle bytes, that duplicate

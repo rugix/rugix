@@ -9,7 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use reportify::ResultExt;
-use rugix_store::RefName;
+use rugix_store::GcSummary;
 use rugix_store::Store;
 use tracing::error;
 use tracing::info;
@@ -1202,57 +1202,48 @@ impl AppManager {
         self.do_switch(app_name, Some(current), Some(previous), false)
     }
 
-    /// Remove a generation directory and the refs of its stored files.
+    /// Remove a generation directory.
     ///
     /// Removes the complete marker first so that an interrupted removal leaves
     /// the generation in an incomplete state rather than appearing valid. Stored
     /// files remain in the store until its next garbage collection.
-    fn remove_generation(&self, app_name: &str, gen_number: u64) -> AppsResult<()> {
+    fn remove_generation(&self, app_name: &str, gen_number: u64) -> std::io::Result<()> {
         let gen_dir = self.generation_dir_unchecked(app_name, gen_number);
         let complete_marker = gen_dir.join(".rugix/complete");
         if complete_marker.exists() {
-            fs::remove_file(&complete_marker).whatever("unable to remove complete marker")?;
+            fs::remove_file(&complete_marker)?;
         }
-        self.store
-            .remove(&GenerationFiles::generation_ref(app_name, gen_number))
-            .whatever("unable to remove refs of stored files")?;
-        fs::remove_dir_all(&gen_dir).whatever("unable to remove generation directory")
+        fs::remove_dir_all(&gen_dir)
     }
 
-    /// Remove the refs of stored files of all apps whose generation no longer exists.
+    /// Collect the garbage of the store, releasing stored files of generations that no
+    /// longer exist.
     ///
-    /// Such refs remain when a generation or app is removed by other means, for
-    /// example by a Rugix Ctrl version without the store. Generation directories are
-    /// created before refs are written, so refs of a running installation are kept.
-    pub fn remove_orphaned_refs(&self) -> AppsResult<()> {
-        let apps_ref = RefName::new("apps").expect("`apps` is a valid ref name");
-        let generations = self
-            .store
-            .list(Some(&apps_ref))
-            .whatever("unable to list refs of stored files")?
-            .into_iter()
-            .filter_map(|stored| {
-                let mut components = stored.name.split('/').skip(1);
-                let app_name = components.next()?.to_owned();
-                let generation = components.next()?.parse::<u64>().ok()?;
-                Some((app_name, generation))
-            })
-            .collect::<HashSet<_>>();
-        for (app_name, generation) in generations {
-            if !self
-                .generation_dir_unchecked(&app_name, generation)
-                .exists()
-            {
-                warn!(
-                    app = app_name,
-                    generation, "removing refs of stored files of a missing generation"
-                );
-                self.store
-                    .remove(&GenerationFiles::generation_ref(&app_name, generation))
-                    .whatever("unable to remove refs of stored files")?;
-            }
+    /// This covers generations and apps removed by Rugix Apps as well as by other
+    /// means, for example by a Rugix Ctrl version without the store. The store holds
+    /// back writers while deciding which refs to keep, and a generation directory is
+    /// created before the refs of its files, so refs of a running installation are
+    /// always kept.
+    pub fn collect_store_garbage(&self) -> AppsResult<GcSummary> {
+        self.store
+            .gc(|name| self.is_live_ref(name))
+            .whatever("unable to collect store garbage")
+    }
+
+    /// Whether a ref may still be in use, which a ref of Rugix Apps is while its
+    /// generation directory exists.
+    fn is_live_ref(&self, name: &str) -> bool {
+        let mut components = name.split('/');
+        if components.next() != Some("apps") {
+            return true;
         }
-        Ok(())
+        match (components.next(), components.next()) {
+            (Some(app_name), Some(generation)) => match generation.parse::<u64>() {
+                Ok(generation) => self.generation_dir_unchecked(app_name, generation).exists(),
+                Err(_) => true,
+            },
+            _ => true,
+        }
     }
 
     /// Garbage collect old generations.
@@ -1370,9 +1361,6 @@ impl AppManager {
         if self.current_generation(app_name)?.is_some() {
             self.deactivate(_lock, app_name)?;
         }
-        self.store
-            .remove(&GenerationFiles::app_ref(app_name))
-            .whatever("unable to remove refs of stored files")?;
         let app_dir = self.app_dir(app_name);
         if app_dir.exists() {
             fs::remove_dir_all(&app_dir).whatever("unable to remove app directory")?;
@@ -2181,16 +2169,16 @@ mod tests {
 
         let lock = manager.lock_app("example").unwrap();
         assert_eq!(manager.gc(&lock, "example", 0).unwrap(), vec![1, 2]);
-        manager.remove_orphaned_refs().unwrap();
-        let store = manager.store();
-        let refs = store
+        let summary = manager.collect_store_garbage().unwrap();
+        assert_eq!((summary.removed_refs, summary.removed_objects), (3, 3));
+        let refs = manager
+            .store()
             .list(None)
             .unwrap()
             .into_iter()
             .map(|stored| stored.name)
             .collect::<Vec<_>>();
         assert_eq!(refs, ["apps/example/3/images/app.tar"]);
-        assert_eq!(store.gc().unwrap().removed_objects, 3);
     }
 
     /// Verifies that a new generation does not inherit stored files left behind by an

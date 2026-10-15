@@ -4,6 +4,15 @@
   "type": "object",
   "description": "Result of a garbage collection of the content-addressed store (`store gc`).",
   "properties": {
+    "removedRefs": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    },
     "removedObjects": {
       "type": [
         "integer",
@@ -33,6 +42,7 @@
     }
   },
   "required": [
+    "removedRefs",
     "removedObjects",
     "removedChunks",
     "freedSize"

@@ -3,13 +3,12 @@
 //! Rugix Apps keeps `app-file` payloads that opt into the store there. Installations
 //! of system and app bundles use its chunks as local block candidates.
 
-use std::path::Path;
-
 use reportify::bail;
 use reportify::ResultExt;
 use rugix_store::RefName;
 use rugix_store::Store;
 
+use crate::apps::manager::AppManager;
 use crate::cli::StoreCommand;
 use crate::config::output::StoreGcOutput;
 use crate::config::output::StoreInfoOutput;
@@ -19,22 +18,16 @@ use crate::system::SystemResult;
 
 /// Open the store of the device.
 ///
-/// Uses the Rugix state directory when available, so that a factory reset clears the
-/// store together with the apps referencing it, and falls back to
-/// `/var/lib/rugix/store` otherwise.
+/// The store is a sibling of the apps directory. It lives in the Rugix state directory
+/// when available, so that a factory reset clears it together with the apps that
+/// reference it.
 pub fn open() -> Store {
-    const STATE_PATH: &str = "/run/rugix/state/store";
-    const VAR_PATH: &str = "/var/lib/rugix/store";
-    if Path::new("/run/rugix/state").exists() {
-        Store::new(STATE_PATH)
-    } else {
-        Store::new(VAR_PATH)
-    }
+    Store::new(crate::apps::config::apps_dir().with_file_name("store"))
 }
 
 /// Run a `store` command, printing its JSON output.
-pub fn run_command(command: &StoreCommand) -> SystemResult<()> {
-    let store = open();
+pub fn run_command(command: &StoreCommand, manager: &AppManager) -> SystemResult<()> {
+    let store = manager.store();
     match command {
         StoreCommand::Info => {
             let info = store.info().whatever("unable to inspect store")?;
@@ -86,8 +79,11 @@ pub fn run_command(command: &StoreCommand) -> SystemResult<()> {
             Ok(())
         }
         StoreCommand::Gc => {
-            let summary = store.gc().whatever("unable to collect store garbage")?;
+            let summary = manager
+                .collect_store_garbage()
+                .whatever("unable to collect store garbage")?;
             print(&StoreGcOutput::new(
+                summary.removed_refs,
                 summary.removed_objects,
                 summary.removed_chunks,
                 summary.freed_size.raw,

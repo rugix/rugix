@@ -11,6 +11,7 @@ use si_crypto_hashes::HashAlgorithm;
 use tracing::info;
 
 use crate::ObjectId;
+use crate::RefName;
 use crate::StoreResult;
 use crate::chunk;
 use crate::layout::Layout;
@@ -20,6 +21,8 @@ use crate::object::Object;
 /// Result of a garbage collection.
 #[derive(Debug, Clone)]
 pub struct GcSummary {
+    /// Number of removed refs.
+    pub removed_refs: u64,
     /// Number of deleted objects.
     pub removed_objects: u64,
     /// Number of deleted chunks.
@@ -44,8 +47,9 @@ pub struct StoreInfo {
 }
 
 #[tracing::instrument(level = "debug", skip_all)]
-pub(crate) fn collect(layout: &Layout) -> StoreResult<GcSummary> {
+pub(crate) fn collect(layout: &Layout, retain: impl Fn(&str) -> bool) -> StoreResult<GcSummary> {
     let mut summary = GcSummary {
+        removed_refs: 0,
         removed_objects: 0,
         removed_chunks: 0,
         freed_size: NumBytes::ZERO,
@@ -53,13 +57,18 @@ pub(crate) fn collect(layout: &Layout) -> StoreResult<GcSummary> {
     let Some(_lock) = layout.lock(LockMode::Exclusive)? else {
         return Ok(summary);
     };
+    let mut live_objects = HashSet::<ObjectId>::new();
+    for (name, object) in layout.refs(None)? {
+        if retain(&name) {
+            live_objects.insert(object);
+        } else {
+            layout.remove_refs(&RefName::new(name).whatever("invalid ref name")?)?;
+            summary.removed_refs += 1;
+        }
+    }
+    layout.prune_refs()?;
     // Removed refs must not reappear after a crash once their chunks are deleted.
     layout.sync()?;
-    let live_objects = layout
-        .refs(None)?
-        .into_iter()
-        .map(|(_, object)| object)
-        .collect::<HashSet<ObjectId>>();
     let mut live_chunks = HashSet::<(HashAlgorithm, Vec<u8>)>::new();
     for (id, path) in layout.objects()? {
         if live_objects.contains(&id) {
@@ -93,6 +102,7 @@ pub(crate) fn collect(layout: &Layout) -> StoreResult<GcSummary> {
         Err(error) => return Err(error).whatever("unable to list store staging directory"),
     }
     info!(
+        refs = summary.removed_refs,
         objects = summary.removed_objects,
         chunks = summary.removed_chunks,
         freed = %summary.freed_size,

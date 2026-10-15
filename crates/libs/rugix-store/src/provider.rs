@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
 
 use byte_calc::NumBytes;
 use rugix_bundle::reader::StoredBlock;
@@ -19,8 +18,11 @@ use crate::layout::StoreLock;
 ///
 /// Holds a shared lock, so garbage collection cannot delete offered chunks.
 pub struct StoreBlockProvider {
+    layout: Layout,
+    algorithm: HashAlgorithm,
+    /// Compression of each chunk, by hash.
+    chunks: HashMap<Vec<u8>, Option<CompressionFormat>>,
     _lock: Option<StoreLock>,
-    chunks: HashMap<Vec<u8>, (PathBuf, Option<CompressionFormat>)>,
 }
 
 impl StoreBlockProvider {
@@ -30,24 +32,27 @@ impl StoreBlockProvider {
             .chunks()?
             .into_iter()
             .filter(|chunk| chunk.algorithm == algorithm)
-            .map(|chunk| (chunk.hash, (chunk.path, chunk.compression)))
+            .map(|chunk| (chunk.hash, chunk.compression))
             .collect();
         Ok(Self {
-            _lock: lock,
+            layout: layout.clone(),
+            algorithm,
             chunks,
+            _lock: lock,
         })
     }
 }
 
 impl StoredBlockProvider for StoreBlockProvider {
     fn query(&self, hash: &[u8]) -> Option<StoredBlock> {
-        let (path, compression) = self.chunks.get(hash)?;
-        let size = fs::metadata(path).ok()?.len();
+        let compression = *self.chunks.get(hash)?;
+        let file = self.layout.chunk_path(self.algorithm, hash, compression);
+        let size = fs::metadata(&file).ok()?.len();
         Some(StoredBlock {
-            file: path.clone(),
+            file,
             offset: NumBytes::ZERO,
             size: NumBytes::new(size),
-            compression: *compression,
+            compression,
         })
     }
 }

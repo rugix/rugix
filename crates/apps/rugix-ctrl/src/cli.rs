@@ -204,7 +204,7 @@ pub fn main() -> SystemResult<()> {
                 }
             }
         },
-        Command::Store(command) => crate::store::run_command(command)?,
+        Command::Store(command) => crate::store::run_command(command, &load_cli_app_manager()?)?,
         Command::Data(cmd) => match cmd {
             DataCommand::Wipe { yes, no_reboot } => {
                 run_data_wipe(*yes, *no_reboot)?;
@@ -648,14 +648,23 @@ pub fn main() -> SystemResult<()> {
                     let gen_dir = manager
                         .generation_dir(app, gen_number)
                         .whatever("invalid app name")?;
+                    // Stored files need no index because the store offers their chunks.
+                    let files = manager
+                        .generation_files(app, gen_number)
+                        .whatever("unable to access generation files")?
+                        .list()
+                        .whatever("unable to list generation files")?;
                     let paths: Vec<String> = match path {
-                        Some(p) => vec![p.clone()],
-                        // Stored files need no index because the store offers their chunks.
-                        None => manager
-                            .generation_files(app, gen_number)
-                            .whatever("unable to access generation files")?
-                            .list()
-                            .whatever("unable to list generation files")?
+                        Some(p) => {
+                            if files
+                                .iter()
+                                .any(|file| &file.path == p && file.object.is_some())
+                            {
+                                bail!("file {p} is kept in the store and needs no block index");
+                            }
+                            vec![p.clone()]
+                        }
+                        None => files
                             .into_iter()
                             .filter(|file| file.object.is_none())
                             .map(|file| file.path)

@@ -120,10 +120,8 @@ impl ObjectWriter {
                 .chunk_path(self.algorithm, hash, staged.compression);
             move_into_place(&staged.path, &path).whatever("unable to commit chunk")?;
         }
-        let object_path = self.layout.object_path(&id);
-        if !object_path.exists() {
-            move_into_place(&staged_object, &object_path).whatever("unable to commit object")?;
-        }
+        move_into_place(&staged_object, &self.layout.object_path(&id))
+            .whatever("unable to commit object")?;
         self.layout.sync()?;
         self.layout.write_ref(name, &id, self.staging.path())?;
         debug!(object = %id, chunks = self.sizes.len(), new_chunks = self.staged.len(), "committed object");
@@ -153,8 +151,11 @@ impl ObjectWriter {
         {
             return Ok(());
         }
+        // Only formats that the store probes for are kept as they are.
         let (bytes, compression) = match compressed {
-            Some((format, bytes)) if bytes.len() < data.len() => (bytes.to_vec(), Some(format)),
+            Some((format @ CompressionFormat::Xz, bytes)) if bytes.len() < data.len() => {
+                (bytes.to_vec(), Some(format))
+            }
             _ => chunk::compress(data)?,
         };
         let mut path = self.staging.path().join(hex::encode(hash));

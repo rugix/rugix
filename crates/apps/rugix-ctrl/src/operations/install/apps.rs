@@ -303,18 +303,26 @@ fn install_app_file(
         (info.hash, info.size)
     };
 
+    // A later payload replaces an earlier one at the same path, wherever it is kept.
+    let name = GenerationFiles::file_ref(generation.app_name, generation.number, payload_path);
     match store_writer {
         Some(writer) => {
             writer
-                .commit(&GenerationFiles::file_ref(
-                    generation.app_name,
-                    generation.number,
-                    payload_path,
-                ))
+                .commit(&name)
                 .whatever("unable to commit app file to store")?;
+            match fs::remove_file(&file_path) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    return Err(error).whatever("unable to remove replaced app file");
+                }
+                _ => {}
+            }
         }
-        None =>
-        {
+        None => {
+            generation
+                .manager
+                .store()
+                .remove(&name)
+                .whatever("unable to remove replaced stored app file")?;
             #[cfg(unix)]
             if let Some(mode) = mode {
                 fs::set_permissions(&file_path, fs::Permissions::from_mode(mode))
@@ -629,8 +637,11 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
+    use std::io::Read;
     use std::io::Write;
 
+    use rugix_bundle::reader::BundleReader;
+    use rugix_bundle::reader::BundleSource;
     use rugix_common::path::ValidatedRelativePath;
     use rugix_store::Store;
     use rugix_store::DEFAULT_CHUNKER;
@@ -638,9 +649,11 @@ mod tests {
     use si_crypto_hashes::HashDigest;
 
     use super::find_delta_source;
+    use super::install_app_file;
     use super::validate_app_archive;
     use super::validate_app_deliveries;
     use super::AppPayloadDelivery;
+    use super::BundleInstallOptions;
     use super::DeltaSource;
     use super::NewGeneration;
     use crate::apps::files::GenerationFiles;
@@ -693,6 +706,72 @@ mod tests {
         let source = find_delta_source(&generation, &path, &[hash]).unwrap();
         assert!(matches!(source, DeltaSource::Materialized(_)));
         assert_eq!(fs::read(source.path()).unwrap(), content);
+    }
+
+    /// Verifies that a stored app file payload is written to the store instead of the
+    /// generation directory, replacing a file installed earlier at the same path.
+    #[test]
+    fn stored_app_files_replace_earlier_files_in_the_generation_directory() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let bundle_dir = tempdir.path().join("bundle");
+        fs::create_dir_all(bundle_dir.join("payloads")).unwrap();
+        let content = (0..20_000)
+            .map(|line| format!("layer {line}\n"))
+            .collect::<String>();
+        fs::write(bundle_dir.join("payloads/image.tar"), &content).unwrap();
+        fs::write(
+            bundle_dir.join("rugix-bundle.toml"),
+            r#"
+            update-type = "full"
+            [[payloads]]
+            filename = "image.tar"
+            delivery = { type = "app-file", app = "example", path = "images/image.tar", store = true }
+            block-encoding = { chunker = "casync-64", compression = { type = "xz" } }
+            "#,
+        )
+        .unwrap();
+        let bundle = tempdir.path().join("bundle.rugixb");
+        rugix_bundle::builder::pack(&bundle_dir, &bundle).unwrap();
+        let source = BundleSource::from_seekable(File::open(&bundle).unwrap()).unwrap();
+        let mut reader = BundleReader::start(source, None).unwrap();
+        let payload = reader.next_payload().unwrap().unwrap();
+
+        let manager = AppManager::new(
+            tempdir.path().join("apps"),
+            Store::new(tempdir.path().join("store")),
+            AppsConfig::new(),
+        );
+        let path = ValidatedRelativePath::new("images/image.tar").unwrap();
+        let dir = manager.generation_dir("example", 1).unwrap();
+        fs::create_dir_all(dir.join("images")).unwrap();
+        fs::write(dir.join(&path), "from an earlier payload").unwrap();
+        let generation = NewGeneration {
+            manager: &manager,
+            app_name: "example",
+            number: 1,
+            dir: &dir,
+        };
+        let options = BundleInstallOptions {
+            bundle_hash: None,
+            root_cert: None,
+            insecure_skip_bundle_verification: false,
+            insecure_allow_missing_block_index: false,
+            skip_compatibility_check: false,
+            app_configuration: None,
+        };
+
+        let state = install_app_file(&generation, &path, None, true, payload, &options).unwrap();
+        assert_eq!(state.size.unwrap().raw, content.len() as u64);
+        assert!(!dir.join(&path).exists());
+        let mut stored = String::new();
+        manager
+            .generation_files("example", 1)
+            .unwrap()
+            .open(&path)
+            .unwrap()
+            .read_to_string(&mut stored)
+            .unwrap();
+        assert_eq!(stored, content);
     }
 
     #[test]

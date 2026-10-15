@@ -177,6 +177,8 @@ record StoreVerifyOutput {
 
 /// Result of a garbage collection of the content-addressed store (`store gc`).
 record StoreGcOutput {
+    /// Number of removed refs of generations that no longer exist.
+    removed_refs: u64,
     /// Number of deleted objects.
     removed_objects: u64,
     /// Number of deleted chunks.

@@ -74,10 +74,11 @@ pub fn validate_app_name(name: &str) -> BundleResult<()> {
     Ok(())
 }
 
-/// Validate every path and app name declared by a bundle manifest.
+/// Validate every path, app name, and app delivery declared by a bundle manifest.
 ///
 /// App payloads must all name the same app. Rugix Ctrl installs an app bundle as one
 /// generation of one app, so a manifest naming several apps has no valid installation.
+/// Stored app files cannot carry a file mode.
 pub fn validate_manifest_paths(manifest: &BundleManifest) -> BundleResult<()> {
     let mut declared_app: Option<&str> = None;
     for (payload_idx, payload) in manifest.payloads.iter().enumerate() {
@@ -90,6 +91,11 @@ pub fn validate_manifest_paths(manifest: &BundleManifest) -> BundleResult<()> {
                 ValidatedRelativePath::new(config.path.clone()).whatever_with(|_| {
                     format!("invalid app-file path for payload {payload_idx}")
                 })?;
+                if config.store == Some(true) && config.mode.is_some() {
+                    reportify::bail!(
+                        "payload {payload_idx} declares a file mode for a stored file"
+                    );
+                }
                 config.app.as_str()
             }
             DeliveryConfig::AppArchive(config) => {

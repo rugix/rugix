@@ -54,11 +54,6 @@ impl GenerationFiles {
             .expect("valid app names form a valid ref name")
     }
 
-    /// Ref prefix of all stored files of an app.
-    pub fn app_ref(app_name: &str) -> RefName {
-        RefName::new(format!("apps/{app_name}")).expect("valid app names form a valid ref name")
-    }
-
     /// List the generation's payload files, ordered by path.
     pub fn list(&self) -> AppsResult<Vec<GenerationFile>> {
         let mut states = AppManager::load_payload_states(&self.generation_dir)
