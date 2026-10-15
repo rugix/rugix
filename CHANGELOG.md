@@ -9,7 +9,7 @@ Behavior Changes:
 - `rugix-ctrl apps info` reports the persisted lifecycle state as `lifecycle` instead of `state`, so that it is no longer mistaken for the live workload `status` next to it. Both remain objects whose discriminant is `state`.
 - `rugix-ctrl apps info` omits `createdAt` for a generation whose metadata is missing instead of reporting an empty string.
 - Deactivating a Docker Compose app generation removes its Rugix-owned image tags, so images of old generations no longer accumulate. Activation loads them again from the generation directory or the store. Images bundled with `--disable-pinning` keep their original references and are not removed.
-- `rugix-bundler apps pack docker-compose` keeps the bundled container images in the device's content-addressed store. Rugix Ctrl no longer writes `images/*.tar` into the generation directory for such bundles; read them with `rugix-ctrl apps cat` instead. Older Rugix Ctrl versions still write the files when installing such bundles, but cannot read stored files. After a system rollback to an older version, Docker Compose generations installed with the store can only be activated while Docker still has their images, and orchestrator scripts calling `rugix-ctrl apps cat` fail. Pass `--disable-image-store` to keep writing the images into the generation directory while devices may roll back to such a version.
+- `rugix-bundler apps pack docker-compose` keeps the bundled container images in the device's content-addressed store. Rugix Ctrl no longer writes `images/*.tar` into the generation directory for such bundles; read them with `rugix-ctrl apps cat` instead. Older Rugix Ctrl versions still write the files when installing such bundles, but cannot read stored files. After a system rollback to an older version, Docker Compose generations installed with the store can only be activated while Docker still has their images, and orchestrator scripts calling `rugix-ctrl apps cat` fail. Pass `--image-location file` to keep writing the images into the generation directory while devices may roll back to such a version.
 
 Nix integration:
 
@@ -22,7 +22,7 @@ Rugix Bundler:
 - Export `lib.mkComposeBundle` from the Nix flake to package Nix-built container images, Compose configuration, and app metadata.
 - Honor the caller's temporary directory when Skopeo stages container images, including inside Nix build sandboxes.
 - Add the `store` option to `app-file` payload deliveries and show it in `rugix-bundler inspect`.
-- Add `--disable-image-store` to `rugix-bundler apps pack docker-compose` and `storeImages` to `lib.mkComposeBundle` to write bundled images into the generation directory instead of the device's store.
+- Add `--image-location` to `rugix-bundler apps pack docker-compose` and `imageLocation` to `lib.mkComposeBundle` to select whether the device keeps bundled images in its content-addressed store (`store`, the default) or as files in the generation directory (`file`).
 
 Rugix Ctrl:
 
