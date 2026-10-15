@@ -241,7 +241,8 @@ impl Layout {
 }
 
 /// Compressions of chunks, in the order in which they are probed.
-const CHUNK_COMPRESSIONS: [Option<CompressionFormat>; 2] = [Some(CompressionFormat::Xz), None];
+pub(crate) const CHUNK_COMPRESSIONS: [Option<CompressionFormat>; 2] =
+    [Some(CompressionFormat::Xz), None];
 
 /// Committed chunk file.
 pub(crate) struct ChunkFile {
@@ -354,18 +355,24 @@ fn collect_refs(path: &Path, name: String, refs: &mut Vec<(String, ObjectId)>) -
 }
 
 /// Remove the empty directories below `path`, deepest first.
+///
+/// Removing refs needs no lock, so directories may disappear concurrently.
 fn prune_empty_dirs(path: &Path) -> StoreResult<()> {
     for entry in read_dir_if_exists(path)? {
-        if !entry
-            .file_type()
-            .whatever("unable to read ref directory entry")?
-            .is_dir()
-        {
-            continue;
+        match entry.file_type() {
+            Ok(file_type) if file_type.is_dir() => {}
+            Ok(_) => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).whatever("unable to read ref directory entry"),
         }
         prune_empty_dirs(&entry.path())?;
         match fs::remove_dir(entry.path()) {
-            Err(error) if error.kind() != ErrorKind::DirectoryNotEmpty => {
+            Err(error)
+                if !matches!(
+                    error.kind(),
+                    ErrorKind::DirectoryNotEmpty | ErrorKind::NotFound
+                ) =>
+            {
                 return Err(error).whatever("unable to remove empty ref directory");
             }
             _ => {}

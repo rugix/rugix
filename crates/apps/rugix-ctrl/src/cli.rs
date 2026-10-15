@@ -204,7 +204,7 @@ pub fn main() -> SystemResult<()> {
                 }
             }
         },
-        Command::Store(command) => crate::store::run_command(command, &load_cli_app_manager()?)?,
+        Command::Store(command) => crate::store::run_command(command)?,
         Command::Data(cmd) => match cmd {
             DataCommand::Wipe { yes, no_reboot } => {
                 run_data_wipe(*yes, *no_reboot)?;
@@ -770,7 +770,7 @@ fn resolve_cli_generation(
     }
 }
 
-fn load_cli_app_manager() -> SystemResult<crate::apps::manager::AppManager> {
+pub(crate) fn load_cli_app_manager() -> SystemResult<crate::apps::manager::AppManager> {
     let config = crate::apps::config::load_apps_config().whatever("unable to load apps config")?;
     Ok(crate::apps::manager::AppManager::new(
         crate::apps::config::apps_dir().to_owned(),

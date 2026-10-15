@@ -8,7 +8,6 @@ use reportify::ResultExt;
 use rugix_store::RefName;
 use rugix_store::Store;
 
-use crate::apps::manager::AppManager;
 use crate::cli::StoreCommand;
 use crate::config::output::StoreGcOutput;
 use crate::config::output::StoreInfoOutput;
@@ -26,8 +25,8 @@ pub fn open() -> Store {
 }
 
 /// Run a `store` command, printing its JSON output.
-pub fn run_command(command: &StoreCommand, manager: &AppManager) -> SystemResult<()> {
-    let store = manager.store();
+pub fn run_command(command: &StoreCommand) -> SystemResult<()> {
+    let store = open();
     match command {
         StoreCommand::Info => {
             let info = store.info().whatever("unable to inspect store")?;
@@ -79,7 +78,8 @@ pub fn run_command(command: &StoreCommand, manager: &AppManager) -> SystemResult
             Ok(())
         }
         StoreCommand::Gc => {
-            let summary = manager
+            // Only Rugix Apps knows which of its refs are no longer needed.
+            let summary = crate::cli::load_cli_app_manager()?
                 .collect_store_garbage()
                 .whatever("unable to collect store garbage")?;
             print(&StoreGcOutput::new(

@@ -1234,16 +1234,14 @@ impl AppManager {
     /// generation directory exists.
     fn is_live_ref(&self, name: &str) -> bool {
         let mut components = name.split('/');
-        if components.next() != Some("apps") {
+        let (Some("apps"), Some(app_name), Some(generation)) =
+            (components.next(), components.next(), components.next())
+        else {
             return true;
-        }
-        match (components.next(), components.next()) {
-            (Some(app_name), Some(generation)) => match generation.parse::<u64>() {
-                Ok(generation) => self.generation_dir_unchecked(app_name, generation).exists(),
-                Err(_) => true,
-            },
-            _ => true,
-        }
+        };
+        generation.parse::<u64>().map_or(true, |generation| {
+            self.generation_dir_unchecked(app_name, generation).exists()
+        })
     }
 
     /// Garbage collect old generations.

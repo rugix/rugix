@@ -26,6 +26,7 @@ use crate::ObjectId;
 use crate::RefName;
 use crate::StoreResult;
 use crate::chunk;
+use crate::layout::CHUNK_COMPRESSIONS;
 use crate::layout::Layout;
 use crate::layout::LockMode;
 use crate::layout::StoreLock;
@@ -151,9 +152,10 @@ impl ObjectWriter {
         {
             return Ok(());
         }
-        // Only formats that the store probes for are kept as they are.
         let (bytes, compression) = match compressed {
-            Some((format @ CompressionFormat::Xz, bytes)) if bytes.len() < data.len() => {
+            Some((format, bytes))
+                if CHUNK_COMPRESSIONS.contains(&Some(format)) && bytes.len() < data.len() =>
+            {
                 (bytes.to_vec(), Some(format))
             }
             _ => chunk::compress(data)?,
