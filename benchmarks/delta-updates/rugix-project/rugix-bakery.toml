@@ -1,7 +1,0 @@
-[repositories]
-rugix-extra = { git = "https://github.com/rugix/rugix-extra.git", rev = "8dbe4f8" }
-
-[systems.snapshot]
-layer = "snapshot"
-architecture = "arm64"
-target = "generic-grub-efi"
