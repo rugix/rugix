@@ -118,6 +118,13 @@ pub struct PackDockerComposeCmd {
     /// file are saved and included in the bundle).
     #[clap(long)]
     disable_image_bundling: bool,
+    /// Write bundled images into the generation directory instead of the device's
+    /// content-addressed store.
+    ///
+    /// Rugix Ctrl versions without the store cannot read stored images. Use this
+    /// while devices may roll back to such a version.
+    #[clap(long)]
+    disable_image_store: bool,
     /// Extra files or directories to include in the archive.
     /// Each entry is added at the same relative path inside the generation directory.
     #[clap(long = "include")]

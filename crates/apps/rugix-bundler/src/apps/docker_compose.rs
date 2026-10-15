@@ -45,7 +45,8 @@ use super::tar_append_metadata;
 ///   image metadata, and any extra included files/directories. Bundled services are
 ///   rewritten to Rugix-owned bundle-local image tags with `pull_policy: never`.
 /// - An `app-file` payload per Docker image at `images/image-N.tar`, kept in the device's
-///   content-addressed store instead of the generation directory.
+///   content-addressed store instead of the generation directory unless the image store
+///   is disabled.
 #[tracing::instrument(skip_all, fields(app = %cmd.app))]
 pub fn pack(cmd: &crate::PackDockerComposeCmd) -> BundleResult<()> {
     rugix_bundle::manifest::validate_app_name(&cmd.app)?;
@@ -128,7 +129,7 @@ pub fn pack(cmd: &crate::PackDockerComposeCmd) -> BundleResult<()> {
         payloads.push(Payload {
             delivery: DeliveryConfig::AppFile(
                 AppFileDeliveryConfig::new(cmd.app.clone(), image.app_path.clone())
-                    .with_store(Some(true)),
+                    .with_store((!cmd.disable_image_store).then_some(true)),
             ),
             filename: image.payload_filename.clone().into(),
             block_encoding: block_encoding.clone(),
@@ -1151,6 +1152,7 @@ services:
             builder: crate::ImageBuilder::Podman,
             disable_pinning: false,
             disable_image_bundling: false,
+            disable_image_store: false,
             includes: Vec::new(),
             components: Vec::new(),
             health_check_timeout: None,

@@ -17,6 +17,7 @@
   metadata ? { },
   platform ? null,
   healthCheckTimeout ? 120,
+  storeImages ? true,
 }:
 
 assert lib.assertMsg (
@@ -65,6 +66,7 @@ let
     "--platform"
     platform
   ]
+  ++ lib.optional (!storeImages) "--disable-image-store"
   ++ lib.concatMap (component: [
     "--components"
     (toString component)

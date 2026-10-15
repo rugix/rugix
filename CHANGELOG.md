@@ -8,7 +8,7 @@ Behavior Changes:
 - App bundles must carry payloads for a single app. Rugix Bundler rejects a manifest declaring app payloads for several apps, and Rugix Ctrl refuses to install such a bundle. No packing command could produce one, so this affects hand-written bundle manifests only. Pack one bundle per app.
 - `rugix-ctrl apps info` reports the persisted lifecycle state as `lifecycle` instead of `state`, so that it is no longer mistaken for the live workload `status` next to it. Both remain objects whose discriminant is `state`.
 - `rugix-ctrl apps info` omits `createdAt` for a generation whose metadata is missing instead of reporting an empty string.
-- `rugix-bundler apps pack docker-compose` keeps the bundled container images in the device's content-addressed store. Rugix Ctrl no longer writes `images/*.tar` into the generation directory for such bundles; read them with `rugix-ctrl apps cat` instead. Older Rugix Ctrl versions still write the files when installing such bundles, but cannot read stored files. After a system rollback to an older version, Docker Compose generations installed with the store can only be activated while Docker still has their images, and orchestrator scripts calling `rugix-ctrl apps cat` fail.
+- `rugix-bundler apps pack docker-compose` keeps the bundled container images in the device's content-addressed store. Rugix Ctrl no longer writes `images/*.tar` into the generation directory for such bundles; read them with `rugix-ctrl apps cat` instead. Older Rugix Ctrl versions still write the files when installing such bundles, but cannot read stored files. After a system rollback to an older version, Docker Compose generations installed with the store can only be activated while Docker still has their images, and orchestrator scripts calling `rugix-ctrl apps cat` fail. Pass `--disable-image-store` to keep writing the images into the generation directory while devices may roll back to such a version.
 
 Nix integration:
 
@@ -21,6 +21,7 @@ Rugix Bundler:
 - Export `lib.mkComposeBundle` from the Nix flake to package Nix-built container images, Compose configuration, and app metadata.
 - Honor the caller's temporary directory when Skopeo stages container images, including inside Nix build sandboxes.
 - Add the `store` option to `app-file` payload deliveries and show it in `rugix-bundler inspect`.
+- Add `--disable-image-store` to `rugix-bundler apps pack docker-compose` and `storeImages` to `lib.mkComposeBundle` to write bundled images into the generation directory instead of the device's store.
 
 Rugix Ctrl:
 

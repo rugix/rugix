@@ -60,6 +60,11 @@ A custom `rugixBundler` package can also be supplied at this step. Set
 | `metadata`           | Optional app metadata attribute set.                                              |
 | `platform`           | Optional target platform, such as `linux/arm64`.                                  |
 | `healthCheckTimeout` | Seconds to wait for Compose health checks; defaults to 120.                       |
+| `storeImages`        | Keep images in the device's content-addressed store; defaults to `true`.          |
+
+Set `storeImages = false` while devices may roll back to a Rugix Ctrl version without
+the store, which cannot read stored images. Images are then written into the
+generation directory.
 
 Every service must have an entry in `images`. Compose `build` entries are rejected:
 Nix owns image construction. Archives must contain one image, and their paths
