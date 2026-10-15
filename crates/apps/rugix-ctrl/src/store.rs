@@ -1,0 +1,100 @@
+//! Content-addressed store of the device and its `store` commands.
+//!
+//! Rugix Apps keeps `app-file` payloads that opt into the store there. Installations
+//! of system and app bundles use its chunks as local block candidates.
+
+use std::path::Path;
+
+use reportify::ResultExt;
+use rugix_store::RefName;
+use rugix_store::Store;
+
+use crate::cli::StoreCommand;
+use crate::config::output::StoreGcOutput;
+use crate::config::output::StoreInfoOutput;
+use crate::config::output::StoreRefOutput;
+use crate::config::output::StoreVerifyOutput;
+use crate::system::SystemResult;
+
+/// Open the store of the device.
+///
+/// Uses the Rugix state directory when available, so that a factory reset clears the
+/// store together with the apps referencing it, and falls back to
+/// `/var/lib/rugix/store` otherwise.
+pub fn open() -> Store {
+    const STATE_PATH: &str = "/run/rugix/state/store";
+    const VAR_PATH: &str = "/var/lib/rugix/store";
+    if Path::new("/run/rugix/state").exists() {
+        Store::new(STATE_PATH)
+    } else {
+        Store::new(VAR_PATH)
+    }
+}
+
+/// Run a `store` command, printing its JSON output.
+pub fn run_command(command: &StoreCommand) -> SystemResult<()> {
+    let store = open();
+    match command {
+        StoreCommand::Info => {
+            let info = store.info().whatever("unable to inspect store")?;
+            let output = StoreInfoOutput::new(
+                info.refs,
+                info.objects,
+                info.chunks,
+                info.referenced_size.raw,
+                info.stored_size.raw,
+            );
+            print(&output)
+        }
+        StoreCommand::List { prefix } => {
+            let prefix = prefix
+                .as_ref()
+                .map(|prefix| RefName::new(prefix.clone()))
+                .transpose()
+                .whatever("invalid ref prefix")?;
+            let output = store
+                .list(prefix.as_ref())
+                .whatever("unable to list refs")?
+                .into_iter()
+                .map(|stored| {
+                    let size = store.size(&stored.object).whatever_with(|_| {
+                        format!("unable to read object of ref {}", stored.name)
+                    })?;
+                    Ok(StoreRefOutput::new(
+                        stored.name,
+                        stored.object.to_string(),
+                        size.raw,
+                    ))
+                })
+                .collect::<SystemResult<Vec<_>>>()?;
+            print(&output)
+        }
+        StoreCommand::Verify => {
+            let problems = store.verify().whatever("unable to verify store")?;
+            let intact = problems.is_empty();
+            print(&StoreVerifyOutput::new(
+                problems
+                    .into_iter()
+                    .map(Into::into)
+                    .collect::<Vec<_>>()
+                    .into(),
+            ))?;
+            if !intact {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        StoreCommand::Gc => {
+            let summary = store.gc().whatever("unable to collect store garbage")?;
+            print(&StoreGcOutput::new(
+                summary.removed_objects,
+                summary.removed_chunks,
+                summary.freed_size.raw,
+            ))
+        }
+    }
+}
+
+fn print<T: serde::Serialize>(output: &T) -> SystemResult<()> {
+    rugix_cli::json::print_json(output, false).whatever("unable to write output to stdout")
+}

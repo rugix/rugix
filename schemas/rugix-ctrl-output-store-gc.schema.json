@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.output.StoreGcOutput",
+  "type": "object",
+  "description": "Result of a garbage collection of the content-addressed store (`store gc`).",
+  "properties": {
+    "removedObjects": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    },
+    "removedChunks": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    },
+    "freedSize": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    }
+  },
+  "required": [
+    "removedObjects",
+    "removedChunks",
+    "freedSize"
+  ],
+  "unevaluatedProperties": false
+}

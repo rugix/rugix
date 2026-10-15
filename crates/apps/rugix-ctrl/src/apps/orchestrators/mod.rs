@@ -6,6 +6,7 @@ use rugix_bundle::manifest::AppManifest;
 
 use crate::config::apps::AppConfiguration;
 
+use super::files::GenerationFiles;
 use super::AppsResult;
 pub use crate::config::apps::AppStatus;
 pub use crate::config::apps::AppStatusMessage;
@@ -20,8 +21,12 @@ pub struct AppContext<'cx> {
     pub app_name: &'cx str,
     /// Path to the app directory.
     pub app_dir: &'cx Path,
+    /// Generation number.
+    pub generation: u64,
     /// Path to the generation directory.
     pub generation_dir: &'cx Path,
+    /// Payload files of the generation, including those kept in the store.
+    pub files: &'cx GenerationFiles,
     /// Path to persistent app data (survives across generations).
     pub data_dir: &'cx Path,
     /// Path to the effective JSON application configuration, if one exists.

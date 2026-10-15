@@ -56,6 +56,8 @@ record BundleAppFileDeliveryOutput {
     path: string,
     /// Declared Unix file mode, if any.
     mode?: u32,
+    /// Whether the file is kept in the content-addressed store.
+    store?: bool,
 }
 
 record BundleAppArchiveDeliveryOutput {

@@ -155,7 +155,8 @@ fn delivery_output(entry: &format::PayloadEntry) -> SystemResult<BundleDeliveryO
         )),
         (None, None, Some(file), None) => Ok(BundleDeliveryOutput::AppFile(
             BundleAppFileDeliveryOutput::new(file.app.clone(), file.path.clone())
-                .with_mode(file.mode),
+                .with_mode(file.mode)
+                .with_store(file.store),
         )),
         (None, None, None, Some(archive)) => Ok(BundleDeliveryOutput::AppArchive(
             BundleAppArchiveDeliveryOutput::new(archive.app.clone()),

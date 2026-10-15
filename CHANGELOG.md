@@ -8,6 +8,7 @@ Behavior Changes:
 - App bundles must carry payloads for a single app. Rugix Bundler rejects a manifest declaring app payloads for several apps, and Rugix Ctrl refuses to install such a bundle. No packing command could produce one, so this affects hand-written bundle manifests only. Pack one bundle per app.
 - `rugix-ctrl apps info` reports the persisted lifecycle state as `lifecycle` instead of `state`, so that it is no longer mistaken for the live workload `status` next to it. Both remain objects whose discriminant is `state`.
 - `rugix-ctrl apps info` omits `createdAt` for a generation whose metadata is missing instead of reporting an empty string.
+- `rugix-bundler apps pack docker-compose` keeps the bundled container images in the device's content-addressed store. Rugix Ctrl no longer writes `images/*.tar` into the generation directory for such bundles; read them with `rugix-ctrl apps cat` instead. Older Rugix Ctrl versions still write the files.
 
 Nix integration:
 
@@ -19,6 +20,7 @@ Rugix Bundler:
 - Add `docker-archive` Compose image sources for bundling prebuilt images without a registry or container daemon. Archive paths resolve relative to the Compose file, and normal content-based pinning applies.
 - Export `lib.mkComposeBundle` from the Nix flake to package Nix-built container images, Compose configuration, and app metadata.
 - Honor the caller's temporary directory when Skopeo stages container images, including inside Nix build sandboxes.
+- Add the `store` option to `app-file` payload deliveries and show it in `rugix-bundler inspect`.
 
 Rugix Ctrl:
 
@@ -33,6 +35,11 @@ Rugix Ctrl:
 - Add versioned JSON configuration for Rugix Apps, including optional JSON Schema validation, crash-safe application, and rollback of generation/configuration pairs.
 - Accept `--config` on `rugix-ctrl apps install` and `rugix-ctrl apps activate` to supply an application configuration document validated against the incoming app generation's schema. Application configuration is resolved before the new generation is activated, and re-applying the document an app already runs with no longer restarts its workload.
 - Add the `overwrite-init` option to the `rpi-tryboot`, `rpi-uboot`, and `grub` boot flows so installed boot artifacts can retain their existing `init` arguments.
+- Add a content-addressed store for `app-file` payloads with `store = true`. The store splits files into chunks, keeps each distinct chunk once across generations and apps, and keeps the compressed blocks of the bundle as delivered. Removing generations or apps releases their stored files, and `rugix-ctrl apps gc` and `rugix-ctrl apps remove` delete store data no longer in use.
+- Add `rugix-ctrl apps files` and `rugix-ctrl apps cat` to list and read the files of a generation, wherever they are kept, and `rugix-ctrl store info`, `list`, `verify`, and `gc` to inspect and maintain the store.
+- Use chunks in the store as local block sources when installing app and system bundles.
+- Stream Docker Compose images into `docker image load`, from the generation directory or the store.
+- Set `RUGIX_APP_GENERATION` to the generation number for the `generic` and `docker-compose` orchestrators.
 
 Rugix Bundler:
 

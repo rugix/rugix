@@ -114,6 +114,7 @@ pub fn pack(path: &Path, dst: &Path) -> BundleResult<HashDigest> {
                     app: config.app.to_string(),
                     path: config.path.to_string(),
                     mode: config.mode,
+                    store: config.store,
                 })
             } else {
                 None

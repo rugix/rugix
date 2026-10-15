@@ -409,7 +409,7 @@ impl<W> HashWriter<W> {
         }
     }
 
-    #[cfg(test)]
+    /// Return the hash and size of the written bytes.
     fn finalize(self) -> (HashDigest, u64) {
         (self.hasher.finalize(), self.size)
     }

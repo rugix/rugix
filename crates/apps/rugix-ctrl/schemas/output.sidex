@@ -133,6 +133,58 @@ record AppGcAppOutput {
     removed: [u64],
 }
 
+/// Payload file of an app generation (`apps files`).
+record AppFileOutput {
+    /// Path relative to the generation directory.
+    path: string,
+    /// Size of the file in bytes.
+    size?: u64,
+    /// Hashes of the file's content.
+    hashes: [string],
+    /// Stored object holding the file, if the file is kept in the store.
+    object?: string,
+}
+
+/// Summary of the content-addressed store (`store info`).
+record StoreInfoOutput {
+    /// Number of refs.
+    refs: u64,
+    /// Number of objects.
+    objects: u64,
+    /// Number of chunks.
+    chunks: u64,
+    /// Total content size of all refs in bytes, counting shared content once per ref.
+    referenced_size: u64,
+    /// Disk space of all objects and chunks in bytes.
+    stored_size: u64,
+}
+
+/// Ref of the content-addressed store (`store list`).
+record StoreRefOutput {
+    /// Name of the ref.
+    name: string,
+    /// Object the ref names.
+    object: string,
+    /// Size of the object's content in bytes.
+    size: u64,
+}
+
+/// Result of checking the content-addressed store (`store verify`).
+record StoreVerifyOutput {
+    /// Problems found. Empty if the store is intact.
+    problems: [string],
+}
+
+/// Result of a garbage collection of the content-addressed store (`store gc`).
+record StoreGcOutput {
+    /// Number of deleted objects.
+    removed_objects: u64,
+    /// Number of deleted chunks.
+    removed_chunks: u64,
+    /// Disk space of the deleted objects and chunks in bytes.
+    freed_size: u64,
+}
+
 /// Output for component inventory commands.
 record ComponentsOutput {
     /// Component roots that were scanned.

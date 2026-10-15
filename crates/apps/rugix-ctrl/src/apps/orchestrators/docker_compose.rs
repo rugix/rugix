@@ -2,12 +2,16 @@
 
 use std::fmt::Write;
 use std::fs;
+use std::io;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
 
 use reportify::ResultExt;
 use rugix_bundle::manifest::is_valid_environment_variable_name;
 use rugix_bundle::manifest::is_valid_json_pointer;
+use rugix_common::path::ValidatedRelativePath;
 use tracing::info;
 use tracing::warn;
 
@@ -38,6 +42,7 @@ impl DockerCompose {
         let mut content = String::new();
         writeln!(content, "RUGIX_APP_NAME={}", ctx.app_name).unwrap();
         writeln!(content, "RUGIX_APP_DIR={}", ctx.app_dir.display()).unwrap();
+        writeln!(content, "RUGIX_APP_GENERATION={}", ctx.generation).unwrap();
         writeln!(
             content,
             "RUGIX_APP_GENERATION_DIR={}",
@@ -63,6 +68,7 @@ impl DockerCompose {
             .arg(ctx.generation_dir.join("docker-compose.yml"));
         cmd.env("RUGIX_APP_NAME", ctx.app_name)
             .env("RUGIX_APP_DIR", ctx.app_dir)
+            .env("RUGIX_APP_GENERATION", ctx.generation.to_string())
             .env("RUGIX_APP_GENERATION_DIR", ctx.generation_dir)
             .env("RUGIX_APP_DATA_DIR", ctx.data_dir)
             .env_remove("RUGIX_APP_CONFIG_PATH");
@@ -117,6 +123,37 @@ impl DockerCompose {
                 }
             };
             command.env(name, value);
+        }
+        Ok(())
+    }
+
+    /// Load the bundled images, `images/*.tar` in the generation directory or the store.
+    fn load_images(ctx: &AppContext) -> AppsResult<()> {
+        let images_dir = ctx.generation_dir.join("images");
+        if images_dir.exists() {
+            let entries = fs::read_dir(&images_dir).whatever("unable to read images directory")?;
+            for entry in entries {
+                let entry = entry.whatever("unable to read directory entry")?;
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("tar") {
+                    info!(image = ?path, "loading docker image");
+                    let image = fs::File::open(&path).whatever("unable to open docker image")?;
+                    load_image(image, &path.to_string_lossy())?;
+                }
+            }
+        }
+        for file in ctx.files.list()? {
+            let is_image = file
+                .path
+                .strip_prefix("images/")
+                .is_some_and(|name| !name.contains('/') && name.ends_with(".tar"));
+            if file.object.is_none() || !is_image {
+                continue;
+            }
+            info!(image = %file.path, "loading docker image from store");
+            let path = ValidatedRelativePath::new(file.path.clone())
+                .whatever("invalid docker image path")?;
+            load_image(ctx.files.open(&path)?, &file.path)?;
         }
         Ok(())
     }
@@ -223,28 +260,7 @@ impl Orchestrator for DockerCompose {
 
     fn activate(&self, ctx: &AppContext) -> AppsResult<()> {
         Self::write_env_file(ctx)?;
-
-        let images_dir = ctx.generation_dir.join("images");
-        if images_dir.exists() {
-            let entries = fs::read_dir(&images_dir).whatever("unable to read images directory")?;
-            for entry in entries {
-                let entry = entry.whatever("unable to read directory entry")?;
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("tar") {
-                    info!(image = ?path, "loading docker image");
-                    let status = Command::new("docker")
-                        .arg("image")
-                        .arg("load")
-                        .arg("-i")
-                        .arg(&path)
-                        .status()
-                        .whatever("unable to run docker image load")?;
-                    if !status.success() {
-                        reportify::bail!("docker image load failed for {}", path.display());
-                    }
-                }
-            }
-        }
+        Self::load_images(ctx)?;
 
         info!(app = ctx.app_name, "starting docker compose");
         let mut cmd = Self::compose_cmd(ctx)?;
@@ -370,6 +386,25 @@ impl Orchestrator for DockerCompose {
     }
 }
 
+/// Stream an image archive into `docker image load`.
+fn load_image(mut image: impl Read, name: &str) -> AppsResult<()> {
+    let mut child = Command::new("docker")
+        .arg("image")
+        .arg("load")
+        .stdin(Stdio::piped())
+        .spawn()
+        .whatever("unable to run docker image load")?;
+    let mut stdin = child.stdin.take().expect("stdin of the child is piped");
+    let streamed = io::copy(&mut image, &mut stdin);
+    drop(stdin);
+    let status = child.wait().whatever("unable to run docker image load")?;
+    streamed.whatever_with(|_| format!("unable to stream docker image {name}"))?;
+    if !status.success() {
+        reportify::bail!("docker image load failed for {name}");
+    }
+    Ok(())
+}
+
 /// Validate the portable environment variable names accepted in app manifests.
 fn validate_environment_name(name: &str) -> AppsResult<()> {
     if name.is_empty() {
@@ -432,9 +467,11 @@ mod tests {
 
     use rugix_bundle::manifest::AppManifest;
     use rugix_bundle::manifest::DockerComposeConfig;
+    use rugix_store::Store;
 
     use super::AppContext;
     use super::DockerCompose;
+    use crate::apps::files::GenerationFiles;
 
     /// Verifies Compose receives only explicitly mapped scalar configuration values.
     #[test]
@@ -456,10 +493,18 @@ mod tests {
             r#"{"url":"https://example.com/$device","enabled":true}"#,
         )
         .unwrap();
+        let files = GenerationFiles::new(
+            Store::new("/store"),
+            "example",
+            1,
+            "/apps/example/generations/1".into(),
+        );
         let ctx = AppContext {
             app_name: "example",
             app_dir: std::path::Path::new("/apps/example"),
+            generation: 1,
             generation_dir: std::path::Path::new("/apps/example/generations/1"),
+            files: &files,
             data_dir: std::path::Path::new("/apps/example/data"),
             configuration_path: Some(std::path::Path::new("/apps/example/configurations/1.json")),
             configuration: Some(&configuration),

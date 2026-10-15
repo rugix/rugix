@@ -1,0 +1,25 @@
+[package]
+name = "rugix-store"
+description = "Content-addressed file store with chunk deduplication and compression."
+edition = "2024"
+authors.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+byte-calc.workspace = true
+hex.workspace = true
+nix.workspace = true
+reportify.workspace = true
+rugix-bundle.workspace = true
+rugix-chunker.workspace = true
+rugix-common.workspace = true
+rugix-compression.workspace = true
+si-crypto-hashes.workspace = true
+tempfile = "3.20.0"
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -165,6 +165,8 @@ define_tags! {
     PAYLOAD_TYPE_APP_FILE_PATH = 0x2c4e33b4,
     /// Unix file mode for an app file payload.
     PAYLOAD_TYPE_APP_FILE_MODE = 0x83dd01fb?,
+    /// Whether to keep an app file payload in the content-addressed store.
+    PAYLOAD_TYPE_APP_FILE_STORE = 0x9e95013e?,
 
     /// App archive payload: a tar archive extracted into a generation directory.
     PAYLOAD_ENTRY_TYPE_APP_ARCHIVE = 0x40a88630,

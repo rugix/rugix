@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.output.StoreRefOutput",
+  "type": "object",
+  "description": "Ref of the content-addressed store (`store list`).",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "object": {
+      "type": "string"
+    },
+    "size": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    }
+  },
+  "required": [
+    "name",
+    "object",
+    "size"
+  ],
+  "unevaluatedProperties": false
+}

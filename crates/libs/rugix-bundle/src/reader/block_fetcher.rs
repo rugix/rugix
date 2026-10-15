@@ -4,7 +4,6 @@ use std::fs::File;
 use std::io::Seek;
 use std::io::SeekFrom;
 use std::ops::Range;
-use std::path::PathBuf;
 
 use byte_calc::ByteLen;
 use byte_calc::NumBytes;
@@ -25,6 +24,7 @@ use crate::format::stlv::Read as StlvRead;
 use super::BundleProgress;
 use super::PayloadTarget;
 use super::ReaderOptions;
+use super::block_provider::StoredBlock;
 use super::block_provider::StoredBlockProvider;
 use super::cursor::Cursor;
 use super::range_fetcher::RangeFetcher;
@@ -73,24 +73,24 @@ impl<'source> BlockFetcher<'source> {
         })
     }
 
-    /// Return verified decoded bytes; target reads resolve already written duplicates.
+    /// Return the next verified block; target reads resolve already written duplicates.
     #[tracing::instrument(level = "trace", skip_all)]
     pub(crate) fn next<T: PayloadTarget>(
         &mut self,
         target: &mut T,
-    ) -> BundleResult<Option<Vec<u8>>> {
+    ) -> BundleResult<Option<FetchedBlock>> {
         let Some(block) = self.plan.blocks.get(self.next_block) else {
             return Ok(None);
         };
         let hash = &self.plan.hashes[self.next_block * self.plan.algorithm.hash_size()..]
             [..self.plan.algorithm.hash_size()];
-        let data = match block {
+        let (data, compressed) = match block {
             PlannedBlock::Copy(original) => {
                 let (offset, size) = self.decoded[*original];
                 let mut data = Vec::new();
                 target.read_block(offset, size, &mut data)?;
                 verify(self.plan.algorithm, hash, &data)?;
-                data
+                (data, None)
             }
             PlannedBlock::Encoded { range, local } => {
                 let local_data = local.as_ref().and_then(|local| {
@@ -105,11 +105,11 @@ impl<'source> BlockFetcher<'source> {
                         }
                     }
                 });
-                let data = if let Some(data) = local_data {
+                let decoded = if let Some(data) = local_data {
                     if self.ranges.is_none() {
                         self.source.skip((range.end - range.start).into())?;
                     }
-                    data
+                    (data, None)
                 } else if let Some(ranges) = &mut self.ranges {
                     let mut encoded = if local.is_some() {
                         ranges.fallback(range.clone())?
@@ -118,12 +118,12 @@ impl<'source> BlockFetcher<'source> {
                     };
                     let mut retries = 0;
                     loop {
-                        let decoded = decode(self.plan.compression, encoded).and_then(|data| {
-                            verify(self.plan.algorithm, hash, &data)?;
-                            Ok(data)
+                        let decoded = decode(self.plan.compression, encoded).and_then(|decoded| {
+                            verify(self.plan.algorithm, hash, &decoded.0)?;
+                            Ok(decoded)
                         });
                         match decoded {
-                            Ok(data) => break data,
+                            Ok(decoded) => break decoded,
                             Err(error) if retries < 2 => {
                                 warn!(block = self.next_block, %error, "downloaded block rejected, fetching replacement");
                                 retries += 1;
@@ -137,19 +137,30 @@ impl<'source> BlockFetcher<'source> {
                         .whatever("encoded block does not fit into memory")?;
                     let mut encoded = vec![0; size];
                     self.source.read_exact(&mut encoded)?;
-                    let data = decode(self.plan.compression, encoded)?;
-                    verify(self.plan.algorithm, hash, &data)?;
-                    data
+                    let decoded = decode(self.plan.compression, encoded)?;
+                    verify(self.plan.algorithm, hash, &decoded.0)?;
+                    decoded
                 };
                 self.encoded_position = range.end;
-                data
+                decoded
             }
         };
         let size = data.byte_len();
         self.decoded.push((self.decoded_size, size));
         self.decoded_size += size;
         self.next_block += 1;
-        Ok(Some(data))
+        Ok(Some(FetchedBlock {
+            hash: hash.to_vec(),
+            data,
+            compressed: compressed.map(|bytes| {
+                (
+                    self.plan
+                        .compression
+                        .expect("only compressed payloads retain encoded block bytes"),
+                    bytes,
+                )
+            }),
+        }))
     }
 
     pub(crate) fn progress(&self) -> BundleProgress {
@@ -187,6 +198,16 @@ impl<'source> BlockFetcher<'source> {
     }
 }
 
+/// Verified block returned by [`BlockFetcher::next`].
+pub(crate) struct FetchedBlock {
+    /// Decoded block hash.
+    pub(crate) hash: Vec<u8>,
+    /// Decoded block bytes.
+    pub(crate) data: Vec<u8>,
+    /// Compressed bundle bytes of a block that was transferred from the bundle.
+    pub(crate) compressed: Option<(CompressionFormat, Vec<u8>)>,
+}
+
 /// Encoded offsets are fixed before fetching; decoded offsets are produced in order.
 struct BlockPlan {
     end: u64,
@@ -200,15 +221,9 @@ struct BlockPlan {
 enum PlannedBlock {
     Encoded {
         range: Range<u64>,
-        local: Option<LocalBlock>,
+        local: Option<StoredBlock>,
     },
     Copy(usize),
-}
-
-struct LocalBlock {
-    file: PathBuf,
-    offset: NumBytes,
-    size: NumBytes,
 }
 
 impl BlockPlan {
@@ -284,13 +299,7 @@ impl BlockPlan {
             }
             size_index += 1;
             let next = position + length;
-            let local = provider
-                .and_then(|provider| provider.query(hash))
-                .map(|block| LocalBlock {
-                    file: block.file.to_owned(),
-                    offset: block.offset,
-                    size: block.size,
-                });
+            let local = provider.and_then(|provider| provider.query(hash));
             blocks.push(PlannedBlock::Encoded {
                 range: position..next,
                 local,
@@ -341,20 +350,24 @@ impl BlockPlan {
     }
 }
 
-fn read_local(block: &LocalBlock) -> BundleResult<Vec<u8>> {
+fn read_local(block: &StoredBlock) -> BundleResult<Vec<u8>> {
     let mut file = File::open(&block.file).whatever("unable to open stored block")?;
     file.seek(SeekFrom::Start(block.offset.raw))
         .whatever("unable to seek stored block")?;
     let size = usize::try_from(block.size.raw).whatever("stored block does not fit into memory")?;
     let mut data = vec![0; size];
     std::io::Read::read_exact(&mut file, &mut data).whatever("unable to read stored block")?;
-    Ok(data)
+    Ok(decode(block.compression, data)?.0)
 }
 
-fn decode(compression: Option<CompressionFormat>, encoded: Vec<u8>) -> BundleResult<Vec<u8>> {
+/// Decode block bytes, returning the decoded bytes and the compressed input, if any.
+fn decode(
+    compression: Option<CompressionFormat>,
+    encoded: Vec<u8>,
+) -> BundleResult<(Vec<u8>, Option<Vec<u8>>)> {
     match compression {
-        Some(compression) => uncompress_bytes(compression, &encoded),
-        None => Ok(encoded),
+        Some(compression) => Ok((uncompress_bytes(compression, &encoded)?, Some(encoded))),
+        None => Ok((encoded, None)),
     }
 }
 
@@ -644,11 +657,12 @@ mod tests {
     }
 
     impl StoredBlockProvider for FirstBlock {
-        fn query(&self, hash: &[u8]) -> Option<StoredBlock<'_>> {
-            (hash == self.hash).then_some(StoredBlock {
-                file: &self.file,
+        fn query(&self, hash: &[u8]) -> Option<StoredBlock> {
+            (hash == self.hash).then(|| StoredBlock {
+                file: self.file.clone(),
                 offset: NumBytes::ZERO,
                 size: NumBytes::kibibytes(64),
+                compression: None,
             })
         }
     }

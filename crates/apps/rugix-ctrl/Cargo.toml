@@ -38,6 +38,7 @@ rugix-fs.workspace = true
 si-crypto-hashes.workspace = true
 rugix-hooks.workspace = true
 rugix-pki.workspace = true
+rugix-store.workspace = true
 hashbrown.workspace = true
 rugix-version.workspace = true
 jiff = { version = "0.2.14", default-features = false, features = [

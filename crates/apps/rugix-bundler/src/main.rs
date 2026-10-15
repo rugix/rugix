@@ -408,9 +408,10 @@ fn main() -> BundleResult<()> {
                 }
                 if let Some(type_app_file) = &entry.type_app_file {
                     println!(
-                        "  {idx}: app-file app={:?} path={:?} file={}",
+                        "  {idx}: app-file app={:?} path={:?} store={} file={}",
                         type_app_file.app,
                         type_app_file.path,
+                        type_app_file.store == Some(true),
                         HashDigest::new_unchecked(
                             reader.header().hash_algorithm,
                             &entry.file_hash.raw

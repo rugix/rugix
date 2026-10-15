@@ -21,6 +21,8 @@ use rugix_bundle::manifest::ChunkerAlgorithm;
 use rugix_bundle::reader::StoredBlock;
 use rugix_bundle::reader::StoredBlockProvider;
 use rugix_common::slots::SlotState;
+use rugix_store::Store;
+use rugix_store::StoreBlockProvider;
 use si_crypto_hashes::HashAlgorithm;
 use std::io::BufReader;
 use tracing::warn;
@@ -42,7 +44,7 @@ pub struct StoredBlockIndex {
     pub index_file: PathBuf,
 }
 
-#[derive(Debug)]
+/// Local block candidates from indexed files and the store.
 pub struct BlockProvider {
     chunker_algorithm: ChunkerAlgorithm,
     hash_algorithm: HashAlgorithm,
@@ -51,6 +53,7 @@ pub struct BlockProvider {
     hashes: Vec<u8>,
     dimensions: Vec<(NumBytes, NumBytes)>,
     files: Vec<PathBuf>,
+    store: Option<StoreBlockProvider>,
 }
 
 impl BlockProvider {
@@ -63,7 +66,20 @@ impl BlockProvider {
             hashes: Vec::new(),
             dimensions: Vec::new(),
             files: Vec::new(),
+            store: None,
         }
+    }
+
+    /// Also offer the chunks of `store` with a matching hash algorithm.
+    ///
+    /// Holds a shared lock on the store until the provider is dropped.
+    pub fn add_store(&mut self, store: &Store) -> SystemResult<()> {
+        self.store = Some(
+            store
+                .block_provider(self.hash_algorithm)
+                .whatever("unable to load stored chunks")?,
+        );
+        Ok(())
     }
 
     pub fn add_slot(&mut self, slot_name: &str, slot_file: PathBuf) -> SystemResult<()> {
@@ -137,15 +153,17 @@ impl BlockProvider {
 }
 
 impl StoredBlockProvider for BlockProvider {
-    fn query(&self, hash: &[u8]) -> Option<StoredBlock<'_>> {
+    fn query(&self, hash: &[u8]) -> Option<StoredBlock> {
         let table_hash = self.table_hasher.hash_one(hash);
         self.table
             .find(table_hash, |(block, _)| self.get_hash(*block) == hash)
             .map(|(block, file)| StoredBlock {
-                file: &self.files[*file],
+                file: self.files[*file].clone(),
                 offset: self.dimensions[*block].0,
                 size: self.dimensions[*block].1,
+                compression: None,
             })
+            .or_else(|| self.store.as_ref()?.query(hash))
     }
 }
 

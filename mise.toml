@@ -41,6 +41,11 @@ cp generated/rugix_ctrl.output.AppListEntryOutput.schema.json ../../../schemas/r
 cp generated/rugix_ctrl.output.AppInfoOutput.schema.json ../../../schemas/rugix-ctrl-output-app-info.schema.json
 cp generated/rugix_ctrl.output.AppGcAppOutput.schema.json ../../../schemas/rugix-ctrl-output-app-gc.schema.json
 cp generated/rugix_ctrl.output.AppConfigurationSetOutput.schema.json ../../../schemas/rugix-ctrl-output-app-configuration-set.schema.json
+cp generated/rugix_ctrl.output.AppFileOutput.schema.json ../../../schemas/rugix-ctrl-output-app-file.schema.json
+cp generated/rugix_ctrl.output.StoreInfoOutput.schema.json ../../../schemas/rugix-ctrl-output-store-info.schema.json
+cp generated/rugix_ctrl.output.StoreRefOutput.schema.json ../../../schemas/rugix-ctrl-output-store-ref.schema.json
+cp generated/rugix_ctrl.output.StoreVerifyOutput.schema.json ../../../schemas/rugix-ctrl-output-store-verify.schema.json
+cp generated/rugix_ctrl.output.StoreGcOutput.schema.json ../../../schemas/rugix-ctrl-output-store-gc.schema.json
 )
 
 (

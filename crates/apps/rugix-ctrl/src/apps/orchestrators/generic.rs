@@ -27,6 +27,7 @@ impl Generic {
             .arg(operation)
             .env("RUGIX_APP_NAME", ctx.app_name)
             .env("RUGIX_APP_DIR", ctx.app_dir)
+            .env("RUGIX_APP_GENERATION", ctx.generation.to_string())
             .env("RUGIX_APP_GENERATION_DIR", ctx.generation_dir)
             .env("RUGIX_APP_DATA_DIR", ctx.data_dir)
             .env(

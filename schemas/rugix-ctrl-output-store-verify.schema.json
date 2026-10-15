@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.output.StoreVerifyOutput",
+  "type": "object",
+  "description": "Result of checking the content-addressed store (`store verify`).",
+  "properties": {
+    "problems": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "problems"
+  ],
+  "unevaluatedProperties": false
+}

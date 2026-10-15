@@ -61,6 +61,7 @@ rugix-component-set = { path = "crates/libs/rugix-component-set" }
 rugix-compression = { path = "crates/libs/rugix-compression" }
 rugix-fs = { path = "crates/libs/rugix-fs" }
 rugix-hooks = { path = "crates/libs/rugix-hooks" }
+rugix-store = { path = "crates/libs/rugix-store" }
 rugix-tasks = { path = "crates/libs/rugix-tasks" }
 rugix-version = { path = "crates/libs/rugix-version" }
 rugix-pki = { path = "crates/libs/rugix-pki" }

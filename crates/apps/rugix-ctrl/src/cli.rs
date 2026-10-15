@@ -43,6 +43,7 @@ use reportify::whatever;
 use reportify::ResultExt;
 use rugix_common::stream_hasher::StreamHasher;
 
+use crate::config::output::AppFileOutput;
 use crate::config::output::BlockDeviceInfo;
 use crate::daemon::client::DaemonClient;
 use crate::daemon::DaemonOperation;
@@ -203,6 +204,7 @@ pub fn main() -> SystemResult<()> {
                 }
             }
         },
+        Command::Store(command) => crate::store::run_command(command)?,
         Command::Data(cmd) => match cmd {
             DataCommand::Wipe { yes, no_reboot } => {
                 run_data_wipe(*yes, *no_reboot)?;
@@ -569,6 +571,56 @@ pub fn main() -> SystemResult<()> {
                     rugix_cli::json::print_json(&output.generations, false)
                         .whatever("unable to write generations to stdout")?;
                 }
+                AppsCommand::Files { app, generation } => {
+                    let manager = load_cli_app_manager()?;
+                    let generation = resolve_cli_generation(&manager, app, *generation)?;
+                    let files = manager
+                        .generation_files(app, generation)
+                        .whatever("unable to access generation files")?
+                        .list()
+                        .whatever("unable to list generation files")?;
+                    let output = files
+                        .into_iter()
+                        .map(|file| {
+                            let mut hashes = file
+                                .state
+                                .hashes
+                                .values()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>();
+                            hashes.sort();
+                            AppFileOutput::new(
+                                file.path,
+                                hashes
+                                    .into_iter()
+                                    .map(Into::into)
+                                    .collect::<Vec<_>>()
+                                    .into(),
+                            )
+                            .with_size(file.state.size.map(|size| size.raw))
+                            .with_object(file.object.map(|object| object.to_string().into()))
+                        })
+                        .collect::<Vec<_>>();
+                    rugix_cli::json::print_json(&output, false)
+                        .whatever("unable to write generation files to stdout")?;
+                }
+                AppsCommand::Cat {
+                    app,
+                    path,
+                    generation,
+                } => {
+                    let manager = load_cli_app_manager()?;
+                    let generation = resolve_cli_generation(&manager, app, *generation)?;
+                    let path =
+                        ValidatedRelativePath::new(path.clone()).whatever("invalid file path")?;
+                    let mut file = manager
+                        .generation_files(app, generation)
+                        .whatever("unable to access generation files")?
+                        .open(&path)
+                        .whatever("unable to open generation file")?;
+                    io::copy(&mut file, &mut io::stdout().lock())
+                        .whatever("unable to write file to stdout")?;
+                }
                 AppsCommand::Gc { app, keep } => {
                     let results = execute_operation(
                         GarbageCollectApps {
@@ -592,23 +644,22 @@ pub fn main() -> SystemResult<()> {
                     generation,
                 } => {
                     let manager = load_cli_app_manager()?;
-                    let gen_number = match generation {
-                        Some(n) => *n,
-                        None => manager
-                            .current_generation(app)
-                            .whatever("unable to read app state")?
-                            .ok_or_else(|| whatever!("no active generation for app {app}"))?,
-                    };
+                    let gen_number = resolve_cli_generation(&manager, app, *generation)?;
                     let gen_dir = manager
                         .generation_dir(app, gen_number)
                         .whatever("invalid app name")?;
                     let paths: Vec<String> = match path {
                         Some(p) => vec![p.clone()],
-                        None => {
-                            let states =
-                                crate::apps::manager::AppManager::load_payload_states(&gen_dir);
-                            states.into_keys().collect()
-                        }
+                        // Stored files need no index because the store offers their chunks.
+                        None => manager
+                            .generation_files(app, gen_number)
+                            .whatever("unable to access generation files")?
+                            .list()
+                            .whatever("unable to list generation files")?
+                            .into_iter()
+                            .filter(|file| file.object.is_none())
+                            .map(|file| file.path)
+                            .collect(),
                     };
                     for payload_path in &paths {
                         let payload_path = ValidatedRelativePath::new(payload_path.clone())
@@ -695,10 +746,26 @@ fn read_app_configuration(path: &Path) -> SystemResult<crate::config::apps::AppC
     crate::apps::configuration::parse(&content).whatever("unable to parse app configuration")
 }
 
+/// Resolve an optional generation argument, defaulting to the active generation.
+fn resolve_cli_generation(
+    manager: &crate::apps::manager::AppManager,
+    app: &str,
+    generation: Option<u64>,
+) -> SystemResult<u64> {
+    match generation {
+        Some(generation) => Ok(generation),
+        None => manager
+            .current_generation(app)
+            .whatever("unable to read app state")?
+            .ok_or_else(|| whatever!("no active generation for app {app}")),
+    }
+}
+
 fn load_cli_app_manager() -> SystemResult<crate::apps::manager::AppManager> {
     let config = crate::apps::config::load_apps_config().whatever("unable to load apps config")?;
     Ok(crate::apps::manager::AppManager::new(
         crate::apps::config::apps_dir().to_owned(),
+        crate::store::open(),
         config,
     ))
 }
@@ -997,12 +1064,32 @@ pub enum Command {
     /// Manage applications.
     #[clap(subcommand)]
     Apps(AppsCommand),
+    /// Inspect and maintain the content-addressed store.
+    #[clap(subcommand)]
+    Store(StoreCommand),
     /// Manage the data partition.
     #[clap(subcommand)]
     Data(DataCommand),
     /// Unstable experimental commands.
     #[clap(subcommand)]
     Unstable(UnstableCommand),
+}
+
+#[derive(Debug, Parser)]
+pub enum StoreCommand {
+    /// Summarize the contents of the store.
+    Info,
+    /// List refs and the objects they name.
+    List {
+        /// Only list refs at or below this prefix (e.g., `apps/my-app`).
+        prefix: Option<String>,
+    },
+    /// Check that all referenced objects and their chunks are intact.
+    ///
+    /// Exits with status 1 if a problem is found.
+    Verify,
+    /// Delete objects and chunks that no ref reaches.
+    Gc,
 }
 
 #[derive(Debug, Parser)]
@@ -1346,6 +1433,25 @@ pub enum AppsCommand {
     Generations {
         /// App name.
         app: String,
+    },
+    /// List the payload files of a generation and where they are kept.
+    Files {
+        /// App name.
+        app: String,
+        /// Generation number (defaults to the currently active generation).
+        #[clap(long)]
+        generation: Option<u64>,
+    },
+    /// Write a file of a generation to stdout, whether it is kept in the
+    /// generation directory or in the store.
+    Cat {
+        /// App name.
+        app: String,
+        /// Path of the file relative to the generation directory.
+        path: String,
+        /// Generation number (defaults to the currently active generation).
+        #[clap(long)]
+        generation: Option<u64>,
     },
     /// Garbage collect old generations. If no app is specified, runs for all apps.
     Gc {

@@ -266,12 +266,13 @@ impl FixtureProvider {
 }
 
 impl StoredBlockProvider for FixtureProvider {
-    fn query(&self, hash: &[u8]) -> Option<StoredBlock<'_>> {
+    fn query(&self, hash: &[u8]) -> Option<StoredBlock> {
         let &(offset, size) = self.blocks.get(hash)?;
         Some(StoredBlock {
-            file: &self.file,
+            file: self.file.clone(),
             offset: NumBytes::new(offset),
             size: NumBytes::new(size),
+            compression: None,
         })
     }
 }

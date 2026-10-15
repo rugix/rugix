@@ -538,7 +538,13 @@ fn remove_app(
     }
     manager
         .remove_app(&lock, app)
-        .whatever("unable to remove app")
+        .whatever("unable to remove app")?;
+    drop(lock);
+    manager
+        .store()
+        .gc()
+        .whatever("unable to collect store garbage")?;
+    Ok(())
 }
 
 fn garbage_collect_apps(
@@ -558,6 +564,10 @@ fn garbage_collect_apps(
             .whatever("unable to garbage collect")?;
         results.insert(name.clone(), AppGcAppOutput::new(removed.into()));
     }
+    manager
+        .store()
+        .gc()
+        .whatever("unable to collect store garbage")?;
     Ok(results)
 }
 

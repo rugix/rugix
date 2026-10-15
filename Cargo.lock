@@ -1756,6 +1756,7 @@ dependencies = [
  "rugix-fs",
  "rugix-hooks",
  "rugix-pki",
+ "rugix-store",
  "rugix-tasks",
  "rugix-version",
  "rustls",
@@ -1816,6 +1817,23 @@ dependencies = [
  "thiserror 2.0.18",
  "x509-cert",
  "zeroize",
+]
+
+[[package]]
+name = "rugix-store"
+version = "0.1.0"
+dependencies = [
+ "byte-calc",
+ "hex",
+ "nix 0.29.0",
+ "reportify",
+ "rugix-bundle",
+ "rugix-chunker",
+ "rugix-common",
+ "rugix-compression",
+ "si-crypto-hashes",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

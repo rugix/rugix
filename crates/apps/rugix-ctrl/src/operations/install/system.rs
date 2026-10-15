@@ -437,7 +437,7 @@ pub(crate) fn install_payloads(
     Ok(reboot_mode)
 }
 
-/// Prepare locally indexed blocks for decoding a payload.
+/// Prepare locally indexed and stored blocks for decoding a payload.
 fn prepare_block_provider(
     system: &System,
     target_slot_idx: SlotIdx,
@@ -472,6 +472,7 @@ fn prepare_block_provider(
         }
         provider.add_slot(source_slot.name(), source_path.to_path_buf())?;
     }
+    provider.add_store(&crate::store::open())?;
     Ok(provider)
 }
 

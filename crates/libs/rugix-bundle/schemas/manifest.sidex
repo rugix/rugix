@@ -87,7 +87,15 @@ record AppFileDeliveryConfig {
     /// Relative path within the generation directory.
     path: string,
     /// Unix file mode (e.g., `755` for executables).
+    ///
+    /// Not supported for stored files.
     mode?: u32,
+    /// Keep the file in the content-addressed store instead of the generation
+    /// directory.
+    ///
+    /// Stored files are deduplicated and compressed across generations and apps.
+    /// Orchestrators read them with `rugix-ctrl apps cat`.
+    store?: bool,
 }
 
 record AppArchiveDeliveryConfig {

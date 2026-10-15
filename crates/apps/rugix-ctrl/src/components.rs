@@ -237,7 +237,7 @@ impl InstalledComponents {
         let apps_config =
             crate::apps::config::load_apps_config().whatever("unable to load apps config")?;
         let apps_dir = crate::apps::config::apps_dir().to_owned();
-        let manager = AppManager::new(apps_dir, apps_config);
+        let manager = AppManager::new(apps_dir, crate::store::open(), apps_config);
         let apps = manager.list_apps().whatever("unable to list apps")?;
         for app in apps {
             let Some(generation) = manager

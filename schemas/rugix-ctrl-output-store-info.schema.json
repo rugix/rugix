@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.output.StoreInfoOutput",
+  "type": "object",
+  "description": "Summary of the content-addressed store (`store info`).",
+  "properties": {
+    "refs": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    },
+    "objects": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    },
+    "chunks": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    },
+    "referencedSize": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    },
+    "storedSize": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    }
+  },
+  "required": [
+    "refs",
+    "objects",
+    "chunks",
+    "referencedSize",
+    "storedSize"
+  ],
+  "unevaluatedProperties": false
+}

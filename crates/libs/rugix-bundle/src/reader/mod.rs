@@ -93,7 +93,8 @@
 //!    queue. Rejected downloads can request two replacements. Duplicate blocks are read
 //!    from previously written target offsets and verified.
 //! 5. **Write in order.** Only a verified decoded block is passed to
-//!    [`PayloadTarget::write`]. The same bytes update the payload hash and the decoded
+//!    [`PayloadTarget::write_block`], together with its compressed bundle bytes when it
+//!    was transferred compressed. The same bytes update the payload hash and the decoded
 //!    block index. Writing, hashing, decompression, and target reads stay on the
 //!    installation thread while workers continue downloading.
 //! 6. **Finish consumption.** The parser resumes at the encoded payload end. The reader
@@ -448,9 +449,19 @@ impl PayloadReader<'_> {
                 self.reader.options,
             )?;
             while let Some(block) = fetcher.next(&mut target)? {
-                target.write(&block)?;
-                payload_hasher.update(&block);
-                bytes_written += block.byte_len();
+                target.write_block(&VerifiedBlock {
+                    hash: &block.hash,
+                    data: &block.data,
+                    compressed: block
+                        .compressed
+                        .as_ref()
+                        .map(|(format, bytes)| CompressedBlock {
+                            format: *format,
+                            bytes,
+                        }),
+                })?;
+                payload_hasher.update(&block.data);
+                bytes_written += block.data.byte_len();
                 progress(&fetcher.progress());
             }
             self.remaining_data = NumBytes::ZERO;
@@ -506,6 +517,28 @@ pub struct DecodedPayloadInfo {
     pub block_index: Option<format::BlockIndex>,
 }
 
+/// Verified block of a block-encoded payload, passed to [`PayloadTarget::write_block`].
+#[derive(Debug, Clone, Copy)]
+pub struct VerifiedBlock<'block> {
+    /// Decoded block hash, computed with the payload's block hash algorithm.
+    pub hash: &'block [u8],
+    /// Decoded block bytes.
+    pub data: &'block [u8],
+    /// Compressed bytes of the block as transferred in the bundle.
+    ///
+    /// Absent for uncompressed payloads and for blocks resolved locally.
+    pub compressed: Option<CompressedBlock<'block>>,
+}
+
+/// Compressed bytes of a block as transferred in a bundle.
+#[derive(Debug, Clone, Copy)]
+pub struct CompressedBlock<'block> {
+    /// Compression format of the bytes.
+    pub format: CompressionFormat,
+    /// Compressed bytes, decoding to the block's data.
+    pub bytes: &'block [u8],
+}
+
 /// Ordered output for decoded payload blocks and optional reads for deduplication.
 ///
 /// Targets that support deduplication must read previously written bytes at offsets
@@ -514,6 +547,14 @@ pub struct DecodedPayloadInfo {
 pub trait PayloadTarget: Sized {
     /// Write every byte in the supplied block before returning success.
     fn write(&mut self, bytes: &[u8]) -> BundleResult<()>;
+
+    /// Write one verified block of a block-encoded payload.
+    ///
+    /// Targets that keep blocks compressed can reuse the block's compressed bundle
+    /// bytes. The default implementation writes the decoded bytes.
+    fn write_block(&mut self, block: &VerifiedBlock<'_>) -> BundleResult<()> {
+        self.write(block.data)
+    }
 
     /// Replace `buffer` with exactly `size` previously written bytes at `offset`.
     ///

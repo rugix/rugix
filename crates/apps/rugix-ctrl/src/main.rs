@@ -17,6 +17,7 @@ pub mod operations;
 pub mod overlay;
 pub mod payload_db;
 pub mod state;
+pub mod store;
 pub mod system;
 pub mod system_state;
 pub mod utils;

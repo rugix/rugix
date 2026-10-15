@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod configuration;
+pub mod files;
 pub mod manager;
 pub mod orchestrators;
 pub mod systemd;

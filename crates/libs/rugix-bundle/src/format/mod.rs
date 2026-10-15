@@ -155,6 +155,10 @@ define_struct! {
         pub path[PAYLOAD_TYPE_APP_FILE_PATH]: String,
         /// Unix file mode (e.g., 0o755 for executables).
         pub mode[PAYLOAD_TYPE_APP_FILE_MODE]: Option<u32>,
+        /// Whether to keep the file in the content-addressed store.
+        ///
+        /// Older readers skip this optional field and write the file instead.
+        pub store[PAYLOAD_TYPE_APP_FILE_STORE]: Option<bool>,
     }
 }
 
@@ -206,6 +210,28 @@ define_struct! {
         pub hash_algorithm[BLOCK_INDEX_HASH_ALGORITHM]: HashAlgorithm,
         pub block_hashes[BLOCK_INDEX_BLOCK_HASHES]: Bytes,
         pub block_sizes[BLOCK_INDEX_BLOCK_SIZES]: Bytes,
+    }
+}
+
+impl BlockIndex {
+    /// Create a block index from concatenated block hashes and the block sizes.
+    pub fn new(
+        chunker: ChunkerAlgorithm,
+        hash_algorithm: HashAlgorithm,
+        block_hashes: Vec<u8>,
+        block_sizes: &[u32],
+    ) -> Self {
+        Self {
+            chunker,
+            hash_algorithm,
+            block_hashes: Bytes { raw: block_hashes },
+            block_sizes: Bytes {
+                raw: block_sizes
+                    .iter()
+                    .flat_map(|size| size.to_be_bytes())
+                    .collect(),
+            },
+        }
     }
 }
 
