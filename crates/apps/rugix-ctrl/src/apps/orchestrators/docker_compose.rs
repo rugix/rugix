@@ -2,12 +2,17 @@
 
 use std::fmt::Write;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::Stdio;
 
 use reportify::ResultExt;
+use rugix_bundle::manifest::compose::ImageMetadata;
 use rugix_bundle::manifest::is_valid_environment_variable_name;
 use rugix_bundle::manifest::is_valid_json_pointer;
+use rugix_bundle::manifest::owned_image_prefix;
+use rugix_bundle::manifest::IMAGE_METADATA_PATH;
 use tracing::info;
 use tracing::warn;
 
@@ -185,6 +190,58 @@ impl DockerCompose {
         }
     }
 
+    /// Remove the generation's bundled images with Rugix-owned tags (best-effort).
+    ///
+    /// Activation loads them again. Tags kept with `--disable-pinning` may also be used
+    /// outside of the app, so they are left in place.
+    fn remove_bundled_images(ctx: &AppContext) {
+        let path = ctx.generation_dir.join(IMAGE_METADATA_PATH);
+        let metadata = match fs::read(&path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return,
+            Err(err) => {
+                warn!(app = ctx.app_name, path = ?path, "unable to read image metadata: {err}");
+                return;
+            }
+        };
+        let metadata = match serde_json::from_slice::<ImageMetadata>(&metadata) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                warn!(app = ctx.app_name, path = ?path, "unable to parse image metadata: {err}");
+                return;
+            }
+        };
+        let owned_prefix = owned_image_prefix(ctx.app_name);
+        let tags = metadata
+            .images
+            .iter()
+            .map(|image| image.bundle_tag.as_str())
+            .filter(|tag| tag.starts_with(&owned_prefix))
+            .collect::<Vec<_>>();
+        if tags.is_empty() {
+            return;
+        }
+        info!(app = ctx.app_name, ?tags, "removing docker images");
+        // Keep Docker's listing of removed layers out of Rugix Ctrl's stdout.
+        let status = Command::new("docker")
+            .args(["image", "rm"])
+            .args(&tags)
+            .stdout(Stdio::null())
+            .status();
+        match status {
+            Ok(status) if !status.success() => {
+                warn!(app = ctx.app_name, "docker image rm failed (best-effort)");
+            }
+            Err(err) => {
+                warn!(
+                    app = ctx.app_name,
+                    "unable to run docker image rm: {err} (best-effort)"
+                );
+            }
+            _ => {}
+        }
+    }
+
     fn write_activation_diagnostics(ctx: &AppContext, diagnostics: &str) -> Option<PathBuf> {
         let path = ctx
             .generation_dir
@@ -327,6 +384,7 @@ impl Orchestrator for DockerCompose {
             }
             _ => {}
         }
+        Self::remove_bundled_images(ctx);
         Ok(())
     }
 

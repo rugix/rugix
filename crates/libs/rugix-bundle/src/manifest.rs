@@ -47,6 +47,16 @@ pub fn is_valid_environment_variable_name(name: &str) -> bool {
         && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
         && !name.starts_with("RUGIX_")
 }
+
+/// Path of the Compose image metadata relative to an app generation directory.
+pub const IMAGE_METADATA_PATH: &str = "images/rugix-images.json";
+
+/// Repository prefix of the Rugix-owned tags under which an app's Compose images
+/// are bundled.
+pub fn owned_image_prefix(app: &str) -> String {
+    format!("localhost/rugix-apps/{app}/")
+}
+
 /// Validate that an app name is safe for use in file paths, systemd unit names, and
 /// Docker project names.
 ///

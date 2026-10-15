@@ -19,6 +19,7 @@ use rugix_bundle::manifest::compose::ImageOptions as RugixImageOptions;
 use rugix_bundle::manifest::compose::ImageSourceKind;
 use rugix_bundle::manifest::is_valid_environment_variable_name;
 use rugix_bundle::manifest::is_valid_json_pointer;
+use rugix_bundle::manifest::owned_image_prefix;
 use rugix_bundle::manifest::AppArchiveDeliveryConfig;
 use rugix_bundle::manifest::AppFileDeliveryConfig;
 use rugix_bundle::manifest::AppHealthCheckConfig;
@@ -26,6 +27,7 @@ use rugix_bundle::manifest::AppManifest;
 use rugix_bundle::manifest::DeliveryConfig;
 use rugix_bundle::manifest::DockerComposeConfig;
 use rugix_bundle::manifest::Payload;
+use rugix_bundle::manifest::IMAGE_METADATA_PATH;
 use rugix_bundle::BundleResult;
 use serde::Deserialize;
 use tracing::info;
@@ -109,7 +111,7 @@ pub fn pack(cmd: &crate::PackDockerComposeCmd) -> BundleResult<()> {
         if let Some(image_metadata) = &image_metadata {
             let metadata = serde_json::to_vec_pretty(image_metadata)
                 .whatever("unable to serialize image metadata")?;
-            tar_append_bytes(&mut archive, "images/rugix-images.json", &metadata)?;
+            tar_append_bytes(&mut archive, IMAGE_METADATA_PATH, &metadata)?;
         }
         tar_append_includes(&mut archive, &cmd.includes)?;
         tar_append_metadata(&mut archive, cmd.metadata_file.as_deref())?;
@@ -758,7 +760,8 @@ fn packaged_image_tag(
 
 fn bundle_local_tag(app: &str, index: usize, prefix: char, content_id: &str) -> String {
     format!(
-        "localhost/rugix-apps/{app}/image-{index}:{prefix}-{}",
+        "{}image-{index}:{prefix}-{}",
+        owned_image_prefix(app),
         digest_hex(content_id)
     )
 }

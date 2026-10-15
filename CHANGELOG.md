@@ -8,6 +8,7 @@ Behavior Changes:
 - App bundles must carry payloads for a single app. Rugix Bundler rejects a manifest declaring app payloads for several apps, and Rugix Ctrl refuses to install such a bundle. No packing command could produce one, so this affects hand-written bundle manifests only. Pack one bundle per app.
 - `rugix-ctrl apps info` reports the persisted lifecycle state as `lifecycle` instead of `state`, so that it is no longer mistaken for the live workload `status` next to it. Both remain objects whose discriminant is `state`.
 - `rugix-ctrl apps info` omits `createdAt` for a generation whose metadata is missing instead of reporting an empty string.
+- Deactivating a Docker Compose app generation removes its Rugix-owned image tags, so images of old generations no longer accumulate. Activation loads them again from the generation directory. Images bundled with `--disable-pinning` keep their original references and are not removed.
 
 Nix integration:
 
