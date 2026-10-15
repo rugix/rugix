@@ -46,6 +46,9 @@ Do not put `RUGIX_VERSION=...` before `curl` in a pipeline; that only sets the
 variable for the `curl` process.
 
 The installer uses the `rugix-ctrl-musl` Debian package by default. Set
-`RUGIX_DEB_VARIANT=gnu` to install `rugix-ctrl-gnu` instead. The Rugix Ctrl
-package only provides the `rugix-ctrl` binary; the app recovery systemd units
-are installed by this script.
+`RUGIX_DEB_VARIANT=gnu` to install `rugix-ctrl-gnu` instead. Both packages now
+include and enable the app restoration and recovery systemd units. For all
+releases, the installer writes local copies in `/etc/systemd/system/` that
+override the packaged units. This also supports older packages without units.
+The local recovery unit waits for `rugix-docker-runtime-components.service`,
+which publishes Docker runtime capabilities for app dependency checks.

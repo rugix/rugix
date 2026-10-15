@@ -104,6 +104,19 @@ build_deb() {
     # Install the binary.
     install -Dm755 "${binary_path}" "${staging_dir}/usr/bin/${binary_name}"
 
+    local depends=""
+    if [ "${binary_name}" = "rugix-ctrl" ]; then
+        depends="init-system-helpers (>= 1.63)"
+        for unit in rugix-apps-restore-units.service rugix-apps-recover.service; do
+            install -Dm644 "${PROJECT_DIR}/crates/apps/rugix-ctrl/assets/${unit}" \
+                "${staging_dir}/usr/lib/systemd/system/${unit}"
+        done
+        for script in postinst prerm postrm; do
+            install -Dm755 "${PROJECT_DIR}/packaging/debian/rugix-ctrl.${script}" \
+                "${staging_dir}/DEBIAN/${script}"
+        done
+    fi
+
     # Install the copyright file (required by Debian Policy 12.5).
     local doc_dir="${staging_dir}/usr/share/doc/${package_name}"
     mkdir -p "${doc_dir}"
@@ -144,6 +157,7 @@ Architecture: ${deb_arch}
 Maintainer: Silitics GmbH <info@silitics.com>
 Installed-Size: ${installed_size}
 Conflicts: ${conflicts}
+Depends: ${depends}
 Priority: optional
 Section: embedded
 Description: ${description}

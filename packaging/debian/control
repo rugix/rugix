@@ -12,6 +12,7 @@ Rules-Requires-Root: no
 Package: rugix-ctrl-gnu
 Architecture: any
 Conflicts: rugix-ctrl-musl
+Depends: init-system-helpers (>= 1.63)
 Description: Rugix system management tool (glibc build)
  Rugix is a suite of open-source tools for building reliable, secure,
  and over-the-air updatable embedded Linux devices. This package
@@ -24,6 +25,7 @@ Description: Rugix system management tool (glibc build)
 Package: rugix-ctrl-musl
 Architecture: any
 Conflicts: rugix-ctrl-gnu
+Depends: init-system-helpers (>= 1.63)
 Description: Rugix system management tool (musl build)
  Rugix is a suite of open-source tools for building reliable, secure,
  and over-the-air updatable embedded Linux devices. This package

@@ -6,6 +6,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  packaging:
+    name: Test Debian Packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Test Debian Packaging
+        run: python3 scripts/tests/test_build_debs.py
+
   check-and-lint:
     name: Check and Lint
     runs-on: ubuntu-latest
