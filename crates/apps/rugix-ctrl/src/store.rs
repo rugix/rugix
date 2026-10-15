@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use reportify::bail;
 use reportify::ResultExt;
 use rugix_store::RefName;
 use rugix_store::Store;
@@ -71,7 +72,7 @@ pub fn run_command(command: &StoreCommand) -> SystemResult<()> {
         }
         StoreCommand::Verify => {
             let problems = store.verify().whatever("unable to verify store")?;
-            let intact = problems.is_empty();
+            let count = problems.len();
             print(&StoreVerifyOutput::new(
                 problems
                     .into_iter()
@@ -79,8 +80,8 @@ pub fn run_command(command: &StoreCommand) -> SystemResult<()> {
                     .collect::<Vec<_>>()
                     .into(),
             ))?;
-            if !intact {
-                std::process::exit(1);
+            if count > 0 {
+                bail!("store verification found {count} problems");
             }
             Ok(())
         }

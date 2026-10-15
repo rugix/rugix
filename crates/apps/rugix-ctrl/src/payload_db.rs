@@ -72,14 +72,13 @@ impl BlockProvider {
 
     /// Also offer the chunks of `store` with a matching hash algorithm.
     ///
-    /// Holds a shared lock on the store until the provider is dropped.
-    pub fn add_store(&mut self, store: &Store) -> SystemResult<()> {
-        self.store = Some(
-            store
-                .block_provider(self.hash_algorithm)
-                .whatever("unable to load stored chunks")?,
-        );
-        Ok(())
+    /// Holds a shared lock on the store until the provider is dropped. Stored chunks
+    /// only save downloads, so an inaccessible store is logged and skipped.
+    pub fn add_store(&mut self, store: &Store) {
+        match store.block_provider(self.hash_algorithm) {
+            Ok(provider) => self.store = Some(provider),
+            Err(error) => warn!("unable to offer stored chunks as local blocks: {error:?}"),
+        }
     }
 
     pub fn add_slot(&mut self, slot_name: &str, slot_file: PathBuf) -> SystemResult<()> {

@@ -539,7 +539,6 @@ fn remove_app(
     manager
         .remove_app(&lock, app)
         .whatever("unable to remove app")?;
-    drop(lock);
     manager
         .store()
         .gc()
@@ -564,6 +563,9 @@ fn garbage_collect_apps(
             .whatever("unable to garbage collect")?;
         results.insert(name.clone(), AppGcAppOutput::new(removed.into()));
     }
+    manager
+        .remove_orphaned_refs()
+        .whatever("unable to remove orphaned refs")?;
     manager
         .store()
         .gc()

@@ -45,14 +45,15 @@
 //!
 //! Writers, readers, and block providers hold a shared lock on `lock`. Garbage
 //! collection holds it exclusively, so it never deletes data in use and can empty
-//! `tmp/`. Everything reachable from a ref survives garbage collection.
+//! `tmp/`. Everything reachable from a ref survives garbage collection. Resolving,
+//! listing, and removing refs needs no lock, because refs are replaced atomically
+//! and removing a ref only makes data eligible for deletion.
 //!
 //! [`PayloadTarget`]: rugix_bundle::reader::PayloadTarget
 //! [block index]: rugix_bundle::format::BlockIndex
 
 use std::fs;
 use std::io::ErrorKind;
-use std::path::Path;
 use std::path::PathBuf;
 
 use byte_calc::NumBytes;
@@ -106,7 +107,7 @@ pub const DEFAULT_HASH_ALGORITHM: HashAlgorithm = HashAlgorithm::Sha512_256;
 /// Content-addressed file store rooted at a directory.
 ///
 /// Creating a store does not touch the file system. Directories are created when
-/// the store is first locked.
+/// the first file is added.
 #[derive(Debug, Clone)]
 pub struct Store {
     layout: Layout,
@@ -118,11 +119,6 @@ impl Store {
         Self {
             layout: Layout::new(root.into()),
         }
-    }
-
-    /// Root directory of the store.
-    pub fn root(&self) -> &Path {
-        self.layout.root()
     }
 
     /// Start adding a file that is split with `chunker` and hashed with `hash_algorithm`.
@@ -150,11 +146,16 @@ impl Store {
     }
 
     /// Resolve a ref to the object it names.
+    ///
+    /// Returns `None` if no ref has this name, including when refs exist below it.
     pub fn resolve(&self, name: &RefName) -> StoreResult<Option<ObjectId>> {
         match fs::read_to_string(self.layout.ref_path(name)) {
             Ok(content) => Ok(Some(layout::parse_ref(&content)?)),
             Err(error)
-                if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) =>
+                if matches!(
+                    error.kind(),
+                    ErrorKind::NotFound | ErrorKind::NotADirectory | ErrorKind::IsADirectory
+                ) =>
             {
                 Ok(None)
             }
@@ -185,6 +186,9 @@ impl Store {
     }
 
     /// Delete all objects and chunks that no ref reaches and empty `tmp/`.
+    ///
+    /// Waits until no writer, reader, or block provider is alive. Calling this while
+    /// holding one of them in the same process therefore never returns.
     pub fn gc(&self) -> StoreResult<GcSummary> {
         gc::collect(&self.layout)
     }
@@ -209,15 +213,6 @@ pub struct StoreRef {
     pub name: String,
     /// Object the ref names.
     pub object: ObjectId,
-}
-
-/// Identity and size of a committed object.
-#[derive(Debug, Clone)]
-pub struct ObjectInfo {
-    /// ID of the object.
-    pub id: ObjectId,
-    /// Size of the object's content.
-    pub size: NumBytes,
 }
 
 #[cfg(test)]

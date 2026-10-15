@@ -25,6 +25,7 @@ use rugix_common::path::ValidatedRelativePath;
 use rugix_common::pipe::buffered_pipe;
 use rugix_store::DEFAULT_CHUNKER;
 use rugix_store::DEFAULT_HASH_ALGORITHM;
+use si_crypto_hashes::HashDigest;
 use tracing::info;
 use tracing::warn;
 
@@ -86,12 +87,16 @@ pub(crate) fn install_payloads(
         if let Some(type_app_file) = &payload_entry.type_app_file {
             let payload_path = ValidatedRelativePath::new(type_app_file.path.clone())
                 .whatever("invalid app-file path")?;
-            let delivery = AppFileDelivery {
-                mode: type_app_file.mode,
-                store: type_app_file.store == Some(true),
-            };
-            let state =
-                install_app_file(&new_generation, &payload_path, delivery, payload, options)?;
+            let mode = type_app_file.mode;
+            let store = type_app_file.store == Some(true);
+            let state = install_app_file(
+                &new_generation,
+                &payload_path,
+                mode,
+                store,
+                payload,
+                options,
+            )?;
             payload_states.insert(payload_path.as_str().to_owned(), state);
             continue;
         }
@@ -119,7 +124,7 @@ pub(crate) fn install_payloads(
                     block_encoding.chunker.clone(),
                     block_encoding.hash_algorithm,
                 );
-                provider.add_store(app_manager.store())?;
+                provider.add_store(app_manager.store());
                 Some(provider)
             } else {
                 None
@@ -197,26 +202,18 @@ struct NewGeneration<'generation> {
     dir: &'generation Path,
 }
 
-/// Delivery options of an `app-file` payload.
-#[derive(Debug, Clone, Copy)]
-struct AppFileDelivery {
-    /// Unix file mode of a file in the generation directory.
-    mode: Option<u32>,
-    /// Whether to keep the file in the store.
-    store: bool,
-}
-
-/// Install an `app-file` payload into the generation directory or the store.
+/// Install an `app-file` payload into the generation directory or, if `store` is set,
+/// the store.
+///
+/// The file `mode` applies to files in the generation directory.
 fn install_app_file(
     generation: &NewGeneration<'_>,
     payload_path: &ValidatedRelativePath,
-    delivery: AppFileDelivery,
+    mode: Option<u32>,
+    store: bool,
     payload: PayloadReader<'_>,
     options: &BundleInstallOptions,
 ) -> SystemResult<payload_db::PayloadState> {
-    if delivery.store && delivery.mode.is_some() {
-        bail!("stored app file {payload_path} must not declare a file mode");
-    }
     ensure_no_symlink_components(generation.dir, payload_path)
         .whatever("app-file path contains a symbolic link")?;
     let file_path = generation.dir.join(payload_path);
@@ -225,7 +222,7 @@ fn install_app_file(
         .as_ref()
         .map(|provider| provider as &dyn StoredBlockProvider);
     let delta_encoding = payload.entry().delta_encoding.clone();
-    let mut store_writer = if delivery.store {
+    let mut store_writer = if store {
         // Blocks of a delta payload encode the patch, not the file, so the file is
         // chunked like files that do not arrive as blocks.
         let (chunker, hash_algorithm) = match &payload.header().block_encoding {
@@ -270,7 +267,7 @@ fn install_app_file(
         match delta_encoding.format {
             rugix_bundle::manifest::DeltaEncodingFormat::Xdelta => {}
         }
-        let source = find_delta_source(generation, payload_path, input)?;
+        let source = find_delta_source(generation, payload_path, &input.hashes)?;
         let algorithm = delta_encoding.original_hash.algorithm();
         let (hash, size) = match &mut store_writer {
             Some(writer) => {
@@ -319,7 +316,7 @@ fn install_app_file(
         None =>
         {
             #[cfg(unix)]
-            if let Some(mode) = delivery.mode {
+            if let Some(mode) = mode {
                 fs::set_permissions(&file_path, fs::Permissions::from_mode(mode))
                     .whatever("unable to set app file permissions")?;
             }
@@ -378,7 +375,7 @@ fn app_file_block_provider(
             }
         }
     }
-    provider.add_store(generation.manager.store())?;
+    provider.add_store(generation.manager.store());
     Ok(Some(provider))
 }
 
@@ -401,12 +398,13 @@ impl DeltaSource {
 
 /// Find the copy of the file in an earlier generation that a delta payload applies to.
 ///
-/// Xdelta requires a seekable source, so a stored file is copied into the new
-/// generation directory, which an interrupted installation leaves incomplete.
+/// The source must match one of the `input_hashes`. Xdelta requires a seekable source,
+/// so a stored file is copied into the new generation directory, which an interrupted
+/// installation leaves incomplete.
 fn find_delta_source(
     generation: &NewGeneration<'_>,
     payload_path: &ValidatedRelativePath,
-    input: &format::DeltaEncodingInput,
+    input_hashes: &[HashDigest],
 ) -> SystemResult<DeltaSource> {
     let store = generation.manager.store();
     for old_generation in generation
@@ -426,8 +424,7 @@ fn find_delta_source(
         let Some(old_state) = old_states.get(payload_path.as_str()) else {
             continue;
         };
-        if !input
-            .hashes
+        if !input_hashes
             .iter()
             .any(|hash| old_state.hashes.get(&hash.algorithm()) == Some(hash))
         {
@@ -508,6 +505,15 @@ struct AppPayloadDelivery<'a> {
 
 /// Validate an app bundle header and return the app it installs.
 fn validate_app_bundle_header(header: &format::BundleHeader) -> SystemResult<String> {
+    for (payload_idx, entry) in header.payload_index.iter().enumerate() {
+        if entry
+            .type_app_file
+            .as_ref()
+            .is_some_and(|file| file.store == Some(true) && file.mode.is_some())
+        {
+            bail!("app bundle payload {payload_idx} declares a file mode for a stored file");
+        }
+    }
     let deliveries = header
         .payload_index
         .iter()
@@ -620,11 +626,74 @@ fn validate_app_archive(file: File) -> SystemResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::fs;
     use std::fs::File;
+    use std::io::Write;
 
+    use rugix_common::path::ValidatedRelativePath;
+    use rugix_store::Store;
+    use rugix_store::DEFAULT_CHUNKER;
+    use rugix_store::DEFAULT_HASH_ALGORITHM;
+    use si_crypto_hashes::HashDigest;
+
+    use super::find_delta_source;
     use super::validate_app_archive;
     use super::validate_app_deliveries;
     use super::AppPayloadDelivery;
+    use super::DeltaSource;
+    use super::NewGeneration;
+    use crate::apps::files::GenerationFiles;
+    use crate::apps::manager::AppManager;
+    use crate::config::apps::AppsConfig;
+    use crate::payload_db::PayloadState;
+
+    /// Verifies that a stored file of an earlier generation is copied out of the store
+    /// as the seekable source of a delta payload.
+    #[test]
+    fn stored_delta_sources_are_copied_out_of_the_store() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(
+            tempdir.path().join("apps"),
+            Store::new(tempdir.path().join("store")),
+            AppsConfig::new(),
+        );
+        let path = ValidatedRelativePath::new("images/app.tar").unwrap();
+        let content = b"content of the old image";
+        let hash: HashDigest = DEFAULT_HASH_ALGORITHM.hash(content);
+        let old_dir = manager.generation_dir("example", 1).unwrap();
+        fs::create_dir_all(&old_dir).unwrap();
+        let state = PayloadState {
+            hashes: [(hash.algorithm(), hash.clone())].into_iter().collect(),
+            ..PayloadState::default()
+        };
+        AppManager::save_payload_states(
+            &old_dir,
+            &HashMap::from([(path.as_str().to_owned(), state)]),
+        )
+        .unwrap();
+        AppManager::mark_complete(&old_dir).unwrap();
+        let mut writer = manager
+            .store()
+            .writer(DEFAULT_CHUNKER, DEFAULT_HASH_ALGORITHM)
+            .unwrap();
+        writer.write_all(content).unwrap();
+        writer
+            .commit(&GenerationFiles::file_ref("example", 1, &path))
+            .unwrap();
+        let new_dir = manager.generation_dir("example", 2).unwrap();
+        fs::create_dir_all(&new_dir).unwrap();
+        let generation = NewGeneration {
+            manager: &manager,
+            app_name: "example",
+            number: 2,
+            dir: &new_dir,
+        };
+
+        let source = find_delta_source(&generation, &path, &[hash]).unwrap();
+        assert!(matches!(source, DeltaSource::Materialized(_)));
+        assert_eq!(fs::read(source.path()).unwrap(), content);
+    }
 
     #[test]
     fn app_bundle_paths_are_validated_before_installation() {

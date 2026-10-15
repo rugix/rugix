@@ -8,7 +8,7 @@ Behavior Changes:
 - App bundles must carry payloads for a single app. Rugix Bundler rejects a manifest declaring app payloads for several apps, and Rugix Ctrl refuses to install such a bundle. No packing command could produce one, so this affects hand-written bundle manifests only. Pack one bundle per app.
 - `rugix-ctrl apps info` reports the persisted lifecycle state as `lifecycle` instead of `state`, so that it is no longer mistaken for the live workload `status` next to it. Both remain objects whose discriminant is `state`.
 - `rugix-ctrl apps info` omits `createdAt` for a generation whose metadata is missing instead of reporting an empty string.
-- `rugix-bundler apps pack docker-compose` keeps the bundled container images in the device's content-addressed store. Rugix Ctrl no longer writes `images/*.tar` into the generation directory for such bundles; read them with `rugix-ctrl apps cat` instead. Older Rugix Ctrl versions still write the files.
+- `rugix-bundler apps pack docker-compose` keeps the bundled container images in the device's content-addressed store. Rugix Ctrl no longer writes `images/*.tar` into the generation directory for such bundles; read them with `rugix-ctrl apps cat` instead. Older Rugix Ctrl versions still write the files when installing such bundles, but cannot read stored images. After a system rollback to an older version, Docker Compose generations installed with the store can only be activated while Docker still has their images.
 
 Nix integration:
 

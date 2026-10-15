@@ -14,7 +14,10 @@ use si_crypto_hashes::HashAlgorithm;
 use crate::StoreResult;
 
 /// XZ preset for chunks compressed by the store.
-const COMPRESSION_LEVEL: u8 = 6;
+// Chunks are at most a few hundred KiB, so the larger dictionaries of higher presets
+// barely improve compression while costing devices time and up to 94 MiB of memory.
+// Preset 1 needs about 10 MiB and compresses container images within 5% of preset 6.
+const COMPRESSION_LEVEL: u8 = 1;
 
 /// Compress chunk content, keeping it uncompressed if compression does not help.
 pub(crate) fn compress(data: &[u8]) -> StoreResult<(Vec<u8>, Option<CompressionFormat>)> {

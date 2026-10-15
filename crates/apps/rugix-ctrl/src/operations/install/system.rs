@@ -472,7 +472,7 @@ fn prepare_block_provider(
         }
         provider.add_slot(source_slot.name(), source_path.to_path_buf())?;
     }
-    provider.add_store(&crate::store::open())?;
+    provider.add_store(&crate::store::open());
     Ok(provider)
 }
 

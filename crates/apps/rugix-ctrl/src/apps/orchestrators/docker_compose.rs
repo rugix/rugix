@@ -398,11 +398,14 @@ fn load_image(mut image: impl Read, name: &str) -> AppsResult<()> {
     let streamed = io::copy(&mut image, &mut stdin);
     drop(stdin);
     let status = child.wait().whatever("unable to run docker image load")?;
-    streamed.whatever_with(|_| format!("unable to stream docker image {name}"))?;
-    if !status.success() {
-        reportify::bail!("docker image load failed for {name}");
+    match streamed {
+        // A broken pipe means that Docker stopped reading, which its status explains.
+        Err(error) if error.kind() != io::ErrorKind::BrokenPipe || status.success() => {
+            Err(error).whatever_with(|_| format!("unable to stream docker image {name}"))
+        }
+        _ if !status.success() => reportify::bail!("docker image load failed for {name}"),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Validate the portable environment variable names accepted in app manifests.

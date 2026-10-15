@@ -2,15 +2,15 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::fs::File;
 use std::io;
 use std::io::Write;
-use std::os::fd::AsRawFd;
+use std::path::Path;
 use std::path::PathBuf;
 
 use byte_calc::NumBytes;
 use reportify::ResultExt;
 use reportify::bail;
+use reportify::whatever;
 use rugix_bundle::BundleResult;
 use rugix_bundle::reader::PayloadTarget;
 use rugix_bundle::reader::VerifiedBlock;
@@ -22,7 +22,7 @@ use si_crypto_hashes::HashAlgorithm;
 use tempfile::TempDir;
 use tracing::debug;
 
-use crate::ObjectInfo;
+use crate::ObjectId;
 use crate::RefName;
 use crate::StoreResult;
 use crate::chunk;
@@ -40,7 +40,6 @@ use crate::object::Object;
 /// discards staged data.
 pub struct ObjectWriter {
     layout: Layout,
-    _lock: StoreLock,
     staging: TempDir,
     chunker_algorithm: ChunkerAlgorithm,
     chunker: AnyChunker,
@@ -54,6 +53,9 @@ pub struct ObjectWriter {
     size: u64,
     /// Chunks staged by this writer, by hash.
     staged: HashMap<Vec<u8>, StagedChunk>,
+    // Fields are dropped in order, so the lock is released only after the staging
+    // directory is removed, which garbage collection would otherwise race.
+    _lock: StoreLock,
 }
 
 /// Chunk written to the staging directory.
@@ -80,7 +82,6 @@ impl ObjectWriter {
             .whatever("invalid chunker configuration")?;
         Ok(Self {
             layout,
-            _lock: lock,
             staging,
             chunker_algorithm,
             chunker,
@@ -91,14 +92,15 @@ impl ObjectWriter {
             offsets: Vec::new(),
             size: 0,
             staged: HashMap::new(),
+            _lock: lock,
         })
     }
 
-    /// Make the file durable and point the ref `name` at it.
+    /// Make the file durable, point the ref `name` at it, and return its object ID.
     ///
     /// Replaces an existing ref of the same name.
     #[tracing::instrument(level = "debug", skip(self), fields(name = %name))]
-    pub fn commit(mut self, name: &RefName) -> StoreResult<ObjectInfo> {
+    pub fn commit(mut self, name: &RefName) -> StoreResult<ObjectId> {
         if !self.pending.is_empty() {
             self.add_pending_chunk()?;
         }
@@ -111,7 +113,7 @@ impl ObjectWriter {
         let (id, encoded) = object.encode();
         let staged_object = self.staging.path().join("object");
         fs::write(&staged_object, &encoded).whatever("unable to stage object")?;
-        self.sync()?;
+        self.layout.sync()?;
         for (hash, staged) in &self.staged {
             let path = self
                 .layout
@@ -122,13 +124,10 @@ impl ObjectWriter {
         if !object_path.exists() {
             move_into_place(&staged_object, &object_path).whatever("unable to commit object")?;
         }
-        self.sync()?;
+        self.layout.sync()?;
         self.layout.write_ref(name, &id, self.staging.path())?;
         debug!(object = %id, chunks = self.sizes.len(), new_chunks = self.staged.len(), "committed object");
-        Ok(ObjectInfo {
-            id,
-            size: NumBytes::new(self.size),
-        })
+        Ok(id)
     }
 
     /// Record the pending bytes of the stream as a chunk.
@@ -180,16 +179,9 @@ impl ObjectWriter {
             None => self
                 .layout
                 .find_chunk(self.algorithm, hash)
-                .ok_or_else(|| reportify::whatever!("chunk at offset {offset} is missing"))?,
+                .ok_or_else(|| whatever!("chunk at offset {offset} is missing"))?,
         };
         chunk::read(&path, compression, self.algorithm, hash)
-    }
-
-    /// Flush all data on the store's file system to disk.
-    fn sync(&self) -> StoreResult<()> {
-        let directory =
-            File::open(self.staging.path()).whatever("unable to open staging directory")?;
-        nix::unistd::syncfs(directory.as_raw_fd()).whatever("unable to synchronize store")
     }
 }
 
@@ -240,14 +232,14 @@ impl PayloadTarget for &mut ObjectWriter {
             .read_chunk_at(offset.raw)
             .whatever("unable to read block from store")?;
         if buffer.len() as u64 != size.raw {
-            reportify::bail!("stored block at offset {offset} has an unexpected size");
+            bail!("stored block at offset {offset} has an unexpected size");
         }
         Ok(())
     }
 }
 
 /// Rename a file into place, creating its parent directory.
-fn move_into_place(from: &std::path::Path, to: &std::path::Path) -> io::Result<()> {
+fn move_into_place(from: &Path, to: &Path) -> io::Result<()> {
     fs::create_dir_all(to.parent().expect("store files are in subdirectories"))?;
     fs::rename(from, to)
 }

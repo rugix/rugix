@@ -3,8 +3,6 @@
 use std::io;
 use std::io::Read;
 
-use byte_calc::NumBytes;
-
 use crate::chunk;
 use crate::layout::Layout;
 use crate::layout::StoreLock;
@@ -30,11 +28,6 @@ impl ObjectReader {
             buffer: Vec::new(),
             position: 0,
         }
-    }
-
-    /// Size of the file's content.
-    pub fn size(&self) -> NumBytes {
-        self.object.size()
     }
 
     /// Load the next chunk into the buffer, returning `false` at the end.

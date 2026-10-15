@@ -4,6 +4,7 @@ use std::fs;
 use std::fs::File;
 use std::io::ErrorKind;
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -43,38 +44,38 @@ impl Layout {
         Self { root }
     }
 
-    pub(crate) fn root(&self) -> &Path {
-        &self.root
-    }
-
-    /// Lock the store, returning `None` if the store does not exist.
+    /// Lock the store, returning `None` if nothing has been written to it yet.
     ///
-    /// A missing store is empty. Not creating it keeps read-only access from writing
-    /// to the file system.
+    /// Such a store is empty. The lock file is opened read-only, so reading never
+    /// writes to the file system.
     pub(crate) fn lock(&self, mode: LockMode) -> StoreResult<Option<StoreLock>> {
-        if !self.root.exists() {
-            return Ok(None);
+        match File::open(self.lock_path()) {
+            Ok(file) => lock_file(file, mode).map(Some),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error).whatever("unable to open store lock"),
         }
-        self.create_and_lock(mode).map(Some)
     }
 
-    /// Lock the store, creating its root directory if necessary.
+    /// Lock the store, creating it if necessary.
     pub(crate) fn create_and_lock(&self, mode: LockMode) -> StoreResult<StoreLock> {
         fs::create_dir_all(&self.root).whatever("unable to create store directory")?;
         let file = fs::OpenOptions::new()
             .create(true)
             .truncate(false)
-            .read(true)
             .write(true)
-            .open(self.root.join("lock"))
+            .open(self.lock_path())
             .whatever("unable to open store lock")?;
-        let arg = match mode {
-            LockMode::Shared => FlockArg::LockShared,
-            LockMode::Exclusive => FlockArg::LockExclusive,
-        };
-        Flock::lock(file, arg)
-            .map_err(|(_, errno)| errno)
-            .whatever("unable to lock store")
+        lock_file(file, mode)
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        self.root.join("lock")
+    }
+
+    /// Flush all data on the store's file system to disk.
+    pub(crate) fn sync(&self) -> StoreResult<()> {
+        let root = File::open(&self.root).whatever("unable to open store directory")?;
+        nix::unistd::syncfs(root.as_raw_fd()).whatever("unable to synchronize store")
     }
 
     /// Directory with staging directories of writers.
@@ -229,6 +230,16 @@ pub(crate) struct ChunkFile {
     pub(crate) hash: Vec<u8>,
     pub(crate) compression: Option<CompressionFormat>,
     pub(crate) path: PathBuf,
+}
+
+fn lock_file(file: File, mode: LockMode) -> StoreResult<StoreLock> {
+    let arg = match mode {
+        LockMode::Shared => FlockArg::LockShared,
+        LockMode::Exclusive => FlockArg::LockExclusive,
+    };
+    Flock::lock(file, arg)
+        .map_err(|(_, errno)| errno)
+        .whatever("unable to lock store")
 }
 
 /// Parse the content of a ref.

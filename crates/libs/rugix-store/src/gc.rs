@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::ErrorKind;
+use std::path::Path;
 
 use byte_calc::NumBytes;
 use reportify::ResultExt;
@@ -44,18 +45,22 @@ pub struct StoreInfo {
 
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) fn collect(layout: &Layout) -> StoreResult<GcSummary> {
-    let _lock = layout.lock(LockMode::Exclusive)?;
+    let mut summary = GcSummary {
+        removed_objects: 0,
+        removed_chunks: 0,
+        freed_size: NumBytes::ZERO,
+    };
+    let Some(_lock) = layout.lock(LockMode::Exclusive)? else {
+        return Ok(summary);
+    };
+    // Removed refs must not reappear after a crash once their chunks are deleted.
+    layout.sync()?;
     let live_objects = layout
         .refs(None)?
         .into_iter()
         .map(|(_, object)| object)
         .collect::<HashSet<ObjectId>>();
     let mut live_chunks = HashSet::<(HashAlgorithm, Vec<u8>)>::new();
-    let mut summary = GcSummary {
-        removed_objects: 0,
-        removed_chunks: 0,
-        freed_size: NumBytes::ZERO,
-    };
     for (id, path) in layout.objects()? {
         if live_objects.contains(&id) {
             let object = Object::load(layout, &id)?;
@@ -159,13 +164,13 @@ pub(crate) fn info(layout: &Layout) -> StoreResult<StoreInfo> {
 }
 
 /// Remove a file and return its size.
-fn remove(path: &std::path::Path) -> StoreResult<NumBytes> {
+fn remove(path: &Path) -> StoreResult<NumBytes> {
     let size = file_size(path)?;
     fs::remove_file(path).whatever_with(|_| format!("unable to remove {path:?}"))?;
     Ok(size)
 }
 
-fn file_size(path: &std::path::Path) -> StoreResult<NumBytes> {
+fn file_size(path: &Path) -> StoreResult<NumBytes> {
     Ok(NumBytes::new(
         fs::metadata(path)
             .whatever_with(|_| format!("unable to read metadata of {path:?}"))?
