@@ -773,7 +773,7 @@ fn resolve_cli_generation(
 pub(crate) fn load_cli_app_manager() -> SystemResult<crate::apps::manager::AppManager> {
     let config = crate::apps::config::load_apps_config().whatever("unable to load apps config")?;
     Ok(crate::apps::manager::AppManager::new(
-        crate::apps::config::apps_dir().to_owned(),
+        crate::apps::config::apps_dir(),
         crate::store::open(),
         config,
     ))

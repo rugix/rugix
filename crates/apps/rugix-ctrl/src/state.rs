@@ -14,6 +14,20 @@ pub const STATE_CONFIG_DIR: &str = "/etc/rugix/state";
 pub const STATE_CONFIG_PATH: &str = "/etc/rugix/state.toml";
 const STATE_RUNTIME_DIR: &str = "/run/rugix/state/.rugix";
 
+/// Directory for data that Rugix Ctrl keeps across reboots, such as installed apps.
+///
+/// Uses the Rugix state directory when state management is active, so that a factory
+/// reset clears the data, and falls back to `/var/lib/rugix` otherwise.
+pub fn state_dir() -> &'static Path {
+    const STATE_PATH: &str = "/run/rugix/state";
+    const VAR_PATH: &str = "/var/lib/rugix";
+    if Path::new(STATE_PATH).exists() {
+        Path::new(STATE_PATH)
+    } else {
+        Path::new(VAR_PATH)
+    }
+}
+
 /// Loads the state configuration from the provided directory.
 pub fn load_state_config() -> SystemResult<StateConfig> {
     let mut combined = StateConfig::new();

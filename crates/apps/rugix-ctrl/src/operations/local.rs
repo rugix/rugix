@@ -79,7 +79,7 @@ impl Executor for LocalExecutor<'_> {
 fn load_app_manager() -> SystemResult<AppManager> {
     let config = load_apps_config().whatever("unable to load apps config")?;
     Ok(AppManager::new(
-        crate::apps::config::apps_dir().to_owned(),
+        crate::apps::config::apps_dir(),
         crate::store::open(),
         config,
     ))

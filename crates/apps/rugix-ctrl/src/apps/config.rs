@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 use reportify::ResultExt;
 
@@ -42,17 +43,7 @@ fn detect_service_manager() -> String {
     "none".to_owned()
 }
 
-/// Root directory for app data.
-///
-/// Uses the Rugix state directory when available (so that a factory reset
-/// also clears installed apps and their data), otherwise falls back to
-/// `/var/lib/rugix/apps`.
-pub fn apps_dir() -> &'static Path {
-    const STATE_PATH: &str = "/run/rugix/state/apps";
-    const VAR_PATH: &str = "/var/lib/rugix/apps";
-    if Path::new("/run/rugix/state").exists() {
-        Path::new(STATE_PATH)
-    } else {
-        Path::new(VAR_PATH)
-    }
+/// Root directory for app data, below the [state directory](crate::state::state_dir).
+pub fn apps_dir() -> PathBuf {
+    crate::state::state_dir().join("apps")
 }

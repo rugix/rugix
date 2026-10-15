@@ -15,13 +15,9 @@ use crate::config::output::StoreRefOutput;
 use crate::config::output::StoreVerifyOutput;
 use crate::system::SystemResult;
 
-/// Open the store of the device.
-///
-/// The store is a sibling of the apps directory. It lives in the Rugix state directory
-/// when available, so that a factory reset clears it together with the apps that
-/// reference it.
+/// Open the store of the device, below the [state directory](crate::state::state_dir).
 pub fn open() -> Store {
-    Store::new(crate::apps::config::apps_dir().with_file_name("store"))
+    Store::new(crate::state::state_dir().join("store"))
 }
 
 /// Run a `store` command, printing its JSON output.
