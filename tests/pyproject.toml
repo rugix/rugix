@@ -4,7 +4,7 @@ version = "0.0.0"
 description = "System tests for Rugix Ctrl and Rugix Bundler."
 requires-python = ">=3.11"
 dependencies = [
-    "rugix-testkit @ git+https://github.com/rugix/rugix-testkit.git@work/agents/per-repo-system-tests",
+    "rugix-testkit @ git+https://github.com/rugix/rugix-testkit.git@main",
     "pytest-xdist>=3.0",
 ]
 

@@ -1,5 +1,5 @@
 [repositories]
-rugix-testkit = { git = "https://github.com/rugix/rugix-testkit.git", branch = "work/agents/per-repo-system-tests", dir = "bakery" }
+rugix-testkit = { git = "https://github.com/rugix/rugix-testkit.git", branch = "main", dir = "bakery" }
 
 [systems.customized-amd64]
 layer = "customized-efi"
