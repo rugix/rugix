@@ -52,7 +52,7 @@ rugix-tasks.workspace = true
 # HTTP and TLS: The version of `rustls` must match the version used by `ureq`.
 ureq = { version = "3.0.3", default-features = false, features = [
     "rustls-no-provider",
-    "rustls-webpki-roots",
+    "platform-verifier",
 ] }
 rustls = { version = "0.23.46", default-features = false, features = [
     "aws_lc_rs",

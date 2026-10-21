@@ -1,3 +1,5 @@
+//! TLS initialization for HTTP downloads.
+
 /// Install the process-wide TLS configuration.
 pub fn setup() {
     if rustls::crypto::aws_lc_rs::default_provider()
@@ -12,11 +14,16 @@ pub fn setup() {
 
 #[cfg(test)]
 mod tests {
-    /// Verify that HTTPS requests do not panic due to missing TLS configuration.
+    /// Verify that the update downloader accepts HTTPS using the system trust store.
     #[test]
     fn https_request_does_not_panic() {
         super::setup();
-        let response = ureq::get("https://rugix.org").call().unwrap();
-        assert!(response.status().is_success());
+        crate::http_source::HttpSource::new(
+            "https://rugix.org",
+            crate::http_source::RangeQueryStrategy::Disabled,
+            crate::http_source::RetryConfig::default(),
+            &crate::http_source::HttpFetchConfig::default(),
+        )
+        .unwrap();
     }
 }

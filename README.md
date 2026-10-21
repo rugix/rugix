@@ -73,6 +73,17 @@ management solutions, so **you stay in control without vendor lock-in**.
 Rugix empowers teams to **ship robust products fast and without compromising on best practices** like read-only root filesystems, atomic OTA updates, reliable application deployment, and reproducible builds.
 
 
+## HTTPS Trust Store
+
+Rugix Ctrl uses the operating system's CA certificates to verify HTTPS update
+servers. Install and maintain a CA bundle, such as the `ca-certificates` package,
+on target devices. A missing or empty trust store causes HTTPS verification to fail.
+Debian packages install this dependency automatically. Trust-store updates take
+effect when a new update download creates its HTTPS client.
+
+Configure bundle signing roots separately. HTTPS trust roots authenticate the
+download server; bundle verification authenticates the software being installed.
+
 ## Development
 
 Rugix uses [mise](https://mise.jdx.dev/) for development tools and tasks. Tool

@@ -65,6 +65,7 @@ class DebianPackagingTests(unittest.TestCase):
                         dependencies = run("dpkg-deb", "-f", str(package), "Depends")
                         if binary == "rugix-ctrl":
                             self.assertIn("init-system-helpers (>= 1.63)", dependencies)
+                            self.assertIn("ca-certificates", dependencies)
                             for unit in UNITS:
                                 self.assertEqual(
                                     (root / "usr/lib/systemd/system" / unit).read_bytes(),

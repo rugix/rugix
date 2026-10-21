@@ -135,6 +135,11 @@ impl HttpSource {
         // request-send deadline also bounds GET response headers; the transport
         // bounds body idleness without expiring a progressing stream.
         let config = ureq::Agent::config_builder()
+            .tls_config(
+                ureq::tls::TlsConfig::builder()
+                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                    .build(),
+            )
             .timeout_resolve(Some(timeout))
             .timeout_connect(Some(timeout))
             .timeout_send_request(Some(timeout))

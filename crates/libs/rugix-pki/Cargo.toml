@@ -27,7 +27,7 @@ base64 = "0.22"
 pem-rfc7468 = { version = "0.7", features = ["std", "alloc"] }
 
 # X.509 chain validation
-rustls-webpki = { version = "0.103", default-features = false, features = [
+rustls-webpki = { version = "0.103.16", default-features = false, features = [
     "std",
     "aws-lc-rs",
 ] }

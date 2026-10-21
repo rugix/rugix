@@ -106,7 +106,7 @@ build_deb() {
 
     local depends=""
     if [ "${binary_name}" = "rugix-ctrl" ]; then
-        depends="init-system-helpers (>= 1.63)"
+        depends="ca-certificates, init-system-helpers (>= 1.63)"
         for unit in rugix-apps-restore-units.service rugix-apps-recover.service; do
             install -Dm644 "${PROJECT_DIR}/crates/apps/rugix-ctrl/assets/${unit}" \
                 "${staging_dir}/usr/lib/systemd/system/${unit}"
