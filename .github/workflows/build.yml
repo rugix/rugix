@@ -48,6 +48,8 @@ jobs:
           rustup show active-toolchain
           rustup target add ${{ matrix.target }}
       - name: Install Locked Tools
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
         run: mise install --locked github:cross-rs/cross github:CycloneDX/cyclonedx-rust-cargo
       - name: Build Binaries
         run: mise run --skip-tools build ${{ matrix.target }}

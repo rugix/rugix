@@ -27,6 +27,8 @@ jobs:
       - name: Install Rust Toolchain
         run: rustup show active-toolchain
       - name: Install Locked Tools
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
         run: mise install --locked cargo:cargo-deny github:google/osv-scanner
       - name: Check
         run: mise run --skip-tools check
@@ -42,6 +44,8 @@ jobs:
           install: false
           cache: true
       - name: Install Locked Tools
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
         run: mise install --locked python uv
       - name: Check System Tests
         run: mise run --skip-tools check:tests
