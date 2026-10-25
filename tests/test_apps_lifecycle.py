@@ -108,9 +108,9 @@ def test_app_lifecycle(
 def test_staged_app_install(
     vm: VMHandle, generic_app_bundle: Path, bundle_url: Callable[[Path], str]
 ) -> None:
-    """An app installed with `--no-activate` stays inactive until it is activated.
-    Its generation reports the origin supplied at installation, also after the
-    activation."""
+    """An app installed with `--no-activate` stays inactive until it is activated,
+    and garbage collection keeps it until then. Its generation reports the origin
+    supplied at installation, also after the activation."""
     origin = {"source": "system-test", "version": "1.0.0"}
     vm.run(
         [
@@ -135,7 +135,11 @@ def test_staged_app_install(
         False,
     )
     assert generation["origin"] == origin
+    assert generation["staged"]
     assert not exists(vm, _marker(GENERIC_APP))
+
+    _apps_command(vm, "gc", GENERIC_APP)
+    assert [g["number"] for g in app_info(vm, GENERIC_APP)["generations"]] == [1]
 
     _apps_command(vm, "activate", GENERIC_APP, "1")
     wait_for_app_state(vm, GENERIC_APP, "running")

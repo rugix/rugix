@@ -358,12 +358,16 @@
         },
         "origin": {
           "$ref": "#/$defs/rugix_ctrl.apps.AppOrigin"
+        },
+        "staged": {
+          "type": "boolean"
         }
       },
       "required": [
         "number",
         "complete",
-        "active"
+        "active",
+        "staged"
       ],
       "unevaluatedProperties": false
     },

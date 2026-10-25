@@ -1369,7 +1369,8 @@ pub enum AppsCommand {
         /// Install the new generation without activating it.
         ///
         /// Activate the generation later with `apps activate`, which also accepts
-        /// `--config`.
+        /// `--config`. Garbage collection keeps the generation until it or a newer
+        /// generation is activated.
         #[clap(long, conflicts_with = "config")]
         no_activate: bool,
         /// Skip bundle verification (insecure, do not use in production).
@@ -1490,6 +1491,9 @@ pub enum AppsCommand {
         app: Option<String>,
         /// Number of previously activated generations to keep (in addition to the
         /// currently active generation, which is always kept).
+        ///
+        /// Generations installed with `--no-activate` that wait for their activation
+        /// are kept as well.
         #[clap(long, default_value_t = 1)]
         keep: usize,
     },

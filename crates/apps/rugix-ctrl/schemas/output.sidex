@@ -122,6 +122,8 @@ record GenerationInfoOutput {
     metadata?: JsonValue,
     /// Origin supplied with `apps install --origin`, if any.
     origin?: AppOrigin,
+    /// Whether the generation was installed with `apps install --no-activate`.
+    staged: bool,
 }
 
 /// Result of setting application configuration.

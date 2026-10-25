@@ -392,6 +392,7 @@ fn query_app(manager: &AppManager, app: String) -> SystemResult<AppInfoOutput> {
                 generation.meta.number,
                 generation.complete,
                 Some(generation.meta.number) == current,
+                generation.meta.staged == Some(true),
             )
             .with_created_at(created_at(&generation.meta).map(Into::into))
             .with_last_activated(generation.meta.last_activated.clone())

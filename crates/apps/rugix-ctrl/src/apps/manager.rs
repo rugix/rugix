@@ -1246,9 +1246,11 @@ impl AppManager {
 
     /// Garbage collect old generations.
     ///
-    /// Generations that were never activated are always removed (they are not valid
-    /// rollback targets). Among previously-activated generations, at most `keep` of
-    /// the most recent ones are retained. The currently active generation is never
+    /// Generations that were never activated are removed (they are not valid
+    /// rollback targets), except for complete generations installed with
+    /// `--no-activate` that are newer than every activated generation, which wait
+    /// for their activation. Among previously-activated generations, at most `keep`
+    /// of the most recent ones are retained. The currently active generation is never
     /// removed. Stored files of removed generations remain in the store until its
     /// next garbage collection.
     /// The caller must hold the [`AppLock`] for this app.
@@ -1263,9 +1265,23 @@ impl AppManager {
         generations.sort_by_key(|g| g.meta.number);
         let mut removed = Vec::new();
 
-        // Remove all never-activated generations.
+        // An activation of a newer generation supersedes generations installed
+        // without activation. Generation numbers only grow, unlike the clock.
+        let newest_activated = generations
+            .iter()
+            .filter(|generation| generation.meta.last_activated.is_some())
+            .map(|generation| generation.meta.number)
+            .max();
+        let is_staged = |generation: &ResolvedGeneration| {
+            generation.complete
+                && generation.meta.staged == Some(true)
+                && newest_activated.is_none_or(|newest| generation.meta.number > newest)
+        };
+
+        // Remove all never-activated generations that do not wait for activation.
         for gen in &generations {
             if gen.meta.last_activated.is_none()
+                && !is_staged(gen)
                 && !protected_generations.contains(&gen.meta.number)
             {
                 if let Err(e) = self.remove_generation(app_name, gen.meta.number) {
@@ -2118,6 +2134,61 @@ mod tests {
         assert_eq!(manager.gc(&lock, "example", 1).unwrap(), vec![1, 4]);
         assert!(manager.generation_dir("example", 2).unwrap().exists());
         assert!(manager.generation_dir("example", 3).unwrap().exists());
+    }
+
+    /// Verifies that garbage collection keeps complete generations installed without
+    /// activation until a newer generation is activated.
+    #[test]
+    fn garbage_collection_keeps_staged_generations_until_superseded() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(
+            tempdir.path().join("apps"),
+            Store::new(tempdir.path().join("store")),
+            AppsConfig::new(),
+        );
+        for generation in 1..=5 {
+            setup_generation(&manager, "example", generation, "#!/bin/sh\nexit 0\n");
+        }
+        // Generation 2 is staged but superseded by the activation of generation 3.
+        // Generation 4 waits for its activation. Generation 5 is a staged
+        // installation that was interrupted.
+        for generation in [2, 4, 5] {
+            let dir = manager.generation_dir("example", generation).unwrap();
+            manager
+                .write_generation_metadata(
+                    &dir,
+                    &AppGeneration::new(generation, "2026-07-13T00:00:00Z".to_owned())
+                        .with_staged(Some(true)),
+                )
+                .unwrap();
+        }
+        std::fs::remove_file(
+            manager
+                .generation_dir("example", 5)
+                .unwrap()
+                .join(".rugix/complete"),
+        )
+        .unwrap();
+        for generation in [1, 3] {
+            AppManager::mark_activated(
+                &manager.generation_dir("example", generation).unwrap(),
+                None,
+            )
+            .unwrap();
+        }
+        manager
+            .write_state("example", &AppState::Active(AppStateActive::new(3)))
+            .unwrap();
+
+        let lock = manager.lock_app("example").unwrap();
+        assert_eq!(manager.gc(&lock, "example", 0).unwrap(), vec![1, 2, 5]);
+        assert!(manager.generation_dir("example", 4).unwrap().exists());
+
+        AppManager::mark_activated(&manager.generation_dir("example", 4).unwrap(), None).unwrap();
+        manager
+            .write_state("example", &AppState::Active(AppStateActive::new(4)))
+            .unwrap();
+        assert_eq!(manager.gc(&lock, "example", 0).unwrap(), vec![3]);
     }
 
     /// Store a file for a generation without creating the generation.

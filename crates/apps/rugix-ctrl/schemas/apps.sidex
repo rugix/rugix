@@ -110,6 +110,11 @@ record AppGeneration {
     configuration_revision?: u64,
     /// Origin of the generation, as supplied with `apps install --origin`.
     origin?: AppOrigin,
+    /// Whether the generation was installed with `apps install --no-activate`.
+    ///
+    /// Garbage collection keeps such a generation until it is activated or a newer
+    /// generation is activated.
+    staged?: bool,
 }
 
 /// Arbitrary JSON document describing where a generation came from.

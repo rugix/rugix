@@ -169,7 +169,8 @@ pub(crate) fn install_payloads(
                 generation,
                 jiff::Timestamp::now().to_string(),
             )
-            .with_origin(options.app_origin.clone()),
+            .with_origin(options.app_origin.clone())
+            .with_staged(options.skip_app_activation.then_some(true)),
         )
         .whatever("unable to write generation metadata")?;
     AppManager::finalize_generation(&generation_dir)
