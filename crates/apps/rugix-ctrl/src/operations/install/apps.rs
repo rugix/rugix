@@ -168,11 +168,16 @@ pub(crate) fn install_payloads(
             &crate::config::apps::AppGeneration::new(
                 generation,
                 jiff::Timestamp::now().to_string(),
-            ),
+            )
+            .with_origin(options.app_origin.clone()),
         )
         .whatever("unable to write generation metadata")?;
     AppManager::finalize_generation(&generation_dir)
         .whatever("unable to finalize app generation")?;
+    if options.skip_app_activation {
+        info!(app = %app_name, generation, "installed app generation without activating it");
+        return Ok(());
+    }
 
     // Resolving configuration before activation means a document that does not satisfy
     // the new generation's schema fails the installation without stopping a running
@@ -751,14 +756,7 @@ mod tests {
             number: 1,
             dir: &dir,
         };
-        let options = BundleInstallOptions {
-            bundle_hash: None,
-            root_cert: None,
-            insecure_skip_bundle_verification: false,
-            insecure_allow_missing_block_index: false,
-            skip_compatibility_check: false,
-            app_configuration: None,
-        };
+        let options = BundleInstallOptions::default();
 
         let state = install_app_file(&generation, &path, None, true, payload, &options).unwrap();
         assert_eq!(state.size.unwrap().raw, content.len() as u64);

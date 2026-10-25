@@ -32,6 +32,7 @@ use super::EventSink;
 use super::Operation;
 use crate::apps::manager::AppManager;
 use crate::config::apps::AppConfiguration;
+use crate::config::apps::AppOrigin;
 use crate::config::config::Config;
 use crate::config::output::ComponentsCheckOutput;
 use crate::http_source::DownloadStats;
@@ -213,8 +214,8 @@ pub trait ReadSeek: Read + Seek + Send {}
 
 impl<T: Read + Seek + Send> ReadSeek for T {}
 
-/// Bundle verification and compatibility options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Bundle verification, compatibility, and app installation options.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct BundleInstallOptions {
     pub(crate) bundle_hash: Option<HashDigest>,
     pub(crate) root_cert: Option<Vec<u8>>,
@@ -223,6 +224,12 @@ pub(crate) struct BundleInstallOptions {
     pub(crate) skip_compatibility_check: bool,
     /// Device-specific configuration for the app installed by the bundle.
     pub(crate) app_configuration: Option<AppConfiguration>,
+    /// Origin to record with the generation of the app installed by the bundle.
+    #[serde(default)]
+    pub(crate) app_origin: Option<AppOrigin>,
+    /// Install the app's generation without activating it.
+    #[serde(default)]
+    pub(crate) skip_app_activation: bool,
 }
 
 mod apps;

@@ -108,7 +108,15 @@ record AppGeneration {
     last_activated?: string,
     /// Configuration revision used for the last successful activation, if any.
     configuration_revision?: u64,
+    /// Origin of the generation, as supplied with `apps install --origin`.
+    origin?: AppOrigin,
 }
+
+/// Arbitrary JSON document describing where a generation came from.
+///
+/// Rugix Ctrl stores it with the generation without interpreting it, so that the
+/// tool that installed a generation can recognize it later.
+alias AppOrigin: json
 
 /// Arbitrary JSON application configuration.
 #[json(type = "any")]

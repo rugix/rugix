@@ -397,6 +397,7 @@ fn query_app(manager: &AppManager, app: String) -> SystemResult<AppInfoOutput> {
             .with_last_activated(generation.meta.last_activated.clone())
             .with_configuration_revision(generation.meta.configuration_revision)
             .with_metadata(metadata.map(Into::into))
+            .with_origin(generation.meta.origin.clone())
         })
         .collect();
     let orchestrator = read_orchestrator(manager, &app, current);

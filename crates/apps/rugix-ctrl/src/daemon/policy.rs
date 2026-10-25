@@ -99,6 +99,10 @@ impl AdmissionPolicy {
             // validated against the app's schema and a client authorized for the
             // `app-lifecycle` feature can already set configuration directly.
             app_configuration: _,
+            // The origin is recorded without being interpreted, and an inactive
+            // generation can already be activated by the same clients.
+            app_origin: _,
+            skip_app_activation: _,
         } = options;
         let has_security_override = bundle_hash.is_some()
             || root_cert.is_some()
@@ -363,14 +367,7 @@ mod tests {
     }
 
     fn secure_options() -> BundleInstallOptions {
-        BundleInstallOptions {
-            bundle_hash: None,
-            root_cert: None,
-            insecure_skip_bundle_verification: false,
-            insecure_allow_missing_block_index: false,
-            skip_compatibility_check: false,
-            app_configuration: None,
-        }
+        BundleInstallOptions::default()
     }
 
     fn app_install(options: BundleInstallOptions) -> InstallBundle {

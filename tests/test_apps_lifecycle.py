@@ -7,6 +7,7 @@ a background process and writes a marker file while it runs.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -102,6 +103,47 @@ def test_app_lifecycle(
     for app in APPS:
         _apps_command(vm, "remove", app)
     assert apps(vm) == {}
+
+
+def test_staged_app_install(
+    vm: VMHandle, generic_app_bundle: Path, bundle_url: Callable[[Path], str]
+) -> None:
+    """An app installed with `--no-activate` stays inactive until it is activated.
+    Its generation reports the origin supplied at installation, also after the
+    activation."""
+    origin = {"source": "system-test", "version": "1.0.0"}
+    vm.run(
+        [
+            "rugix-ctrl",
+            "apps",
+            "install",
+            "--insecure-skip-bundle-verification",
+            "--no-activate",
+            "--origin",
+            json.dumps(origin),
+            bundle_url(generic_app_bundle),
+        ],
+        timeout=600,
+        hide=True,
+    )
+    info = app_info(vm, GENERIC_APP)
+    assert info["lifecycle"]["state"] == "inactive"
+    [generation] = info["generations"]
+    assert (generation["number"], generation["complete"], generation["active"]) == (
+        1,
+        True,
+        False,
+    )
+    assert generation["origin"] == origin
+    assert not exists(vm, _marker(GENERIC_APP))
+
+    _apps_command(vm, "activate", GENERIC_APP, "1")
+    wait_for_app_state(vm, GENERIC_APP, "running")
+    [generation] = app_info(vm, GENERIC_APP)["generations"]
+    assert generation["active"]
+    assert generation["origin"] == origin
+
+    _apps_command(vm, "remove", GENERIC_APP)
 
 
 def _apps_command(vm: VMHandle, *args: str) -> None:

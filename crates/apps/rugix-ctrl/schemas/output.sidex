@@ -1,3 +1,4 @@
+import apps::AppOrigin
 import apps::AppStatus
 import apps::AppState
 
@@ -119,6 +120,8 @@ record GenerationInfoOutput {
     active: bool,
     /// User-supplied metadata from `app-meta.json`, if present.
     metadata?: JsonValue,
+    /// Origin supplied with `apps install --origin`, if any.
+    origin?: AppOrigin,
 }
 
 /// Result of setting application configuration.
