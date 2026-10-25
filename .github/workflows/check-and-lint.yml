@@ -1,7 +1,12 @@
 name: Check and Lint
 
 on:
+  # Pull requests cover other branches, so that their pushes do not run twice.
   push:
+    branches:
+      - main
+    tags:
+      - "v*"
   pull_request:
   workflow_dispatch:
 

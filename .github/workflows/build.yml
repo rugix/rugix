@@ -4,9 +4,10 @@ on:
   schedule:
     # This builds the nightly version of Rugix.
     - cron: "0 0 * * *"
+  # Pull requests cover other branches, so that their pushes do not run twice.
   push:
     branches:
-      - "*"
+      - main
     tags:
       - "v*"
   pull_request:
