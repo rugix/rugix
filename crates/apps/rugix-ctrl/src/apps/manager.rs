@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -169,7 +170,41 @@ impl AppManager {
             serde_json::to_string_pretty(state).whatever("unable to serialize app state")?;
         rugix_common::fsutils::atomic_write(&path, content.as_bytes())
             .whatever("unable to write app state")?;
-        Ok(())
+        self.sync_current_generation(app_name, state)
+    }
+
+    /// Reconcile the derived generation symlink with the durable lifecycle state.
+    fn sync_current_generation(&self, app_name: &str, state: &AppState) -> AppsResult<()> {
+        let app_dir = self.app_dir(app_name);
+        let current = app_dir.join("current");
+        let existing = match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                Some(fs::read_link(&current).whatever("unable to read current generation link")?)
+            }
+            Ok(_) => reportify::bail!("current generation path is not a symlink"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).whatever("unable to inspect current generation link"),
+        };
+        let target = contribution_generation(state)
+            .map(|number| PathBuf::from(format!("generations/{number}")));
+        if existing == target {
+            return Ok(());
+        }
+        if let Some(target) = target {
+            let temporary = tempfile::Builder::new()
+                .prefix(".current-")
+                .tempdir_in(&app_dir)
+                .whatever("unable to create temporary generation link directory")?;
+            let link = temporary.path().join("link");
+            symlink(&target, &link).whatever("unable to create current generation link")?;
+            fs::rename(&link, &current).whatever("unable to replace current generation link")?;
+        } else {
+            fs::remove_file(&current).whatever("unable to remove current generation link")?;
+        }
+        fs::File::open(&app_dir)
+            .whatever("unable to open app directory")?
+            .sync_all()
+            .whatever("unable to sync current generation link")
     }
 
     /// Read the persisted app state, defaulting to `Inactive` if absent.
@@ -374,7 +409,9 @@ impl AppManager {
     /// The caller must hold the [`AppLock`] for this app.
     pub fn recover_app(&self, _lock: &AppLock, app_name: &str) -> AppsResult<()> {
         validate_app_name(app_name)?;
-        match self.read_state(app_name)? {
+        let state = self.read_state(app_name)?;
+        self.sync_current_generation(app_name, &state)?;
+        match state {
             AppState::Switching(AppStateSwitching {
                 from,
                 from_configuration_revision,
@@ -420,13 +457,15 @@ impl AppManager {
                 }
                 self.write_active_state(app_name, deployment)?;
             }
-            AppState::Error(AppStateError {
-                from,
-                from_configuration_revision,
-                to,
-                to_configuration_revision,
-                message,
-            }) => {
+            AppState::Error(error_state) => {
+                let failed_state = AppState::Error(error_state.clone());
+                let AppStateError {
+                    from,
+                    from_configuration_revision,
+                    to,
+                    to_configuration_revision,
+                    message,
+                } = error_state;
                 // Try to recover by activating the previously working generation first. If there
                 // was none, or if that also fails, try the generation that originally failed. The
                 // underlying issue may have been transient.
@@ -448,12 +487,14 @@ impl AppManager {
                         target = target.generation,
                         "recovery activation failed: {e:?}"
                     );
+                    self.write_state(app_name, &failed_state)?;
                     // If we tried `from` and it failed, fall back to `to`.
                     if from.is_some() {
                         info!(app = app_name, to, "falling back to failed generation");
                         let target = AppDeployment::new(to, to_configuration_revision);
                         if let Err(e) = self.run_activate(app_name, target, true) {
                             warn!(app = app_name, to, "fallback activation also failed: {e:?}");
+                            self.write_state(app_name, &failed_state)?;
                         }
                     }
                 }
@@ -700,7 +741,8 @@ impl AppManager {
                 to.and_then(|deployment| deployment.configuration_revision),
             )
             .with_recovery(Some(recovery));
-        self.write_state(app_name, &AppState::Switching(switching))?;
+        let switching = AppState::Switching(switching);
+        self.write_state(app_name, &switching)?;
 
         if let Some(from_deployment) = from {
             if let Err(e) = self.run_deactivate(app_name, from_deployment, recovery) {
@@ -732,6 +774,8 @@ impl AppManager {
                 generation = to_deployment.generation,
                 "activation failed: {err:?}"
             );
+            // Activation may have persisted Active before publishing its link failed.
+            self.write_state(app_name, &switching)?;
             // Try to clean up any residual resources from the failed activation
             // (e.g. partially started containers) before attempting rollback.
             if let Err(cleanup_err) = self.run_deactivate(app_name, to_deployment, true) {
@@ -1111,6 +1155,14 @@ impl AppManager {
         }
         generations.sort_by_key(|g| g.meta.number);
         Ok(generations)
+    }
+
+    /// Get the generation whose component and health declarations are published.
+    ///
+    /// During switching, the previous generation remains published until activation
+    /// succeeds. This matches the `current` symlink, including recovery of older apps.
+    pub fn contribution_generation(&self, app_name: &str) -> AppsResult<Option<u64>> {
+        Ok(contribution_generation(&self.read_state(app_name)?))
     }
 
     /// Get the currently active generation number, if any.
@@ -1501,6 +1553,17 @@ impl AppDeployment {
     }
 }
 
+/// Select the generation to expose to component and health readers.
+fn contribution_generation(state: &AppState) -> Option<u64> {
+    match state {
+        AppState::Active(state) => Some(state.generation),
+        AppState::Starting(state) => Some(state.generation),
+        AppState::Stopping(state) => Some(state.generation),
+        AppState::Switching(state) => state.from,
+        AppState::Inactive | AppState::Error(_) => None,
+    }
+}
+
 /// Return every deployment pair that must remain available for lifecycle recovery.
 fn state_deployments(state: &AppState) -> Vec<AppDeployment> {
     match state {
@@ -1636,6 +1699,181 @@ mod tests {
         .unwrap();
     }
 
+    /// Publication failure restores prior contributions and retains recoverable state.
+    #[test]
+    fn failed_link_publication_restores_transition_state() {
+        // Root bypasses the directory permissions used to inject this failure.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        for recovering_error in [false, true] {
+            let tempdir = tempfile::tempdir().unwrap();
+            let manager = AppManager::new(
+                tempdir.path().join("apps"),
+                Store::new(tempdir.path().join("store")),
+                AppsConfig::new(),
+            );
+            setup_generation(&manager, "example", 1, "#!/bin/sh\nexit 0\n");
+            setup_generation(
+                &manager,
+                "example",
+                2,
+                r#"#!/bin/sh
+case "$1" in
+    activate) chmod 300 "$RUGIX_APP_DIR" ;;
+    deactivate) touch "$RUGIX_APP_DIR/cleanup" ;;
+esac
+"#,
+            );
+            let lock = manager.lock_app("example").unwrap();
+            if recovering_error {
+                manager
+                    .write_state(
+                        "example",
+                        &AppState::Error(crate::config::apps::AppStateError::new(2, "failed")),
+                    )
+                    .unwrap();
+            } else {
+                activate(&manager, &lock, "example", 1).unwrap();
+            }
+            let result = if recovering_error {
+                manager.recover_app(&lock, "example")
+            } else {
+                activate(&manager, &lock, "example", 2)
+            };
+            let app_dir = manager.app_dir("example");
+            std::fs::set_permissions(&app_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(result.is_err());
+            assert!(matches!(
+                (recovering_error, manager.read_state("example").unwrap()),
+                (true, AppState::Error(_)) | (false, AppState::Switching(_))
+            ));
+            assert!(!app_dir.join("cleanup").exists());
+            let current = app_dir.join("current");
+            if recovering_error {
+                assert_eq!(
+                    std::fs::symlink_metadata(&current).unwrap_err().kind(),
+                    std::io::ErrorKind::NotFound
+                );
+            } else {
+                assert_eq!(
+                    std::fs::read_link(&current).unwrap(),
+                    std::path::Path::new("generations/1")
+                );
+                assert_eq!(manager.contribution_generation("example").unwrap(), Some(1));
+            }
+            std::fs::write(
+                manager
+                    .generation_dir("example", 2)
+                    .unwrap()
+                    .join("orchestrator"),
+                "#!/bin/sh\nexit 0\n",
+            )
+            .unwrap();
+            manager.recover_app(&lock, "example").unwrap();
+            assert_eq!(
+                std::fs::read_link(&current).unwrap(),
+                std::path::Path::new("generations/2")
+            );
+        }
+    }
+
+    /// Component and health paths retain the old generation until activation completes.
+    #[test]
+    fn current_generation_link_follows_the_app_lifecycle() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(
+            tempdir.path().join("apps"),
+            Store::new(tempdir.path().join("store")),
+            AppsConfig::new(),
+        );
+        let script = r#"#!/bin/sh
+generation=$(basename "$RUGIX_APP_GENERATION_DIR")
+case "$1:$generation" in
+    activate:1) [ ! -L "$RUGIX_APP_DIR/current" ] || exit 1 ;;
+    activate:2) expected=1 ;;
+    *) expected=$generation ;;
+esac
+if [ -n "$expected" ]; then
+    for collection in components health/nodes; do
+        [ "$(cat "$RUGIX_APP_DIR/current/.rugix/$collection/example.toml")" = "$expected" ] || exit 1
+    done
+fi
+"#;
+        for generation in 1..=2 {
+            setup_generation(&manager, "example", generation, script);
+            let dir = manager.generation_dir("example", generation).unwrap();
+            for collection in ["components", "health/nodes"] {
+                let directory = dir.join(".rugix").join(collection);
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(directory.join("example.toml"), generation.to_string()).unwrap();
+            }
+        }
+        let lock = manager.lock_app("example").unwrap();
+        let current = manager.app_dir("example").join("current");
+        for generation in 1..=2 {
+            activate(&manager, &lock, "example", generation).unwrap();
+            manager.stop_app(&lock, "example").unwrap();
+            manager.start_app(&lock, "example").unwrap();
+            for collection in ["components", "health/nodes"] {
+                assert_eq!(
+                    std::fs::read_to_string(
+                        current.join(".rugix").join(collection).join("example.toml")
+                    )
+                    .unwrap(),
+                    generation.to_string()
+                );
+            }
+        }
+        manager.deactivate(&lock, "example").unwrap();
+        assert_eq!(
+            std::fs::symlink_metadata(&current).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+    }
+
+    /// Recovery backfills legacy active state, repairs stale links, and preserves other
+    /// files.
+    #[test]
+    fn recovery_reconciles_current_generation_links() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(
+            tempdir.path().join("apps"),
+            Store::new(tempdir.path().join("store")),
+            AppsConfig::new(),
+        );
+        setup_generation(&manager, "example", 1, "#!/bin/sh\nexit 0\n");
+        let lock = manager.lock_app("example").unwrap();
+        std::fs::write(
+            manager.state_path("example"),
+            serde_json::to_vec(&AppState::Active(AppStateActive::new(1))).unwrap(),
+        )
+        .unwrap();
+        let current = manager.app_dir("example").join("current");
+        manager.recover_app(&lock, "example").unwrap();
+        assert_eq!(
+            std::fs::read_link(&current).unwrap(),
+            std::path::Path::new("generations/1")
+        );
+        std::fs::remove_file(&current).unwrap();
+        std::os::unix::fs::symlink("generations/999", &current).unwrap();
+        manager.recover_app(&lock, "example").unwrap();
+        assert_eq!(
+            std::fs::read_link(&current).unwrap(),
+            std::path::Path::new("generations/1")
+        );
+        std::fs::write(
+            manager.state_path("example"),
+            serde_json::to_vec(&AppState::Inactive).unwrap(),
+        )
+        .unwrap();
+        manager.recover_app(&lock, "example").unwrap();
+        assert!(std::fs::symlink_metadata(&current).is_err());
+        std::fs::write(&current, "keep").unwrap();
+        assert!(manager.recover_app(&lock, "example").is_err());
+        assert_eq!(std::fs::read_to_string(&current).unwrap(), "keep");
+    }
+
     #[test]
     fn invalid_app_names_are_rejected_before_lock_paths_are_created() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -1655,6 +1893,7 @@ mod tests {
         assert!(!tempdir.path().join("escape").exists());
     }
 
+    /// Failed activation preserves prior contributions through cleanup and rollback.
     #[test]
     fn failed_activation_returns_error_after_successful_rollback() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -1663,12 +1902,23 @@ mod tests {
             Store::new(tempdir.path().join("store")),
             AppsConfig::new(),
         );
-        setup_generation(&manager, "example", 1, "#!/bin/sh\nexit 0\n");
+        setup_generation(
+            &manager,
+            "example",
+            1,
+            r#"#!/bin/sh
+[ "$(readlink "$RUGIX_APP_DIR/current")" = generations/1 ]
+"#,
+        );
         setup_generation(
             &manager,
             "example",
             2,
-            "#!/bin/sh\n[ \"$1\" = activate ] && exit 1\nexit 0\n",
+            r#"#!/bin/sh
+[ "$(readlink "$RUGIX_APP_DIR/current")" = generations/1 ] || exit 2
+[ "$1" = activate ] && exit 1
+exit 0
+"#,
         );
         manager
             .write_state("example", &AppState::Active(AppStateActive::new(1)))
@@ -1687,6 +1937,10 @@ mod tests {
             manager.read_state("example").unwrap(),
             AppState::Active(AppStateActive { generation: 1, .. })
         ));
+        assert_eq!(
+            std::fs::read_link(manager.app_dir("example").join("current")).unwrap(),
+            std::path::Path::new("generations/1")
+        );
     }
 
     #[test]
@@ -1744,6 +1998,12 @@ mod tests {
             manager.read_state("example").unwrap(),
             AppState::Error(_)
         ));
+        let current = manager.app_dir("example").join("current");
+        assert!(std::fs::symlink_metadata(&current).is_err());
+        std::os::unix::fs::symlink("generations/1", &current).unwrap();
+        let lock = manager.lock_app("example").unwrap();
+        manager.recover_app(&lock, "example").unwrap();
+        assert!(std::fs::symlink_metadata(&current).is_err());
     }
 
     /// Verifies recovery activates the exact generation and configuration revision
@@ -1757,7 +2017,14 @@ mod tests {
             AppsConfig::new(),
         );
         setup_generation(&manager, "example", 1, "#!/bin/sh\nexit 0\n");
-        setup_generation(&manager, "example", 2, "#!/bin/sh\nexit 0\n");
+        setup_generation(
+            &manager,
+            "example",
+            2,
+            r#"#!/bin/sh
+[ "$(readlink "$RUGIX_APP_DIR/current")" = generations/1 ]
+"#,
+        );
         write_configuration(&manager, "example", 1, r#"{"revision":1}"#);
         write_configuration(&manager, "example", 2, r#"{"revision":2}"#);
         manager
@@ -1776,6 +2043,14 @@ mod tests {
             )
             .unwrap();
 
+        assert_eq!(manager.contribution_generation("example").unwrap(), Some(1));
+        let current = manager.app_dir("example").join("current");
+        assert_eq!(
+            std::fs::read_link(&current).unwrap(),
+            std::path::Path::new("generations/1")
+        );
+        std::fs::remove_file(&current).unwrap();
+        std::os::unix::fs::symlink("generations/2", &current).unwrap();
         let lock = manager.lock_app("example").unwrap();
         manager.recover_app(&lock, "example").unwrap();
         assert!(matches!(
@@ -1788,6 +2063,10 @@ mod tests {
         assert_eq!(
             manager.read_configuration("example").unwrap(),
             Some(crate::apps::configuration::parse(r#"{"revision":2}"#).unwrap())
+        );
+        assert_eq!(
+            std::fs::read_link(manager.app_dir("example").join("current")).unwrap(),
+            std::path::Path::new("generations/2")
         );
     }
 
@@ -1826,7 +2105,16 @@ mod tests {
             })
         ));
 
+        let current = manager.app_dir("example").join("current");
+        assert_eq!(
+            std::fs::read_link(&current).unwrap(),
+            std::path::Path::new("generations/2")
+        );
         manager.rollback(&lock, "example").unwrap();
+        assert_eq!(
+            std::fs::read_link(&current).unwrap(),
+            std::path::Path::new("generations/1")
+        );
         assert!(matches!(
             manager.read_state("example").unwrap(),
             AppState::Active(AppStateActive {

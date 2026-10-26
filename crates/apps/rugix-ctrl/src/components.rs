@@ -241,7 +241,7 @@ impl InstalledComponents {
         let apps = manager.list_apps().whatever("unable to list apps")?;
         for app in apps {
             let Some(generation) = manager
-                .current_generation(&app)
+                .contribution_generation(&app)
                 .whatever("unable to read app state")
                 .field_display("app", &app)?
             else {
