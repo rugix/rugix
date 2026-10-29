@@ -2,7 +2,7 @@
 
 ## Version 1.3.2
 
-- Apply the default block-index requirement to execute payloads before starting their handlers. The existing `--insecure-allow-missing-block-index` option remains available as an explicit override.
+- Apply the default block-index requirement to execute payloads before starting their handlers. The `--insecure-allow-missing-block-index` option permits missing indices without disabling supplied block encodings.
 - Update Tokio to 1.53.3.
 
 ## Version 1.3.1

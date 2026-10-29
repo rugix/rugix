@@ -154,16 +154,13 @@ pub(super) fn install_payloads<R: BundleSource>(
         .next_payload()
         .whatever("unable to read payload")?
     {
-        let block_encoding = if options.insecure_allow_missing_block_index {
-            None
-        } else {
-            Some(payload.header().block_encoding.as_ref().ok_or_else(|| {
-                whatever!(
-                    "payload {} does not have a block index, refusing to install",
-                    payload.idx()
-                )
-            })?)
-        };
+        let block_encoding = payload.header().block_encoding.as_ref();
+        if block_encoding.is_none() && !options.insecure_allow_missing_block_index {
+            bail!(
+                "payload {} does not have a block index, refusing to install",
+                payload.idx()
+            );
+        }
         let payload_entry = payload.entry();
         let destination = payload_destinations
             .get(payload.idx())
@@ -807,7 +804,7 @@ mod tests {
     /// Indexed payloads and the explicit missing-index override retain their behavior.
     #[test]
     fn execute_payload_runs_when_indexed_or_explicitly_allowed() {
-        for (indexed, allow_missing_index) in [(true, false), (false, true)] {
+        for (indexed, allow_missing_index) in [(true, false), (true, true), (false, true)] {
             let (directory, bytes, hash) = execute_bundle(indexed);
             let result = install_execute_bundle(&bytes, hash, allow_missing_index).unwrap();
             assert!(matches!(result, SystemRebootMode::No));
