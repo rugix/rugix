@@ -28,6 +28,8 @@ Rugix Bundler:
 
 Rugix Ctrl:
 
+- Apply the default block-index requirement to execute payloads before starting their handlers.
+- Use supplied block encodings for block reuse in app installations even when `--insecure-allow-missing-block-index` is set. The option only permits missing indices.
 - Update Rustls to 0.23.46 to fix four TLS security advisories.
 - Report the orchestrator of the active app generation in `rugix-ctrl apps list` and `rugix-ctrl apps info`, and the desired application configuration revision in `rugix-ctrl apps info`.
 - Publish JSON Schemas for the application inspection output: `apps list` entries, `apps info`, `apps gc`, and `apps config set`.
