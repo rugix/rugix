@@ -83,20 +83,20 @@ pub(crate) fn install_payloads(
         .next_payload()
         .whatever("unable to read payload")?
     {
+        let block_encoding = payload.header().block_encoding.as_ref();
+        if block_encoding.is_none() && !options.insecure_allow_missing_block_index {
+            bail!(
+                "payload {} does not have a block index, refusing to install",
+                payload.idx()
+            );
+        }
         let payload_entry = payload.entry();
         if let Some(type_app_file) = &payload_entry.type_app_file {
             let payload_path = ValidatedRelativePath::new(type_app_file.path.clone())
                 .whatever("invalid app-file path")?;
             let mode = type_app_file.mode;
             let store = type_app_file.store == Some(true);
-            let state = install_app_file(
-                &new_generation,
-                &payload_path,
-                mode,
-                store,
-                payload,
-                options,
-            )?;
+            let state = install_app_file(&new_generation, &payload_path, mode, store, payload)?;
             payload_states.insert(payload_path.as_str().to_owned(), state);
             continue;
         }
@@ -113,22 +113,14 @@ pub(crate) fn install_payloads(
                 .as_file()
                 .try_clone()
                 .whatever("unable to clone temp file handle")?;
-            let block_provider = if !options.insecure_allow_missing_block_index {
-                let block_encoding = payload.header().block_encoding.as_ref().ok_or_else(|| {
-                    whatever!(
-                        "payload {} does not have a block index, refusing to install",
-                        payload.idx()
-                    )
-                })?;
+            let block_provider = block_encoding.map(|block_encoding| {
                 let mut provider = BlockProvider::new(
                     block_encoding.chunker.clone(),
                     block_encoding.hash_algorithm,
                 );
                 provider.add_store(app_manager.store());
-                Some(provider)
-            } else {
-                None
-            };
+                provider
+            });
             payload
                 .decode_into(
                     temporary_file,
@@ -218,12 +210,11 @@ fn install_app_file(
     mode: Option<u32>,
     store: bool,
     payload: PayloadReader<'_>,
-    options: &BundleInstallOptions,
 ) -> SystemResult<payload_db::PayloadState> {
     ensure_no_symlink_components(generation.dir, payload_path)
         .whatever("app-file path contains a symbolic link")?;
     let file_path = generation.dir.join(payload_path);
-    let block_provider = app_file_block_provider(generation, payload_path, &payload, options)?;
+    let block_provider = app_file_block_provider(generation, payload_path, &payload)?;
     let block_provider = block_provider
         .as_ref()
         .map(|provider| provider as &dyn StoredBlockProvider);
@@ -346,22 +337,15 @@ fn install_app_file(
 /// Collect local block candidates for an `app-file` payload.
 ///
 /// Candidates come from indexed copies of the file in earlier generations and from
-/// the store. Returns `None` for payloads that may lack a block encoding.
+/// the store. Returns `None` when the payload lacks a block encoding.
 fn app_file_block_provider(
     generation: &NewGeneration<'_>,
     payload_path: &ValidatedRelativePath,
     payload: &PayloadReader<'_>,
-    options: &BundleInstallOptions,
 ) -> SystemResult<Option<BlockProvider>> {
-    if options.insecure_allow_missing_block_index {
+    let Some(block_encoding) = payload.header().block_encoding.as_ref() else {
         return Ok(None);
-    }
-    let block_encoding = payload.header().block_encoding.as_ref().ok_or_else(|| {
-        whatever!(
-            "payload {} does not have a block index, refusing to install",
-            payload.idx()
-        )
-    })?;
+    };
     let mut provider = BlockProvider::new(
         block_encoding.chunker.clone(),
         block_encoding.hash_algorithm,
@@ -659,7 +643,6 @@ mod tests {
     use super::validate_app_archive;
     use super::validate_app_deliveries;
     use super::AppPayloadDelivery;
-    use super::BundleInstallOptions;
     use super::DeltaSource;
     use super::NewGeneration;
     use crate::apps::files::GenerationFiles;
@@ -757,9 +740,7 @@ mod tests {
             number: 1,
             dir: &dir,
         };
-        let options = BundleInstallOptions::default();
-
-        let state = install_app_file(&generation, &path, None, true, payload, &options).unwrap();
+        let state = install_app_file(&generation, &path, None, true, payload).unwrap();
         assert_eq!(state.size.unwrap().raw, content.len() as u64);
         assert!(!dir.join(&path).exists());
         let mut stored = String::new();

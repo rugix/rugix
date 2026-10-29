@@ -1,3 +1,7 @@
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0449"
 reason = "Unmaintained dependency used by Rugix Bundler for Compose files; maintenance risk accepted while retaining YAML compatibility."
+
+[[IgnoredVulns]]
+id = "GHSA-qwgh-2vcv-g2f7"
+reason = "False positive for the locked block-buffer 0.10.4: upstream lists only >=0.11.0, <0.12.1 as affected. Version 0.10.4 stores its position separately from the buffer. Reassess this exception before upgrading block-buffer. See https://github.com/RustCrypto/utils/security/advisories/GHSA-qwgh-2vcv-g2f7."
