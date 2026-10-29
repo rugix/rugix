@@ -78,6 +78,13 @@ pub(super) fn install_payloads<S: BundleSource>(
         .next_payload()
         .whatever("unable to read payload")?
     {
+        let block_encoding = payload.header().block_encoding.as_ref();
+        if block_encoding.is_none() && !options.insecure_allow_missing_block_index {
+            bail!(
+                "payload {} does not have a block index, refusing to install",
+                payload.idx()
+            );
+        }
         let payload_entry = payload.entry();
         if let Some(type_app_file) = &payload_entry.type_app_file {
             let app_name = type_app_file.app.clone();
@@ -103,13 +110,7 @@ pub(super) fn install_payloads<S: BundleSource>(
                 fs::create_dir_all(parent).whatever("unable to create parent directory")?;
             }
 
-            let block_provider = if !options.insecure_allow_missing_block_index {
-                let block_encoding = payload.header().block_encoding.as_ref().ok_or_else(|| {
-                    whatever!(
-                        "payload {} does not have a block index, refusing to install",
-                        payload.idx()
-                    )
-                })?;
+            let block_provider = if let Some(block_encoding) = block_encoding {
                 let mut provider = BlockProvider::new(
                     block_encoding.chunker.clone(),
                     block_encoding.hash_algorithm,
@@ -290,20 +291,12 @@ pub(super) fn install_payloads<S: BundleSource>(
                 .as_file()
                 .try_clone()
                 .whatever("unable to clone temp file handle")?;
-            let block_provider = if !options.insecure_allow_missing_block_index {
-                let block_encoding = payload.header().block_encoding.as_ref().ok_or_else(|| {
-                    whatever!(
-                        "payload {} does not have a block index, refusing to install",
-                        payload.idx()
-                    )
-                })?;
-                Some(BlockProvider::new(
+            let block_provider = block_encoding.map(|block_encoding| {
+                BlockProvider::new(
                     block_encoding.chunker.clone(),
                     block_encoding.hash_algorithm,
-                ))
-            } else {
-                None
-            };
+                )
+            });
             payload
                 .decode_into(
                     temporary_file,
