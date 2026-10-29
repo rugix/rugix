@@ -154,6 +154,16 @@ pub(super) fn install_payloads<R: BundleSource>(
         .next_payload()
         .whatever("unable to read payload")?
     {
+        let block_encoding = if options.insecure_allow_missing_block_index {
+            None
+        } else {
+            Some(payload.header().block_encoding.as_ref().ok_or_else(|| {
+                whatever!(
+                    "payload {} does not have a block index, refusing to install",
+                    payload.idx()
+                )
+            })?)
+        };
         let payload_entry = payload.entry();
         let destination = payload_destinations
             .get(payload.idx())
@@ -170,14 +180,7 @@ pub(super) fn install_payloads<R: BundleSource>(
                     slot.name()
                 );
                 payload_db::erase(slot.name())?;
-                let block_provider = if !options.insecure_allow_missing_block_index {
-                    let block_encoding =
-                        payload.header().block_encoding.as_ref().ok_or_else(|| {
-                            whatever!(
-                                "payload {} does not have a block index, refusing to install",
-                                payload.idx()
-                            )
-                        })?;
+                let block_provider = if let Some(block_encoding) = block_encoding {
                     let mut provider = BlockProvider::new(
                         block_encoding.chunker.clone(),
                         block_encoding.hash_algorithm,
@@ -686,24 +689,138 @@ impl PayloadTarget for CustomTarget {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::fs;
     use std::io;
     use std::path::Path;
 
     use indexmap::IndexMap;
+    use rugix_bundle::reader::BundleReader;
+    use rugix_bundle::source::from_slice;
+    use si_crypto_hashes::HashDigest;
+    use tempfile::TempDir;
 
     use super::clear_target_overlay_with;
     use super::finalize_payload_and_record;
+    use super::install_payloads;
     use super::preflight_system_deliveries;
     use super::prepare_system_update;
     use super::PayloadDelivery;
     use super::SystemPayloadDestination;
+    use crate::config::config::Config;
     use crate::config::system::BlockSlotConfig;
     use crate::config::system::BootGroupConfig;
     use crate::config::system::FileSlotConfig;
     use crate::config::system::SlotConfig;
+    use crate::operations::install::BundleInstallEvent;
+    use crate::operations::install::BundleInstallOptions;
+    use crate::operations::install::SystemRebootMode;
+    use crate::operations::EventSink;
+    use crate::system::boot_flows;
     use crate::system::boot_groups::BootGroups;
     use crate::system::slots::SystemSlots;
+    use crate::system::System;
     use crate::system::SystemResult;
+
+    struct IgnoreEvents;
+
+    impl EventSink<BundleInstallEvent> for IgnoreEvents {
+        fn emit(&mut self, _: BundleInstallEvent) {}
+    }
+
+    /// Build an execute bundle whose handler records startup and script output.
+    fn execute_bundle(block_encoding: bool) -> (TempDir, Vec<u8>, HashDigest) {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir(root.join("payloads")).unwrap();
+        fs::write(
+            root.join("payloads/script.sh"),
+            b"printf genuine > \"$1\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("handler.sh"),
+            b"printf started > \"$1\"\nexec /bin/sh -s -- \"$2\"\n",
+        )
+        .unwrap();
+        let encoding = if block_encoding {
+            "\n[payloads.block-encoding]\nchunker = \"fixed-64\"\n"
+        } else {
+            ""
+        };
+        fs::write(
+            root.join("rugix-bundle.toml"),
+            format!(
+                "update-type = \"incremental\"\n\n[[payloads]]\nfilename = \"script.sh\"\n\
+                 [payloads.delivery]\ntype = \"execute\"\n\
+                 handler = [\"/bin/sh\", {:?}, {:?}, {:?}]\n{encoding}",
+                root.join("handler.sh"),
+                root.join("started"),
+                root.join("output"),
+            ),
+        )
+        .unwrap();
+        let path = root.join("bundle.rugixb");
+        let hash = rugix_bundle::builder::pack(root, &path).unwrap();
+        let bytes = fs::read(path).unwrap();
+        (directory, bytes, hash)
+    }
+
+    /// Install an authenticated incremental bundle without device or bootloader state.
+    fn install_execute_bundle(
+        bytes: &[u8],
+        hash: HashDigest,
+        allow_missing_index: bool,
+    ) -> SystemResult<SystemRebootMode> {
+        let slots = file_slots(&[]);
+        let groups = BootGroups::from_config(&slots, Some(&IndexMap::new())).unwrap();
+        let boot_flow = boot_flows::from_config(None, None, &groups).unwrap();
+        let system = System::for_boot_flow_test(slots, groups, None, boot_flow);
+        let options = BundleInstallOptions {
+            bundle_hash: Some(hash.clone()),
+            root_cert: None,
+            insecure_skip_bundle_verification: false,
+            insecure_allow_missing_block_index: allow_missing_index,
+            skip_compatibility_check: false,
+        };
+        let reader = BundleReader::start(from_slice(&bytes), Some(hash)).unwrap();
+        install_payloads(
+            &system,
+            &Config::default(),
+            reader,
+            None,
+            &options,
+            true,
+            &mut IgnoreEvents,
+        )
+    }
+
+    /// Missing indices are rejected before the execute handler can start.
+    #[test]
+    fn execute_payload_requires_index_before_starting_handler() {
+        let (directory, bytes, hash) = execute_bundle(false);
+        let error = install_execute_bundle(&bytes, hash, false).unwrap_err();
+        assert!(error.to_string().contains("does not have a block index"));
+        assert!(!directory.path().join("started").exists());
+        assert!(!directory.path().join("output").exists());
+    }
+
+    /// Indexed payloads and the explicit missing-index override retain their behavior.
+    #[test]
+    fn execute_payload_runs_when_indexed_or_explicitly_allowed() {
+        for (indexed, allow_missing_index) in [(true, false), (false, true)] {
+            let (directory, bytes, hash) = execute_bundle(indexed);
+            let result = install_execute_bundle(&bytes, hash, allow_missing_index).unwrap();
+            assert!(matches!(result, SystemRebootMode::No));
+            assert_eq!(
+                fs::read(directory.path().join("started")).unwrap(),
+                b"started"
+            );
+            assert_eq!(
+                fs::read(directory.path().join("output")).unwrap(),
+                b"genuine"
+            );
+        }
+    }
 
     fn no_delivery() -> PayloadDelivery<'static> {
         PayloadDelivery {

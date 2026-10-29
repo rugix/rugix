@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 1.3.2
+
+- Apply the default block-index requirement to execute payloads before starting their handlers. The existing `--insecure-allow-missing-block-index` option remains available as an explicit override.
+
 ## Version 1.3.1
 
 Security:
