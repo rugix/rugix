@@ -21,6 +21,7 @@ use rugix_common::disk::blkdev::BlockDevice;
 
 use rugix_common::mount::is_mount_point;
 use rugix_common::path::ValidatedRelativePath;
+use sha2::Digest;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -192,7 +193,8 @@ fn init() -> SystemResult<()> {
     let wipe_data_marker = Path::new(MOUNT_POINT_CONFIG).join(".rugix/wipe-data");
     let wipe_pending = wipe_data_marker.exists();
 
-    if bootstrap_marker.is_some() || wipe_pending {
+    let data_format_pending = Path::new(MOUNT_POINT_CONFIG).join(".rugix/data-format-pending");
+    if bootstrap_marker.is_some() || wipe_pending || data_format_pending.exists() {
         run!([
             "/usr/bin/env",
             "mount",
@@ -202,9 +204,11 @@ fn init() -> SystemResult<()> {
         ])
         .whatever("unable to mount config partition as read-write")?;
 
-        if let Some(marker) = bootstrap_marker {
+        if bootstrap_marker.is_some() || data_format_pending.exists() {
             bootstrap(&root, &system_config, &hook_options)?;
-            std::fs::remove_file(&marker).whatever("unable to remove bootstrap marker")?;
+            if let Some(marker) = bootstrap_marker {
+                std::fs::remove_file(&marker).whatever("unable to remove bootstrap marker")?;
+            }
             info!("Done bootstrapping");
         }
 
@@ -489,6 +493,12 @@ fn bootstrap(
     let bootstrap_config = load_bootstrap_config()?;
 
     if bootstrap_config.disabled.unwrap_or(false) {
+        if Path::new(MOUNT_POINT_CONFIG)
+            .join(".rugix/data-format-pending")
+            .exists()
+        {
+            bail!("data initialization is pending but bootstrapping is disabled");
+        }
         warn!("Found bootstrapping marker but bootstrapping is disabled. Skip bootstrapping");
         return Ok(());
     }
@@ -531,10 +541,39 @@ fn bootstrap(
     let data_partition_idx = data_partition_config.partition.unwrap_or(default_data_idx);
     let data_partition_has_driver = data_partition_config.driver.is_some();
 
+    let data_format_pending = Path::new(MOUNT_POINT_CONFIG).join(".rugix/data-format-pending");
     if let Some(schema) = schema {
+        let table = PartitionTable::read(&root.device)
+            .whatever("unable to read current partition table")?;
+        let data_identity = check_data_initialization(
+            &data_format_pending,
+            &table,
+            &data_partition_config,
+            &layout,
+            data_partition_idx,
+        )?;
+        let mut data_formatted = false;
         bootstrap_hooks
             .run_hooks("pre-layout", Vars::new(), hook_options)
             .whatever("unable to run `bootstrap/pre-layout` hooks")?;
+        let old_table = PartitionTable::read(&root.device)
+            .whatever("unable to read current partition table")?;
+        let formats_data = match &layout {
+            SystemLayoutConfig::Default(_) => true,
+            SystemLayoutConfig::Gpt(config) | SystemLayoutConfig::Mbr(config) => config
+                .partitions
+                .get(data_partition_idx.saturating_sub(1) as usize)
+                .is_some_and(|partition| {
+                    data_partition_has_driver || partition.filesystem.is_some()
+                }),
+            SystemLayoutConfig::None => false,
+        };
+        if formats_data && data_partition_is_new(&old_table, data_partition_idx) {
+            rugix_common::fsutils::atomic_write(&data_format_pending, data_identity.as_bytes())
+                .whatever("unable to record pending data initialization")?;
+            run!(["sync", "-f", MOUNT_POINT_CONFIG])
+                .whatever("unable to synchronize data initialization marker")?;
+        }
         if let Some((old_table, _)) = bootstrap_partitions(&schema, root)? {
             // Partition is new, let's see whether we need to create a filesystem.
             match &layout {
@@ -556,15 +595,20 @@ fn bootstrap(
                         // end-to-end; the layout's filesystem entry is
                         // ignored to avoid double-formatting an
                         // encrypted volume.
-                        if part_num == data_partition_idx && data_partition_has_driver {
-                            let driver = resolve_driver(&data_partition_config);
+                        if part_num == data_partition_idx
+                            && (data_partition_has_driver || config.filesystem.is_some())
+                        {
                             let ctx = DriverContext::new(
                                 block_device.path().to_path_buf(),
                                 Path::new(MOUNT_POINT_DATA).to_path_buf(),
                             );
-                            driver.format(&ctx).whatever(
-                                "unable to format data partition via configured driver",
+                            format_bootstrap_data(
+                                &ctx,
+                                &data_partition_config,
+                                &layout,
+                                data_partition_idx,
                             )?;
+                            data_formatted = true;
                             continue;
                         }
                         let Some(filesystem) = &config.filesystem else {
@@ -588,24 +632,109 @@ fn bootstrap(
                 SystemLayoutConfig::Default(_) => {
                     format_data_partition_if_new(&old_table, data_partition_idx, || {
                         let block_device = root.resolve_partition(data_partition_idx).unwrap();
-                        let driver = resolve_driver(&data_partition_config);
                         let ctx = DriverContext::new(
                             block_device.path().to_path_buf(),
                             Path::new(MOUNT_POINT_DATA).to_path_buf(),
                         );
-                        driver.format(&ctx)
+                        format_bootstrap_data(
+                            &ctx,
+                            &data_partition_config,
+                            &layout,
+                            data_partition_idx,
+                        )?;
+                        data_formatted = true;
+                        Ok(())
                     })
                     .whatever("unable to format data partition")?;
                 }
                 SystemLayoutConfig::None => unreachable!(),
             }
         }
+        if data_format_pending.exists() {
+            if !data_formatted {
+                let device = root
+                    .resolve_partition(data_partition_idx)
+                    .ok_or_else(|| reportify::whatever!("pending data partition is unavailable"))?;
+                format_bootstrap_data(
+                    &DriverContext::new(
+                        device.path().to_path_buf(),
+                        Path::new(MOUNT_POINT_DATA).to_path_buf(),
+                    ),
+                    &data_partition_config,
+                    &layout,
+                    data_partition_idx,
+                )
+                .whatever("unable to resume data partition initialization")?;
+            }
+            run!(["sync"]).whatever("unable to synchronize initialized data partition")?;
+            fs::remove_file(&data_format_pending)
+                .whatever("unable to clear data initialization marker")?;
+            run!(["sync", "-f", MOUNT_POINT_CONFIG])
+                .whatever("unable to synchronize completed data initialization")?;
+        }
         bootstrap_hooks
             .run_hooks("post-layout", Vars::new(), hook_options)
             .whatever("unable to run `bootstrap/post-layout` hooks")?;
+    } else if data_format_pending.exists() {
+        bail!("pending data initialization requires a partition layout");
     }
 
     Ok(())
+}
+
+/// Bind pending initialization to its disk, partition, and formatting policy.
+fn check_data_initialization(
+    marker: &Path,
+    table: &PartitionTable,
+    config: &crate::config::system::PartitionConfig,
+    layout: &SystemLayoutConfig,
+    number: u32,
+) -> SystemResult<String> {
+    let mut identity = sha2::Sha256::new();
+    for field in [
+        table.disk_id.to_string(),
+        number.to_string(),
+        toml::to_string(config).whatever("unable to serialize data partition configuration")?,
+        toml::to_string(layout).whatever("unable to serialize bootstrap layout")?,
+    ] {
+        identity.update((field.len() as u64).to_le_bytes());
+        identity.update(field.as_bytes());
+    }
+    let identity = format!("{:x}", identity.finalize());
+    if marker.exists() {
+        let pending = fs::read(marker).whatever("unable to read pending data initialization")?;
+        ensure!(
+            pending == identity.as_bytes(),
+            "pending data initialization belongs to a different disk, partition, or configuration"
+        );
+    }
+    Ok(identity)
+}
+
+/// Apply the same data filesystem policy during initial bootstrap and recovery.
+fn format_bootstrap_data(
+    ctx: &DriverContext,
+    config: &crate::config::system::PartitionConfig,
+    layout: &SystemLayoutConfig,
+    number: u32,
+) -> SystemResult<()> {
+    if config.driver.is_none() {
+        if let SystemLayoutConfig::Gpt(layout) | SystemLayoutConfig::Mbr(layout) = layout {
+            if let Some(crate::config::bootstrapping::Filesystem::Ext4(filesystem)) = layout
+                .partitions
+                .get(number.saturating_sub(1) as usize)
+                .and_then(|partition| partition.filesystem.as_ref())
+            {
+                return mkfs_ext4(
+                    &ctx.device,
+                    filesystem.label.as_deref().unwrap_or(""),
+                    filesystem.additional_options.as_deref().unwrap_or_default(),
+                )
+                .whatever("unable to create bootstrap data filesystem");
+            }
+        }
+    }
+    resolve_driver(config).format(ctx)
 }
 
 /// Returns whether the configured data partition was added during repartitioning.
@@ -1149,6 +1278,7 @@ mod tests {
     use crate::system::data_partition::DriverContext;
     use crate::system::SystemResult;
 
+    use super::check_data_initialization;
     use super::data_mount_error_policy;
     use super::data_partition_is_new;
     use super::format_data_partition_if_new;
@@ -1253,6 +1383,53 @@ mod tests {
         format_data_partition_if_new(&table, 7, || driver.format(&ctx)).unwrap();
         assert!(data_partition_is_new(&table, 7));
         assert_eq!(driver.formats.get(), 1);
+    }
+
+    /// Repartitioning can resume, but a fallback must never format another data target.
+    #[test]
+    fn pending_data_initialization_rejects_fallback_target_and_policy_changes() {
+        let mut table = PartitionTable::new(DiskId::random_gpt(), NumBlocks::from_raw(1_000_000));
+        let config = toml::from_str::<crate::config::system::PartitionConfig>(
+            "partition = 7\n[driver]\ntype = 'luks2-tpm2'\npcrs = [7]\n",
+        )
+        .unwrap();
+        let layout = super::SystemLayoutConfig::Default(super::DefaultLayoutConfig::new(
+            byte_calc::NumBytes::gibibytes(4).into(),
+        ));
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("data-format-pending");
+        let identity = check_data_initialization(&marker, &table, &config, &layout, 7).unwrap();
+        std::fs::write(&marker, identity).unwrap();
+
+        table.partitions = (1..=7)
+            .map(|number| partition(number, gpt_types::LINUX))
+            .collect();
+        check_data_initialization(&marker, &table, &config, &layout, 7).unwrap();
+
+        let mut fallback_config = config.clone();
+        fallback_config.partition = Some(6);
+        let mut other_policy = config.clone();
+        other_policy.driver = None;
+        let mut other_disk = table.clone();
+        other_disk.disk_id = DiskId::random_gpt();
+        let other_layout = super::SystemLayoutConfig::Default(super::DefaultLayoutConfig::new(
+            byte_calc::NumBytes::gibibytes(8).into(),
+        ));
+        let driver = RecordingDriver::default();
+        let ctx = driver_context();
+        for (disk, config, layout, number) in [
+            (&table, &fallback_config, &layout, 6),
+            (&table, &other_policy, &layout, 7),
+            (&other_disk, &config, &layout, 7),
+            (&table, &config, &other_layout, 7),
+        ] {
+            let result = check_data_initialization(&marker, disk, config, layout, number)
+                .and_then(|_| driver.format(&ctx));
+            assert!(result.is_err());
+        }
+        std::fs::write(&marker, b"").unwrap();
+        assert!(check_data_initialization(&marker, &table, &config, &layout, 7).is_err());
+        assert_eq!(driver.formats.get(), 0);
     }
 
     #[test]
