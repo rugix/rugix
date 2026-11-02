@@ -5,7 +5,9 @@ bakes an operating system image with Rugix Bakery, boots it in a QEMU virtual
 machine (VM), and exercises Rugix Ctrl over SSH, for example, by installing an
 update bundle and rebooting into it. The tests use
 [Rugix Testkit](https://github.com/rugix/rugix-testkit), which documents the
-available fixtures.
+available fixtures. The Python dependency in `pyproject.toml` and the Bakery
+repository in `rugix-bakery.toml` pin the same Testkit revision. Update both
+when upgrading Testkit.
 
 ## Running the Tests
 
@@ -51,6 +53,13 @@ serial output and command history of each test's VMs end up in
 Bakery does not notice when mounted binaries change. After rebuilding Rugix
 Ctrl, delete `tests/.rugix/` so that cached layers pick up the new build. The
 tests fail if a VM runs another Rugix Ctrl than the build under test.
+
+Dynamic delta updates use block indexes to reuse blocks from existing slots,
+downloading only missing blocks. The dynamic delta test compares downloads of
+the same update before and after indexing the active slots. It requires at
+least a 50% reduction and checks that the updated system boots. The comparison
+allows filesystem metadata to change between baked images without assuming a
+fixed number of changed blocks.
 
 ## Project Layout
 

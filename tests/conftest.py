@@ -69,7 +69,9 @@ def start_vm(
 
 @pytest.fixture
 def start_qemu(
-    start_qemu: Callable[[VMConfig], QemuVM], ctrl_build_digests: set[str]
+    start_qemu: Callable[[VMConfig], QemuVM],
+    ctrl_build_digests: set[str],
+    rugix_project: Path,
 ) -> Callable[[VMConfig], QemuVM]:
     """Starts VMs without SSH after checking the image's Rugix Ctrl build.
 
@@ -79,7 +81,11 @@ def start_qemu(
 
     def start(config: VMConfig) -> QemuVM:
         system_archive = (
-            config.drives[0].file.parent / "filesystems" / "partition-4.tar"
+            rugix_project
+            / "build"
+            / config.drives[0].file.parent.name
+            / "filesystems"
+            / "partition-4.tar"
         )
         with tarfile.open(system_archive) as archive:
             binary = archive.extractfile("./usr/bin/rugix-ctrl")
