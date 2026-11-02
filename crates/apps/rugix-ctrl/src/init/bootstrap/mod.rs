@@ -51,10 +51,16 @@ mod journal;
 
 const CONFIG_PATH: &str = "/etc/rugix/bootstrapping.toml";
 
+/// Locate the recovery journal on the mounted config partition.
 pub fn journal_path() -> PathBuf {
     Path::new(MOUNT_POINT_CONFIG).join(".rugix/bootstrap-journal.json")
 }
 
+/// Create planned partitions and resume filesystem initialization from checkpoints.
+///
+/// The caller must mount the config partition read-write and supply the loaded system
+/// configuration. Only partitions recorded as new in the original plan are formatted.
+/// The plan is persisted before repartitioning, and hooks may run again during replay.
 pub fn run_bootstrap(
     root: &SystemRoot,
     system_config: &SystemConfig,
@@ -167,7 +173,10 @@ pub fn run_bootstrap(
     clear_flag(&path).whatever("unable to clear completed bootstrap journal")
 }
 
-/// Keep the old checkpoint if formatting or synchronization is interrupted.
+/// Initialize pending partitions and durably checkpoint each synchronized result.
+///
+/// A partition without a durable completion checkpoint may be initialized again on
+/// replay.
 fn initialize_pending(
     journal: &mut Journal,
     path: &Path,
@@ -182,6 +191,7 @@ fn initialize_pending(
     Ok(())
 }
 
+/// Select newly created partitions requiring a filesystem or configured data driver.
 fn partitions_to_initialize(
     before: &PartitionTable,
     target: &PartitionTable,
@@ -216,6 +226,7 @@ fn partitions_to_initialize(
         .collect()
 }
 
+/// Format a planned partition using its data driver or layout filesystem settings.
 fn format_partition(
     device: &Path,
     number: u8,
@@ -249,6 +260,7 @@ fn format_partition(
     .whatever("unable to create bootstrap filesystem")
 }
 
+/// Translate a layout for the existing table type, or skip layouts of type `none`.
 fn partition_schema(
     layout: &SystemLayoutConfig,
     ty: PartitionTableType,
@@ -290,6 +302,7 @@ fn configuration_digest(bootstrap: Option<&[u8]>, system: Option<&[u8]>) -> Stri
     format!("{:x}", hash.finalize())
 }
 
+/// Read original configuration bytes, returning `None` only when the file is absent.
 fn read_optional(path: &Path) -> SystemResult<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
@@ -325,6 +338,7 @@ name = "data"
 filesystem = { type = "ext4", label = "data" }
 "#;
 
+    /// Build a GPT fixture with system slots and ext4 cache/data partitions.
     fn custom_plan() -> (PartitionTable, SystemLayoutConfig) {
         let layout = toml::from_str::<BootstrappingConfig>(CUSTOM_LAYOUT)
             .unwrap()

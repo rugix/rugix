@@ -1,7 +1,7 @@
 //! Durable bootstrap intent and completion checkpoints.
 //!
-//! A journal records the target geometry before repartitioning and retains the
-//! original list of partitions to initialize across subsequent boots.
+//! A journal records target geometry and newly created filesystem partitions before
+//! repartitioning. Completion checkpoints retain only pending work across boots.
 
 use std::fs;
 use std::io;
@@ -17,18 +17,30 @@ use serde::Serialize;
 
 use crate::system::SystemResult;
 
+/// A bootstrap plan bound to a disk and configuration, with unfinished initialization
+/// work.
+///
+/// Recording which partitions were originally new prevents replay from treating
+/// pre-existing partitions as initialization targets.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Journal {
     version: u32,
     disk_id: String,
     configuration: String,
+    /// Bytes per block for the recorded partition extents.
     block_size: u64,
     partitions: Vec<Geometry>,
+    /// Increasing partition numbers without a durable completion checkpoint.
     pub pending: Vec<u8>,
 }
 
 impl Journal {
+    /// Record the target table, configuration digest, and initial work before
+    /// repartitioning.
+    ///
+    /// `pending` must list only newly created partitions requiring initialization,
+    /// in increasing partition-number order.
     pub fn new(table: &PartitionTable, configuration: String, pending: Vec<u8>) -> Self {
         Self {
             version: 1,
@@ -40,6 +52,7 @@ impl Journal {
         }
     }
 
+    /// Decode a saved journal, returning `None` only when the file is absent.
     pub fn load(path: &Path) -> SystemResult<Option<Self>> {
         let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
@@ -51,6 +64,7 @@ impl Journal {
             .map(Some)
     }
 
+    /// Atomically persist the plan or checkpoint, including newly created parent entries.
     pub fn save(&self, path: &Path) -> SystemResult<()> {
         let bytes =
             serde_json::to_vec_pretty(self).whatever("unable to encode bootstrap journal")?;
@@ -58,7 +72,8 @@ impl Journal {
             .whatever("unable to persist bootstrap journal")
     }
 
-    /// Reject a fallback image before executing any pre-layout hooks.
+    /// Validate the journal version, disk identity, and configuration before pre-layout
+    /// hooks.
     pub fn validate_binding(
         &self,
         table: &PartitionTable,
@@ -76,7 +91,8 @@ impl Journal {
         Ok(())
     }
 
-    /// Disk identity and geometry must still agree with the plan after pre-layout hooks.
+    /// Validate disk identity, target geometry, and pending partition numbers after
+    /// hooks.
     pub fn validate_plan(&self, table: &PartitionTable) -> SystemResult<()> {
         ensure!(
             self.disk_id == table.disk_id.to_string(),
@@ -104,6 +120,10 @@ impl Journal {
     }
 }
 
+/// Partition properties that must match the recorded plan during replay.
+///
+/// Extents use the journal's block size. GPT UUIDs are omitted because writing the
+/// partition table may assign them after the plan has been saved.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Geometry {
@@ -115,6 +135,7 @@ struct Geometry {
 }
 
 impl Geometry {
+    /// Compare all recorded properties with a recomputed target partition.
     fn matches(&self, partition: &Partition) -> bool {
         self.number == partition.number
             && self.start == partition.start.into_raw()
@@ -125,6 +146,7 @@ impl Geometry {
 }
 
 impl From<&Partition> for Geometry {
+    /// Record a partition's number, extent, type, and name.
     fn from(partition: &Partition) -> Self {
         Self {
             number: partition.number,
