@@ -19,6 +19,7 @@ Nix Integration:
 
 Rugix Ctrl:
 
+- Retain the verified block indices supplied by regular system-slot payloads, so subsequent HTTP updates can reuse those slots by default. Add `install.auto-index` to opt into computing missing source-slot indices during full system updates. Do not retain an index after applying a static delta payload.
 - Pipeline HTTP range requests, combine adjacent missing blocks, and reuse connections to reduce latency during dynamic delta updates. Fetching runs concurrently with payload verification, decompression, and writes, and works with existing block-encoded bundles.
 - Resume interrupted HTTP transfers with bounded retries and configurable stall timeout, range sizes, and concurrency.
 - Add `rugix-ctrl bundle inspect` for bundles from files, HTTP(S), and standard input, including their embedded manifest and payload metadata.
@@ -35,7 +36,6 @@ Rugix Ctrl:
 - Execute `rugix-ctrl apps generations` through the operation layer, so that it works through the privileged daemon and reports generation metadata like `apps info` does.
 - Fix selection of the most recently activated app generation. Timestamps were compared as strings, and they carry fractional seconds only when those are non-zero, so `rugix-ctrl apps activate APP` without a generation could pick an older generation.
 - Fix the Docker Compose activation diagnostics heading, which contained a literal `{DIAGNOSTIC_LOG_TAIL}` instead of the log tail length.
-- Always retain verified block indices from installed system slot payloads for later delta updates. Add `install.auto-index` to opt into computing missing source-slot indices during full system updates. Do not retain an index after applying a static delta payload.
 - Add the `rugix.init.quiet` kernel command-line option to suppress routine early-boot output while retaining errors.
 - Add versioned JSON configuration for Rugix Apps, including optional JSON Schema validation, crash-safe application, and rollback of generation/configuration pairs.
 - Add `--origin` to `rugix-ctrl apps install` to record a JSON document describing where a bundle came from with the new generation. `rugix-ctrl apps info` and `rugix-ctrl apps generations` report it as `origin`, so that management tools can recognize the generations they installed.
