@@ -41,12 +41,21 @@ pub struct Mounted {
 
 impl Mounted {
     pub fn mount(dev: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<Self, Report<MountError>> {
+        Self::mount_with_options(dev, dst, "defaults")
+    }
+
+    /// Mount a filesystem with explicit mount options.
+    pub fn mount_with_options(
+        dev: impl AsRef<Path>,
+        dst: impl AsRef<Path>,
+        options: impl AsRef<OsStr>,
+    ) -> Result<Self, Report<MountError>> {
         let dst = dst.as_ref();
         let dev = dev.as_ref();
         debug!("Mounting {dev:?} to {dst:?}.");
         // FIXME: The `mount` command works without specifying the filesystem type,
         // which is not the case for `nix::mount::mount`.
-        run!(["mount", dev, dst])
+        run!(["mount", "-o", options.as_ref(), dev, dst])
             .whatever("unable to mount filesystem")
             .field_debug("dev", dev)
             .field_debug("dst", dst)?;

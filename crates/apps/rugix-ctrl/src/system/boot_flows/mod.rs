@@ -13,6 +13,7 @@ use rugix_common::disk::PartitionTable;
 use serde::Deserialize;
 use serde::Serialize;
 use tempfile::tempdir;
+use xscript::Run;
 
 use super::boot_groups::BootGroupIdx;
 use super::boot_groups::BootGroups;
@@ -574,8 +575,11 @@ fn tryboot_uboot_post_install(
     let boot_device = boot_slot
         .require_available_block()
         .whatever("spare boot slot is not available")?;
-    let _mounted_boot =
-        Mounted::mount(boot_device, temp_dir_spare).whatever("unable to mount boot device")?;
+    let _mounted_boot = Mounted::mount_with_options(boot_device, temp_dir_spare, "ro")
+        .whatever("unable to mount boot device")?;
+    if temp_dir_spare.join("boot.img").is_file() {
+        return Ok(());
+    }
     let Some(root) = &system.root else {
         bail!("no parent block device");
     };
@@ -599,6 +603,8 @@ fn tryboot_uboot_post_install(
         let part_uuid = require_gpt_partition_uuid(&table, partition_index)?;
         format!("PARTUUID={}", part_uuid)
     };
+    xscript::run!(["mount", "-o", "remount,rw", temp_dir_spare])
+        .whatever("unable to make boot partition writable")?;
     rpi_patch_boot_with_init_overwrite(temp_dir_spare, root, overwrite_init)
         .whatever("failed to patch boot partition")?;
     Ok(())
