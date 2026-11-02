@@ -76,8 +76,12 @@ impl Journal {
         Ok(())
     }
 
-    /// Recomputed geometry must agree with the plan recorded before the first write.
+    /// Disk identity and geometry must still agree with the plan after pre-layout hooks.
     pub fn validate_plan(&self, table: &PartitionTable) -> SystemResult<()> {
+        ensure!(
+            self.disk_id == table.disk_id.to_string(),
+            "bootstrap journal belongs to another disk"
+        );
         ensure!(
             self.block_size == table.block_size.into_raw()
                 && self.partitions.len() == table.partitions.len()

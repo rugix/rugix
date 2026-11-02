@@ -181,8 +181,8 @@ fn init() -> SystemResult<()> {
     let wipe_data_marker = Path::new(MOUNT_POINT_CONFIG).join(".rugix/wipe-data");
     let wipe_pending = wipe_data_marker.exists();
 
-    let bootstrap_journal = bootstrap::journal_path();
-    if bootstrap_marker.is_some() || wipe_pending || bootstrap_journal.exists() {
+    let bootstrap_pending = bootstrap_marker.is_some() || bootstrap::journal_path().exists();
+    if bootstrap_pending || wipe_pending {
         run!([
             "/usr/bin/env",
             "mount",
@@ -192,7 +192,7 @@ fn init() -> SystemResult<()> {
         ])
         .whatever("unable to mount config partition as read-write")?;
 
-        if bootstrap_marker.is_some() || bootstrap_journal.exists() {
+        if bootstrap_pending {
             bootstrap::run_bootstrap(&root, &system_config, &hook_options)?;
             if let Some(marker) = bootstrap_marker {
                 clear_flag(&marker).whatever("unable to remove bootstrap marker")?;

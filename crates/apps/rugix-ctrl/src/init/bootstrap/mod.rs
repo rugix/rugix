@@ -61,7 +61,7 @@ pub fn run_bootstrap(
     hook_options: &RunOptions,
 ) -> SystemResult<()> {
     let path = journal_path();
-    let mut journal = Journal::load(&path)?;
+    let journal = Journal::load(&path)?;
     let system_bytes = read_optional(Path::new(SYSTEM_CONFIG_PATH))?;
     let hooks = HooksLoader::default()
         .load_hooks("bootstrap")
@@ -70,11 +70,6 @@ pub fn run_bootstrap(
         .run_hooks("prepare", Vars::new(), hook_options)
         .whatever("unable to run `bootstrap/prepare` hooks")?;
 
-    // SystemConfig was loaded before prepare; do not pair stale settings with new bytes.
-    ensure!(
-        system_bytes == read_optional(Path::new(SYSTEM_CONFIG_PATH))?,
-        "system configuration changed during bootstrap preparation"
-    );
     let config_bytes = read_optional(Path::new(CONFIG_PATH))?;
     let configuration = configuration_digest(config_bytes.as_deref(), system_bytes.as_deref());
     let config = match config_bytes.as_deref() {
@@ -90,10 +85,6 @@ pub fn run_bootstrap(
         journal.validate_binding(&table, &configuration)?;
     }
     if config.disabled.unwrap_or(false) {
-        ensure!(
-            journal.is_none(),
-            "bootstrapping disabled while a journal is pending"
-        );
         warn!("Found bootstrapping marker but bootstrapping is disabled. Skip bootstrapping");
         return Ok(());
     }
@@ -101,10 +92,6 @@ pub fn run_bootstrap(
         SystemLayoutConfig::Default(DefaultLayoutConfig::new(NumBytes::gibibytes(4).into()))
     });
     let Some(schema) = partition_schema(&layout, table.ty()) else {
-        ensure!(
-            journal.is_none(),
-            "pending bootstrap journal requires a partition layout"
-        );
         return Ok(());
     };
     let data_config = system_config.data_partition.clone().unwrap_or_default();
@@ -122,16 +109,15 @@ pub fn run_bootstrap(
                 read_optional(Path::new(CONFIG_PATH))?.as_deref(),
                 read_optional(Path::new(SYSTEM_CONFIG_PATH))?.as_deref(),
             ),
-        "configuration changed during bootstrap pre-layout hooks"
+        "configuration changed during bootstrap hooks"
     );
     let before =
         PartitionTable::read(&root.device).whatever("unable to read current partition table")?;
     let changes = repart(&before, &schema).whatever("unable to plan bootstrap partitions")?;
     let target = changes.as_ref().unwrap_or(&before);
 
-    let mut journal = match journal.take() {
+    let mut journal = match journal {
         Some(journal) => {
-            journal.validate_binding(&before, &configuration)?;
             journal.validate_plan(target)?;
             journal
         }
@@ -219,7 +205,7 @@ fn partitions_to_initialize(
                 SystemLayoutConfig::Default(_) => number == data_number,
                 SystemLayoutConfig::Gpt(layout) | SystemLayoutConfig::Mbr(layout) => layout
                     .partitions
-                    .get(number.saturating_sub(1) as usize)
+                    .get(usize::from(partition.number) - 1)
                     .is_some_and(|entry| {
                         entry.filesystem.is_some() || (number == data_number && has_data_driver)
                     }),
@@ -421,6 +407,7 @@ filesystem = { type = "ext4", label = "data" }
         let mut other_disk = target.clone();
         other_disk.disk_id = DiskId::random_gpt();
         assert!(journal.validate_binding(&other_disk, &original).is_err());
+        assert!(journal.validate_plan(&other_disk).is_err());
         let same_settings = format!("# same settings, different bytes\n{CUSTOM_LAYOUT}");
         for (bootstrap, system) in [
             (
@@ -428,6 +415,14 @@ filesystem = { type = "ext4", label = "data" }
                 Some(b"[data-partition]\npartition = 4\n".as_slice()),
             ),
             (Some(CUSTOM_LAYOUT.as_bytes()), None),
+            (
+                Some(b"disabled = true\n".as_slice()),
+                Some(b"[data-partition]\npartition = 5\n".as_slice()),
+            ),
+            (
+                Some(b"[layout]\ntype = \"none\"\n".as_slice()),
+                Some(b"[data-partition]\npartition = 5\n".as_slice()),
+            ),
             (None, Some(b"[data-partition]\npartition = 5\n".as_slice())),
             (
                 Some(same_settings.as_bytes()),
