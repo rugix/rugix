@@ -31,6 +31,9 @@ Rugix Ctrl:
 - Preserve prepared boot partition contents in the `rpi-tryboot` and
   `rpi-uboot` post-install flows when `boot.img` is present, keeping authenticated
   boot images unchanged.
+- Resume interrupted bootstrap partition creation and filesystem initialization
+  from a durable journal. Preserve checkpointed filesystems and reject replay when
+  the disk, configuration bytes, or planned partition geometry differ.
 - Apply the default block-index requirement to execute payloads before starting their handlers.
 - Use supplied block encodings for block reuse in app installations even when `--insecure-allow-missing-block-index` is set. The option only permits missing indices.
 - Update Rustls to 0.23.46 to fix four TLS security advisories.

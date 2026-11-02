@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use byte_calc::NumBytes;
 use nix::mount::MntFlags;
 use reportify::bail;
 use reportify::ensure;
@@ -26,9 +25,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-use crate::config::bootstrapping::BootstrappingConfig;
-use crate::config::bootstrapping::DefaultLayoutConfig;
-use crate::config::bootstrapping::SystemLayoutConfig;
 use crate::config::state::OverlayConfig;
 use crate::config::state::OverlayFallbackConfig;
 use crate::config::state::PersistConfig;
@@ -50,14 +46,6 @@ use crate::system::root::SystemRoot;
 use crate::system::System;
 use crate::system::SystemError;
 use crate::system::SystemResult;
-use rugix_common::disk::blkpg::update_kernel_partitions;
-use rugix_common::disk::repart::generic_efi_partition_schema;
-use rugix_common::disk::repart::generic_mbr_partition_schema;
-use rugix_common::disk::repart::repart;
-use rugix_common::disk::repart::PartitionSchema;
-use rugix_common::disk::repart::SchemaPartition;
-use rugix_common::disk::PartitionTable;
-use rugix_common::partitions::mkfs_ext4;
 use rugix_hooks::HooksLoader;
 use rugix_hooks::RunOptions;
 use xscript::run;
@@ -71,6 +59,7 @@ use crate::utils::is_init_process;
 use crate::utils::read_deferred_reboot_target;
 use crate::utils::DEFERRED_SPARE_REBOOT_FLAG;
 
+mod bootstrap;
 mod error_shell;
 mod kernel_cmdline;
 
@@ -192,7 +181,8 @@ fn init() -> SystemResult<()> {
     let wipe_data_marker = Path::new(MOUNT_POINT_CONFIG).join(".rugix/wipe-data");
     let wipe_pending = wipe_data_marker.exists();
 
-    if bootstrap_marker.is_some() || wipe_pending {
+    let bootstrap_pending = bootstrap_marker.is_some() || bootstrap::journal_path().exists();
+    if bootstrap_pending || wipe_pending {
         run!([
             "/usr/bin/env",
             "mount",
@@ -202,9 +192,11 @@ fn init() -> SystemResult<()> {
         ])
         .whatever("unable to mount config partition as read-write")?;
 
-        if let Some(marker) = bootstrap_marker {
-            bootstrap(&root, &system_config, &hook_options)?;
-            std::fs::remove_file(&marker).whatever("unable to remove bootstrap marker")?;
+        if bootstrap_pending {
+            bootstrap::run_bootstrap(&root, &system_config, &hook_options)?;
+            if let Some(marker) = bootstrap_marker {
+                clear_flag(&marker).whatever("unable to remove bootstrap marker")?;
+            }
             info!("Done bootstrapping");
         }
 
@@ -459,181 +451,6 @@ pub fn state_dir() -> &'static Path {
     Path::new(STATE_DIR)
 }
 
-const BOOTSTRAP_CONFIG_PATH: &str = "/etc/rugix/bootstrapping.toml";
-
-fn load_bootstrap_config() -> SystemResult<BootstrappingConfig> {
-    Ok(if Path::new(BOOTSTRAP_CONFIG_PATH).exists() {
-        toml::from_str(
-            &fs::read_to_string(BOOTSTRAP_CONFIG_PATH)
-                .whatever("unable to read system configuration file")?,
-        )
-        .whatever("unable to parse system configuration file")?
-    } else {
-        BootstrappingConfig::default()
-    })
-}
-
-fn bootstrap(
-    root: &SystemRoot,
-    system_config: &SystemConfig,
-    hook_options: &RunOptions,
-) -> SystemResult<()> {
-    let bootstrap_hooks = HooksLoader::default()
-        .load_hooks("bootstrap")
-        .whatever("unable to load bootstrap hooks")?;
-
-    bootstrap_hooks
-        .run_hooks("prepare", Vars::new(), hook_options)
-        .whatever("unable to run `bootstrap/prepare` hooks")?;
-
-    let bootstrap_config = load_bootstrap_config()?;
-
-    if bootstrap_config.disabled.unwrap_or(false) {
-        warn!("Found bootstrapping marker but bootstrapping is disabled. Skip bootstrapping");
-        return Ok(());
-    }
-
-    info!("Found bootstrapping marker. Begin bootstrapping");
-    let layout = bootstrap_config.layout.unwrap_or_else(|| {
-        SystemLayoutConfig::Default(DefaultLayoutConfig::new(NumBytes::gibibytes(4).into()))
-    });
-
-    let ty = root.table.as_ref().unwrap().ty();
-
-    let schema = match &layout {
-        SystemLayoutConfig::Mbr(partition_layout_config)
-        | SystemLayoutConfig::Gpt(partition_layout_config) => Some(PartitionSchema {
-            ty,
-            partitions: partition_layout_config
-                .partitions
-                .iter()
-                .map(|part| SchemaPartition {
-                    number: None,
-                    name: part.name.clone().map(Into::into),
-                    size: part.size.map(|s| s.raw.into()),
-                    ty: part.ty.map(|value| value.0),
-                })
-                .collect(),
-        }),
-        SystemLayoutConfig::Default(default_layout_config) => match ty {
-            rugix_common::disk::PartitionTableType::Gpt => Some(generic_efi_partition_schema(
-                default_layout_config.system_size.raw.into(),
-            )),
-            rugix_common::disk::PartitionTableType::Mbr => Some(generic_mbr_partition_schema(
-                default_layout_config.system_size.raw.into(),
-            )),
-        },
-        SystemLayoutConfig::None => None,
-    };
-
-    let data_partition_config = system_config.data_partition.clone().unwrap_or_default();
-    let default_data_idx = if ty.is_mbr() { 7u32 } else { 6u32 };
-    let data_partition_idx = data_partition_config.partition.unwrap_or(default_data_idx);
-    let data_partition_has_driver = data_partition_config.driver.is_some();
-
-    if let Some(schema) = schema {
-        bootstrap_hooks
-            .run_hooks("pre-layout", Vars::new(), hook_options)
-            .whatever("unable to run `bootstrap/pre-layout` hooks")?;
-        if let Some((old_table, _)) = bootstrap_partitions(&schema, root)? {
-            // Partition is new, let's see whether we need to create a filesystem.
-            match &layout {
-                SystemLayoutConfig::Mbr(partition_layout_config)
-                | SystemLayoutConfig::Gpt(partition_layout_config) => {
-                    for (idx, config) in partition_layout_config.partitions.iter().enumerate() {
-                        let part_num = (idx + 1) as u32;
-                        if idx < old_table.partitions.len() {
-                            if config.filesystem.is_some() {
-                                warn!(
-                                    "refuse to create filesystems on already existing partition {}",
-                                    part_num
-                                );
-                            }
-                            continue;
-                        }
-                        let block_device = root.resolve_partition(part_num).unwrap();
-                        // When a driver is configured, it owns format
-                        // end-to-end; the layout's filesystem entry is
-                        // ignored to avoid double-formatting an
-                        // encrypted volume.
-                        if part_num == data_partition_idx && data_partition_has_driver {
-                            let driver = resolve_driver(&data_partition_config);
-                            let ctx = DriverContext::new(
-                                block_device.path().to_path_buf(),
-                                Path::new(MOUNT_POINT_DATA).to_path_buf(),
-                            );
-                            driver.format(&ctx).whatever(
-                                "unable to format data partition via configured driver",
-                            )?;
-                            continue;
-                        }
-                        let Some(filesystem) = &config.filesystem else {
-                            continue;
-                        };
-                        match filesystem {
-                            crate::config::bootstrapping::Filesystem::Ext4(ext4_filesystem) => {
-                                mkfs_ext4(
-                                    block_device,
-                                    ext4_filesystem.label.as_deref().unwrap_or(""),
-                                    ext4_filesystem
-                                        .additional_options
-                                        .as_deref()
-                                        .unwrap_or_default(),
-                                )
-                                .whatever("unable to create filesystem on partition")?;
-                            }
-                        }
-                    }
-                }
-                SystemLayoutConfig::Default(_) => {
-                    format_data_partition_if_new(&old_table, data_partition_idx, || {
-                        let block_device = root.resolve_partition(data_partition_idx).unwrap();
-                        let driver = resolve_driver(&data_partition_config);
-                        let ctx = DriverContext::new(
-                            block_device.path().to_path_buf(),
-                            Path::new(MOUNT_POINT_DATA).to_path_buf(),
-                        );
-                        driver.format(&ctx)
-                    })
-                    .whatever("unable to format data partition")?;
-                }
-                SystemLayoutConfig::None => unreachable!(),
-            }
-        }
-        bootstrap_hooks
-            .run_hooks("post-layout", Vars::new(), hook_options)
-            .whatever("unable to run `bootstrap/post-layout` hooks")?;
-    }
-
-    Ok(())
-}
-
-/// Returns whether the configured data partition was added during repartitioning.
-///
-/// Partition numbers are one-based and are not required to be contiguous, so the number
-/// of entries in the old table cannot be used to determine whether a particular partition
-/// existed.
-fn data_partition_is_new(old_table: &PartitionTable, data_partition_idx: u32) -> bool {
-    old_table
-        .partitions
-        .iter()
-        .all(|partition| u32::from(partition.number) != data_partition_idx)
-}
-
-fn format_data_partition_if_new<F>(
-    old_table: &PartitionTable,
-    data_partition_idx: u32,
-    format: F,
-) -> SystemResult<()>
-where
-    F: FnOnce() -> SystemResult<()>,
-{
-    if data_partition_is_new(old_table, data_partition_idx) {
-        format()?;
-    }
-    Ok(())
-}
-
 /// Run a deferred `rugix-ctrl data wipe`. The driver's `wipe` is
 /// responsible for leaving the partition in a fresh, mountable state.
 ///
@@ -678,30 +495,6 @@ fn mount_essential_filesystems() -> SystemResult<()> {
         debug!("skip mounting of `/run`: already mounted")
     }
     Ok(())
-}
-
-/// Initializes the partitions and expands the partition table during the first boot.
-fn bootstrap_partitions(
-    schema: &PartitionSchema,
-    root: &SystemRoot,
-) -> SystemResult<Option<(PartitionTable, PartitionTable)>> {
-    let old_table =
-        PartitionTable::read(root.device.path()).whatever("unable to read partition table")?;
-    if let Some(new_table) =
-        repart(&old_table, schema).whatever("unable to compute new partition table")?
-    {
-        // Write new partition table to disk.
-        new_table
-            .write(root.device.path())
-            .whatever("unable to write new partition table")?;
-        run!(["/usr/bin/env", "sync"]).whatever("unable to synchronize file systems")?;
-        // Inform the kernel about new partitions.
-        update_kernel_partitions(root.device.path(), &old_table, &new_table)
-            .whatever("unable to update partitions in the kernel")?;
-        Ok(Some((old_table, new_table)))
-    } else {
-        Ok(None)
-    }
 }
 
 /// Sets up the overlay.
@@ -1134,126 +927,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-    use std::path::PathBuf;
-
-    use rugix_common::disk::gpt::gpt_types;
-    use rugix_common::disk::mbr::mbr_types;
-    use rugix_common::disk::mbr::MbrId;
-    use rugix_common::disk::DiskId;
-    use rugix_common::disk::NumBlocks;
-    use rugix_common::disk::Partition;
-    use rugix_common::disk::PartitionTable;
-
-    use crate::system::data_partition::DataPartitionDriver;
-    use crate::system::data_partition::DriverContext;
-    use crate::system::SystemResult;
-
     use super::data_mount_error_policy;
-    use super::data_partition_is_new;
-    use super::format_data_partition_if_new;
     use super::validated_profile_name;
     use super::validated_state_path;
-
-    #[derive(Default)]
-    struct RecordingDriver {
-        formats: Cell<usize>,
-    }
-
-    impl DataPartitionDriver for RecordingDriver {
-        fn format(&self, _ctx: &DriverContext) -> SystemResult<()> {
-            self.formats.set(self.formats.get() + 1);
-            Ok(())
-        }
-
-        fn mount(&self, _ctx: &DriverContext) -> SystemResult<()> {
-            unreachable!("mount is not used by bootstrap format tests")
-        }
-
-        fn wipe(&self, _ctx: &DriverContext) -> SystemResult<()> {
-            unreachable!("wipe is not used by bootstrap format tests")
-        }
-    }
-
-    fn driver_context() -> DriverContext {
-        DriverContext::new(PathBuf::from("/dev/test-data"), PathBuf::from("/mnt/data"))
-    }
-
-    fn partition(number: u8, ty: rugix_common::disk::PartitionType) -> Partition {
-        Partition {
-            number,
-            start: NumBlocks::from_raw(u64::from(number) * 2048),
-            size: NumBlocks::from_raw(1024),
-            ty,
-            name: None,
-            gpt_id: None,
-            gpt_attrs: None,
-            bootable: false,
-        }
-    }
-
-    #[test]
-    fn new_default_gpt_data_partition_is_detected() {
-        let mut table = PartitionTable::new(DiskId::random_gpt(), NumBlocks::from_raw(1_000_000));
-        table.partitions = (1..=5)
-            .map(|number| partition(number, gpt_types::LINUX))
-            .collect();
-
-        let driver = RecordingDriver::default();
-        let ctx = driver_context();
-        format_data_partition_if_new(&table, 6, || driver.format(&ctx)).unwrap();
-
-        assert!(data_partition_is_new(&table, 6));
-        assert_eq!(driver.formats.get(), 1);
-    }
-
-    #[test]
-    fn existing_default_gpt_data_partition_is_not_new() {
-        let mut table = PartitionTable::new(DiskId::random_gpt(), NumBlocks::from_raw(1_000_000));
-        table.partitions = (1..=6)
-            .map(|number| partition(number, gpt_types::LINUX))
-            .collect();
-
-        let driver = RecordingDriver::default();
-        let ctx = driver_context();
-        format_data_partition_if_new(&table, 6, || driver.format(&ctx)).unwrap();
-
-        assert!(!data_partition_is_new(&table, 6));
-        assert_eq!(driver.formats.get(), 0);
-    }
-
-    #[test]
-    fn configured_data_partition_is_found_by_number_across_gaps() {
-        let mut table = PartitionTable::new(DiskId::random_gpt(), NumBlocks::from_raw(1_000_000));
-        table.partitions = [1, 2, 4, 8]
-            .map(|number| partition(number, gpt_types::LINUX))
-            .into();
-
-        assert!(!data_partition_is_new(&table, 8));
-        assert!(data_partition_is_new(&table, 6));
-    }
-
-    #[test]
-    fn default_mbr_data_partition_is_detected_by_number() {
-        let mut table = PartitionTable::new(
-            DiskId::Mbr(MbrId::new(0x12345678)),
-            NumBlocks::from_raw(1_000_000),
-        );
-        table.partitions = (1..=7)
-            .map(|number| partition(number, mbr_types::LINUX))
-            .collect();
-
-        let driver = RecordingDriver::default();
-        let ctx = driver_context();
-        format_data_partition_if_new(&table, 7, || driver.format(&ctx)).unwrap();
-        assert!(!data_partition_is_new(&table, 7));
-        assert_eq!(driver.formats.get(), 0);
-
-        table.partitions.retain(|partition| partition.number != 7);
-        format_data_partition_if_new(&table, 7, || driver.format(&ctx)).unwrap();
-        assert!(data_partition_is_new(&table, 7));
-        assert_eq!(driver.formats.get(), 1);
-    }
 
     #[test]
     fn persistent_state_paths_are_validated_after_stripping_one_root() {
