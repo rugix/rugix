@@ -34,9 +34,6 @@ Rugix Ctrl:
 - Resume interrupted bootstrap partition creation and filesystem initialization
   from a durable journal. Preserve checkpointed filesystems and reject replay when
   the disk, configuration bytes, or planned partition geometry differ.
-- Apply the default block-index requirement to execute payloads before starting their handlers.
-- Use supplied block encodings for block reuse in app installations even when `--insecure-allow-missing-block-index` is set. The option only permits missing indices.
-- Update Rustls to 0.23.46 to fix four TLS security advisories.
 - Report the orchestrator of the active app generation in `rugix-ctrl apps list` and `rugix-ctrl apps info`, and the desired application configuration revision in `rugix-ctrl apps info`.
 - Publish JSON Schemas for the application inspection output: `apps list` entries, `apps info`, `apps gc`, and `apps config set`.
 - Execute `rugix-ctrl apps generations` through the operation layer, so that it works through the privileged daemon and reports generation metadata like `apps info` does.
@@ -58,6 +55,21 @@ Rugix Ctrl:
 Rugix Bundler:
 
 - Add optional JSON Schema and default configuration files to app bundles, plus explicit JSON Pointer-to-environment projection for Docker Compose apps.
+
+## Version 1.3.2
+
+- Apply the default block-index requirement to execute payloads before starting their handlers.
+- Use supplied block encodings for block reuse in system and app installations even when `--insecure-allow-missing-block-index` is set. The option only permits missing indices.
+- Update Tokio to 1.53.3.
+
+## Version 1.3.1
+
+Security:
+
+- Remove `emSign ECC Root CA - G3` from the bundled HTTPS trust roots and reject certificate chains containing the compromised eMudhra intermediate keys (CVE-2026-111943). Update `webpki-roots` to 1.0.10 and `rustls-webpki` to 0.103.16. Upgrade Rugix Ctrl on deployed devices; updating the operating system's CA certificates alone does not update its bundled roots.
+- Update Rustls to 0.23.46 to include its recent TLS security fixes.
+
+HTTPS endpoints whose certificate chains depend on the removed `emSign ECC Root CA - G3` root or the compromised intermediate keys will fail verification after this update. Replace those server certificate chains with certificates from an unaffected CA.
 
 ## Version 1.3.0
 
