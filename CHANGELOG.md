@@ -1,11 +1,10 @@
 # Changelog
 
-## Unreleased
+## Version 1.4.0
 
 Behavior Changes:
 
 - Verify HTTPS update servers against the operating system trust store. Install and maintain `ca-certificates` on target devices; Rugix Ctrl no longer embeds a separate public CA bundle. Keep bundle signing roots configured independently.
-
 - Accept unknown fields in TOML and JSON component declarations, including nested fields, so older Rugix versions can read declarations extended by newer versions. Log a warning with the declaration path and unknown field paths.
 - App bundles must carry payloads for a single app. Rugix Bundler rejects a manifest declaring app payloads for several apps, and Rugix Ctrl refuses to install such a bundle. No packing command could produce one, so this affects hand-written bundle manifests only. Pack one bundle per app.
 - `rugix-ctrl apps info` reports the persisted lifecycle state as `lifecycle` instead of `state`, so that it is no longer mistaken for the live workload `status` next to it. Both remain objects whose discriminant is `state`.
@@ -13,21 +12,18 @@ Behavior Changes:
 - Deactivating a Docker Compose app generation removes its Rugix-owned image tags, so images of old generations no longer accumulate. Activation loads them again from the generation directory or the store. Images bundled with `--disable-pinning` keep their original references and are not removed.
 - `rugix-bundler apps pack docker-compose` keeps the bundled container images in the device's content-addressed store. Rugix Ctrl no longer writes `images/*.tar` into the generation directory for such bundles; read them with `rugix-ctrl apps cat` instead. Older Rugix Ctrl versions still write the files when installing such bundles, but cannot read stored files. After a system rollback to an older version, Docker Compose generations installed with the store can only be activated while Docker still has their images, and orchestrator scripts calling `rugix-ctrl apps cat` fail. Pass `--image-location file` to keep writing the images into the generation directory while devices may roll back to such a version.
 
-Nix integration:
+Nix Integration:
 
 - Export `nixosModules.rugix` for Rugix Ctrl services, daemon configuration, and app recovery.
 - Export `lib.mkBundle` for packaging caller-supplied payloads with a Rugix bundle manifest.
 
-Rugix Bundler:
-
-- Add `docker-archive` Compose image sources for bundling prebuilt images without a registry or container daemon. Archive paths resolve relative to the Compose file, and normal content-based pinning applies.
-- Export `lib.mkComposeBundle` from the Nix flake to package Nix-built container images, Compose configuration, and app metadata.
-- Honor the caller's temporary directory when Skopeo stages container images, including inside Nix build sandboxes.
-- Add the `store` option to `app-file` payload deliveries and show it in `rugix-bundler inspect`.
-- Add `--image-location` to `rugix-bundler apps pack docker-compose` and `imageLocation` to `lib.mkComposeBundle` to select whether the device keeps bundled images in its content-addressed store (`store`, the default) or as files in the generation directory (`file`).
-
 Rugix Ctrl:
 
+- Pipeline HTTP range requests, combine adjacent missing blocks, and reuse connections to reduce latency during dynamic delta updates. Fetching runs concurrently with payload verification, decompression, and writes, and works with existing block-encoded bundles.
+- Resume interrupted HTTP transfers with bounded retries and configurable stall timeout, range sizes, and concurrency.
+- Add `rugix-ctrl bundle inspect` for bundles from files, HTTP(S), and standard input, including their embedded manifest and payload metadata.
+- Keep each app's `current` generation symlink synchronized after lifecycle transitions, including recovery, rollback, and deactivation.
+- Include and enable the app restoration and recovery systemd services in the Debian packages.
 - Preserve prepared boot partition contents in the `rpi-tryboot` and
   `rpi-uboot` post-install flows when `boot.img` is present, keeping authenticated
   boot images unchanged.
@@ -54,6 +50,11 @@ Rugix Ctrl:
 
 Rugix Bundler:
 
+- Add `docker-archive` Compose image sources for bundling prebuilt images without a registry or container daemon. Archive paths resolve relative to the Compose file, and normal content-based pinning applies.
+- Export `lib.mkComposeBundle` from the Nix flake to package Nix-built container images, Compose configuration, and app metadata.
+- Honor the caller's temporary directory when Skopeo stages container images, including inside Nix build sandboxes.
+- Add the `store` option to `app-file` payload deliveries and show it in `rugix-bundler inspect`.
+- Add `--image-location` to `rugix-bundler apps pack docker-compose` and `imageLocation` to `lib.mkComposeBundle` to select whether the device keeps bundled images in its content-addressed store (`store`, the default) or as files in the generation directory (`file`).
 - Add optional JSON Schema and default configuration files to app bundles, plus explicit JSON Pointer-to-environment projection for Docker Compose apps.
 
 ## Version 1.3.2
