@@ -14,7 +14,6 @@ use rugix_common::disk::PartitionTable;
 use rugix_common::disk::PartitionType;
 use serde::Deserialize;
 use serde::Serialize;
-use xscript::Run;
 
 use crate::system::SystemResult;
 
@@ -56,11 +55,7 @@ impl Journal {
         let bytes =
             serde_json::to_vec_pretty(self).whatever("unable to encode bootstrap journal")?;
         rugix_common::fsutils::atomic_write(path, &bytes)
-            .whatever("unable to persist bootstrap journal")?;
-        // The journal directory may also be new; persist its parent entry before repartitioning.
-        xscript::run!(["sync", "-f", path])
-            .whatever("unable to synchronize bootstrap journal filesystem")?;
-        Ok(())
+            .whatever("unable to persist bootstrap journal")
     }
 
     /// Reject a fallback image before executing any pre-layout hooks.

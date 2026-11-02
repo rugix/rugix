@@ -25,24 +25,37 @@ reportify::new_whatever_type! {
 /// Atomically write `data` to `path` using a write-fsync-rename pattern.
 ///
 /// Writes to a temporary file next to `path`, fsyncs it, then atomically
-/// renames it to the final path. The parent directory is fsynced after the
-/// rename to ensure the new directory entry is durable. This guarantees
-/// that the file is never partially written, even if the system crashes
-/// mid-write.
+/// renames it to the final path. Fsyncs the parent directory and the parent
+/// entries of any directories created along the path. A successful write is
+/// durable; a crash during the write cannot expose a partially written file.
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<(), Report<FsError>> {
     let tmp_path = path.with_extension("tmp");
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).whatever("unable to create parent directory")?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut directories_to_sync = vec![parent];
+    let mut directory = parent;
+    while !directory
+        .try_exists()
+        .whatever("unable to inspect parent directory")?
+    {
+        directory = directory
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        directories_to_sync.push(directory);
     }
+    fs::create_dir_all(parent).whatever("unable to create parent directory")?;
     let mut file = File::create(&tmp_path).whatever("unable to create temporary file")?;
     file.write_all(data)
         .whatever("unable to write temporary file")?;
     file.sync_all().whatever("unable to sync temporary file")?;
     drop(file);
     fs::rename(&tmp_path, path).whatever("unable to rename temporary file")?;
-    // Fsync the parent directory so that the rename is durable across crashes.
-    if let Some(parent) = path.parent() {
-        File::open(parent)
+    // Include the nearest existing ancestor to persist the new directory entries.
+    for directory in directories_to_sync {
+        File::open(directory)
             .whatever("unable to open parent directory")?
             .sync_all()
             .whatever("unable to sync parent directory")?;
@@ -175,4 +188,29 @@ pub fn copy_sparse(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Creating nested parents and replacing the file both complete successfully.
+    #[test]
+    fn atomic_write_with_new_parent_directories() {
+        let work = tempfile::tempdir().unwrap();
+        let path = work.path().join("new/nested/journal");
+        atomic_write(&path, b"pending").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"pending");
+        atomic_write(&path, b"complete").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"complete");
+    }
+
+    /// A bare filename synchronizes the current directory instead of an empty path.
+    #[test]
+    fn atomic_write_with_bare_relative_filename() {
+        let file = tempfile::NamedTempFile::new_in(".").unwrap();
+        let path = Path::new(file.path().file_name().unwrap());
+        atomic_write(path, b"updated").unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"updated");
+    }
 }
