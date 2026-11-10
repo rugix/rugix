@@ -81,7 +81,8 @@ the exact versions and checksums used by developers and CI. Rust is managed sepa
 by rustup through `rust-toolchain.toml`, so Cargo, rust-analyzer, and editors use the same
 dated nightly without requiring mise activation.
 
-Install the locked toolchain and inspect the available commands:
+Install Nix with flakes enabled, mise, and rustup. Then install the locked
+non-Rust tools and inspect the available commands:
 
 ```bash
 mise install
@@ -99,14 +100,11 @@ mise run package:deb x86_64-unknown-linux-musl
 mise run test:system -n 4
 ```
 
-Run `mise run doctor` to check host dependencies. Development requires rustup; entering
-the repository or running Cargo installs the configured Rust toolchain as needed. Native
-builds also require a C compiler, `pkg-config`, OpenSSL, and liblzma development files.
-Cross-builds require Docker or Podman. The system tests additionally require QEMU and
-OVMF. App packing, signing, and delta creation run the host Bundler selected from
-`build/binaries` or `RUGIX_BUNDLER`; install Skopeo and xdelta3 for those operations.
-CI provides both tools from the Nixpkgs revision pinned in `flake.lock`. See the
-[system tests](tests/README.md) for binary selection and test prerequisites.
+Mise tasks enter the pinned Nix environment for native dependencies. Rustup reads
+the dated nightly in `rust-toolchain.toml`. Cross-builds use Docker or Podman;
+the Nix shell provides Podman on Linux. System-test tasks also provide QEMU,
+OVMF, Skopeo, xdelta3, and signing tools. No prior `nix develop` step is needed.
+The [system test guide](tests/README.md) explains binary selection and image setup.
 
 To deliberately update the non-Rust toolchain, update the loose specifications if needed
 and run `mise lock`; commit `mise.toml` and `mise.lock` together. Update Rust by changing
