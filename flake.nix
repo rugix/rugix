@@ -84,6 +84,47 @@
           '';
       in
       {
+        devShells = {
+          default = pkgs.mkShell {
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+              pkgs.xz
+              pkgs.openssl
+              pkgs.stdenv.cc.cc.lib
+            ];
+            packages =
+              with pkgs;
+              [
+                git
+                pkg-config
+                openssl
+                xz
+              ]
+              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ podman ];
+          };
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          packaging = pkgs.mkShell {
+            packages = with pkgs; [
+              git
+              dpkg
+              xz
+            ];
+          };
+          system-tests = pkgs.mkShell {
+            packages = with pkgs; [
+              podman
+              qemu
+              mtools
+              swtpm
+              openssl
+              skopeo
+              xdelta
+            ];
+            RUGIX_OVMF_CODE_AMD64 = "${pkgs.OVMF.fd}/FV/OVMF_CODE.fd";
+            RUGIX_OVMF_VARS_AMD64 = "${pkgs.OVMF.fd}/FV/OVMF_VARS.fd";
+          };
+        };
+
         packages = {
           rugix-ctrl = wrapWithXdelta (buildRugixPackage "rugix-ctrl");
           rugix-bundler = wrapWithXdelta (buildRugixPackage "rugix-bundler");

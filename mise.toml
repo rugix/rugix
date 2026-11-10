@@ -17,53 +17,10 @@ RUST_BACKTRACE = "1"
 
 [tasks.codegen]
 description = "Regenerate Sidex-generated JSON schemas."
-run = """
-set -eu
-
-(
-cd crates/apps/rugix-ctrl
-mkdir -p generated
-rm -rf generated/*
-sidex generate json-schema generated/
-
-# Copy generated JSON schemas to the schemas directory (repo root)
-mkdir -p ../../../schemas
-cp generated/rugix_ctrl.bootstrapping.BootstrappingConfig.schema.json ../../../schemas/rugix-ctrl-bootstrapping.schema.json
-cp generated/rugix_ctrl.state.StateConfig.schema.json ../../../schemas/rugix-ctrl-state.schema.json
-cp generated/rugix_ctrl.system.SystemConfig.schema.json ../../../schemas/rugix-ctrl-system.schema.json
-cp generated/rugix_ctrl.config.Config.schema.json ../../../schemas/rugix-ctrl-config.schema.json
-cp generated/rugix_ctrl.daemon.DaemonConfig.schema.json ../../../schemas/rugix-ctrl-daemon.schema.json
-cp generated/rugix_ctrl.component.ComponentDeclaration.schema.json ../../../schemas/rugix-ctrl-component.schema.json
-cp generated/rugix_ctrl.output.SystemInfoOutput.schema.json ../../../schemas/rugix-ctrl-output-info.schema.json
-cp generated/rugix_ctrl.output.ComponentsOutput.schema.json ../../../schemas/rugix-ctrl-output-components.schema.json
-cp generated/rugix_ctrl.output.ComponentsCheckOutput.schema.json ../../../schemas/rugix-ctrl-output-components-check.schema.json
-cp generated/rugix_ctrl.output.AppListEntryOutput.schema.json ../../../schemas/rugix-ctrl-output-app-list-entry.schema.json
-cp generated/rugix_ctrl.output.AppInfoOutput.schema.json ../../../schemas/rugix-ctrl-output-app-info.schema.json
-cp generated/rugix_ctrl.output.AppGcAppOutput.schema.json ../../../schemas/rugix-ctrl-output-app-gc.schema.json
-cp generated/rugix_ctrl.output.AppConfigurationSetOutput.schema.json ../../../schemas/rugix-ctrl-output-app-configuration-set.schema.json
-cp generated/rugix_ctrl.output.AppFileOutput.schema.json ../../../schemas/rugix-ctrl-output-app-file.schema.json
-cp generated/rugix_ctrl.output.StoreInfoOutput.schema.json ../../../schemas/rugix-ctrl-output-store-info.schema.json
-cp generated/rugix_ctrl.output.StoreRefOutput.schema.json ../../../schemas/rugix-ctrl-output-store-ref.schema.json
-cp generated/rugix_ctrl.output.StoreVerifyOutput.schema.json ../../../schemas/rugix-ctrl-output-store-verify.schema.json
-cp generated/rugix_ctrl.output.StoreGcOutput.schema.json ../../../schemas/rugix-ctrl-output-store-gc.schema.json
-)
-
-(
-cd crates/libs/rugix-bundle
-mkdir -p generated
-rm -rf generated/*
-sidex generate json-schema generated/
-
-cp generated/rugix_bundle.manifest.BundleManifest.schema.json ../../../schemas/rugix-bundle-manifest.schema.json
-cp generated/rugix_bundle.manifest.AppManifest.schema.json ../../../schemas/rugix-app-manifest.schema.json
-cp generated/rugix_bundle.compose.ImageOptions.schema.json ../../../schemas/rugix-compose-image-options.schema.json
-cp generated/rugix_bundle.compose.ImageMetadata.schema.json ../../../schemas/rugix-compose-image-metadata.schema.json
-)
-
-cargo fmt
-"""
+run = "bash scripts/codegen.sh \"$@\""
 
 [tasks.doc]
+shell = "nix develop \"{{config_root}}\" --command bash -euo pipefail -c"
 description = "Build documentation for all workspace crates."
 run = "cargo doc --workspace --all-features --document-private-items"
 
@@ -80,6 +37,7 @@ description = "Verify that every Rust file is formatted by Rustfmt nightly."
 run = "cargo fmt --check"
 
 [tasks."check:clippy"]
+shell = "nix develop \"{{config_root}}\" --command bash -euo pipefail -c"
 description = "Run Clippy across the workspace with warnings denied."
 run = "cargo clippy --workspace --all-targets --all-features -- -D warnings"
 
@@ -96,10 +54,12 @@ description = "Run unit tests."
 depends = ["test:unit"]
 
 [tasks."test:unit"]
+shell = "nix develop \"{{config_root}}\" --command bash -euo pipefail -c"
 description = "Run all Rust unit tests with every feature enabled."
 run = "cargo test --workspace --all-features"
 
 [tasks."test:system"]
+shell = "nix develop \"{{config_root}}#system-tests\" --command bash -euo pipefail -c"
 description = "Run the QEMU-based system test suite (requires a container runtime, QEMU, and OVMF)."
 dir = "tests"
 run = 'uv run pytest "$@"'
@@ -114,49 +74,23 @@ uv run --group dev mypy .
 '''
 
 [tasks.build]
+shell = "nix develop \"{{config_root}}\" --command bash -euo pipefail -c"
 description = "Cross-build release binaries for one or more Rust targets."
 run = './scripts/build-binaries.sh "$@"'
 
 [tasks."build:mac"]
+shell = "nix develop \"{{config_root}}\" --command bash -euo pipefail -c"
 description = "Build Rugix Bundler for a macOS Rust target."
 usage = 'arg "<target>" help="Rust target triple to build"'
-run = '''
-set -euo pipefail
-target="$usage_target"
-export RUGIX_GIT_VERSION="$(git describe --tags --always)"
-cargo build --locked --release --target "$target" --bin rugix-bundler -F xz2/static
-tar -cf "binaries-${target}.tar" -C "target/${target}/release" rugix-bundler
-'''
+run = 'bash scripts/build-mac.sh "$usage_target"'
+
 
 [tasks."package:deb"]
+shell = "nix develop \"{{config_root}}#packaging\" --command bash -euo pipefail -c"
 description = "Package previously built binaries as Debian packages."
 run = './scripts/build-debs.sh "$@"'
 
 [tasks."package:source"]
+shell = "nix develop \"{{config_root}}#packaging\" --command bash -euo pipefail -c"
 description = "Build the metadata-only Debian source package."
 run = "./scripts/build-source-package.sh"
-
-[tasks.doctor]
-description = "Check host capabilities that mise cannot install."
-run = '''
-set -euo pipefail
-
-missing=0
-for tool in git rustup cc pkg-config openssl; do
-    if ! command -v "$tool" >/dev/null 2>&1; then
-        echo "missing required host tool: $tool" >&2
-        missing=1
-    fi
-done
-
-if ! command -v podman >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
-    echo "missing container runtime: install podman or docker (required for cross-builds and system tests)" >&2
-    missing=1
-fi
-
-if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
-    echo "optional system-test dependency not found: qemu-system-x86_64" >&2
-fi
-
-exit "$missing"
-'''
