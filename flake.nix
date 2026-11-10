@@ -86,6 +86,11 @@
       {
         devShells = {
           default = pkgs.mkShell {
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+              pkgs.xz
+              pkgs.openssl
+              pkgs.stdenv.cc.cc.lib
+            ];
             packages =
               with pkgs;
               [
