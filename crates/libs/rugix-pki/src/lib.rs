@@ -54,6 +54,7 @@ pub use sign::RsaHashAlgorithm;
 pub use sign::RsaSignatureMode;
 pub use verify::CmsVerifier;
 pub use verify::VerificationResult;
+pub use verify::verify_cms_with_certificate;
 
 use thiserror::Error;
 

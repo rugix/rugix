@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Accept OpenSSL RSA CMS signatures using generic `rsaEncryption` with a separately declared SHA-256, SHA-384, or SHA-512 digest, and RSA-PSS SHA-2 identifiers with absent optional NULL parameters. Continue requiring matching digest algorithms, matching PSS and MGF1 hashes, and digest-sized PSS salts. Update deployed devices with a compatible verifier before distributing signatures using these encodings, including rollback images that must install them.
+- Add `rugix_pki::verify_cms_with_certificate` for checking external signer output with an expected signer certificate using the device's CMS and cryptographic checks. This API does not establish certificate-chain trust or certificate validity.
+
 ## Version 1.4.0
 
 Behavior Changes:

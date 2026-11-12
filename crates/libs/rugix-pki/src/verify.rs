@@ -32,7 +32,6 @@ use const_oid::db::rfc5912::SHA_512_WITH_RSA_ENCRYPTION;
 use der::Decode;
 use der::Encode;
 use der::Tag;
-use der::Tagged;
 use der::asn1::GeneralizedTime;
 use der::asn1::OctetString;
 use der::asn1::UtcTime;
@@ -93,54 +92,7 @@ impl CmsVerifier {
     /// 3. Verifies the signature
     /// 4. Returns the encapsulated content if verification succeeds
     pub fn verify(&self, cms_der: &[u8]) -> PkiResult<VerificationResult> {
-        let content_info = ContentInfo::from_der(cms_der)
-            .map_err(|e| PkiError::InvalidCms(format!("failed to parse ContentInfo: {}", e)))?;
-
-        if content_info.content_type != ID_SIGNED_DATA {
-            return Err(PkiError::InvalidCms(format!(
-                "unexpected content type: {}, expected SignedData",
-                content_info.content_type
-            )));
-        }
-
-        let signed_data: SignedData = content_info
-            .content
-            .decode_as()
-            .map_err(|e| PkiError::InvalidCms(format!("failed to parse SignedData: {}", e)))?;
-
-        let econtent = signed_data
-            .encap_content_info
-            .econtent
-            .as_ref()
-            .ok_or(PkiError::NoEncapsulatedContent)?;
-
-        let content_bytes: OctetString = econtent
-            .decode_as()
-            .map_err(|e| PkiError::InvalidCms(format!("failed to decode content: {}", e)))?;
-        let content = content_bytes.as_bytes().to_vec();
-
-        let embedded_certs = extract_certificates(&signed_data)?;
-        if signed_data.signer_infos.0.is_empty() {
-            return Err(PkiError::NoSignerInfo);
-        }
-        let mut signer_errors = Vec::new();
-        for signer_info in signed_data.signer_infos.0.iter() {
-            match verify_signer(
-                &self.root_cert,
-                &signed_data,
-                &content,
-                &embedded_certs,
-                signer_info,
-            ) {
-                Ok(result) => return Ok(result),
-                Err(error) => signer_errors.push(error.to_string()),
-            }
-        }
-        Err(PkiError::SignatureVerification(format!(
-            "none of {} signer infos verified: {}",
-            signer_errors.len(),
-            signer_errors.join("; ")
-        )))
+        verify_cms(cms_der, VerificationPolicy::TrustedRoot(&self.root_cert))
     }
 
     /// Verify a DER-encoded CMS signature and check that the content matches expected
@@ -154,8 +106,74 @@ impl CmsVerifier {
     }
 }
 
+/// Verify CMS content using a specific PEM-encoded signer certificate.
+///
+/// Uses the same CMS, digest, signature, and key-usage checks as [CmsVerifier].
+/// This checks possession of the signing key, but does not validate certificate
+/// validity, a certificate chain, or device trust. Use [CmsVerifier] for those checks.
+/// The caller must compare the returned content with the intended signed metadata.
+pub fn verify_cms_with_certificate(cms_der: &[u8], signer_cert_pem: &[u8]) -> PkiResult<Vec<u8>> {
+    let cert_der = pem::parse(signer_cert_pem, "CERTIFICATE")?;
+    let cert =
+        Certificate::from_der(&cert_der).map_err(|e| PkiError::CertificateParse(e.to_string()))?;
+    Ok(verify_cms(cms_der, VerificationPolicy::SignerCertificate(&cert))?.content)
+}
+
+/// Certificate validation required by the caller.
+#[derive(Clone, Copy)]
+enum VerificationPolicy<'a> {
+    TrustedRoot(&'a Certificate),
+    SignerCertificate(&'a Certificate),
+}
+
+/// Parse and verify an encapsulated CMS message under a certificate policy.
+fn verify_cms(cms_der: &[u8], policy: VerificationPolicy<'_>) -> PkiResult<VerificationResult> {
+    let content_info = ContentInfo::from_der(cms_der)
+        .map_err(|e| PkiError::InvalidCms(format!("failed to parse ContentInfo: {}", e)))?;
+
+    if content_info.content_type != ID_SIGNED_DATA {
+        return Err(PkiError::InvalidCms(format!(
+            "unexpected content type: {}, expected SignedData",
+            content_info.content_type
+        )));
+    }
+
+    let signed_data: SignedData = content_info
+        .content
+        .decode_as()
+        .map_err(|e| PkiError::InvalidCms(format!("failed to parse SignedData: {}", e)))?;
+
+    let econtent = signed_data
+        .encap_content_info
+        .econtent
+        .as_ref()
+        .ok_or(PkiError::NoEncapsulatedContent)?;
+
+    let content_bytes: OctetString = econtent
+        .decode_as()
+        .map_err(|e| PkiError::InvalidCms(format!("failed to decode content: {}", e)))?;
+    let content = content_bytes.as_bytes().to_vec();
+
+    let embedded_certs = extract_certificates(&signed_data)?;
+    if signed_data.signer_infos.0.is_empty() {
+        return Err(PkiError::NoSignerInfo);
+    }
+    let mut signer_errors = Vec::new();
+    for signer_info in signed_data.signer_infos.0.iter() {
+        match verify_signer(policy, &signed_data, &content, &embedded_certs, signer_info) {
+            Ok(result) => return Ok(result),
+            Err(error) => signer_errors.push(error.to_string()),
+        }
+    }
+    Err(PkiError::SignatureVerification(format!(
+        "none of {} signer infos verified: {}",
+        signer_errors.len(),
+        signer_errors.join("; ")
+    )))
+}
+
 fn verify_signer(
-    root_cert: &Certificate,
+    policy: VerificationPolicy<'_>,
     signed_data: &SignedData,
     content: &[u8],
     embedded_certs: &[Certificate],
@@ -168,7 +186,19 @@ fn verify_signer(
         .map_err(|e| PkiError::DerParse(e.to_string()))?;
 
     validate_end_entity_key_usage(signer_cert)?;
-    let chain_der = validate_certificate_chain(&signer_cert_der, embedded_certs, root_cert)?;
+    let chain_der = match policy {
+        VerificationPolicy::TrustedRoot(root) => {
+            validate_certificate_chain(&signer_cert_der, embedded_certs, root)?
+        }
+        VerificationPolicy::SignerCertificate(expected) => {
+            if signer_cert != expected {
+                return Err(PkiError::SignatureVerification(
+                    "signer certificate does not match expected certificate".into(),
+                ));
+            }
+            Vec::new()
+        }
+    };
 
     // RFC 5652 Section 5.3: The digest algorithm used by the signer should be
     // among those listed in the SignedData digestAlgorithms set.
@@ -408,6 +438,66 @@ fn verify_cms_signature(
     let sig_alg = &signer_info.signature_algorithm.oid;
     let digest_alg = &signer_info.digest_alg.oid;
 
+    validate_null_or_absent(signer_info.digest_alg.parameters.as_ref())
+        .map_err(PkiError::SignatureVerification)?;
+    let resolved_sig_alg = if *sig_alg == RSA_ENCRYPTION {
+        // RFC 3370 section 3.2 declares the digest separately for rsaEncryption.
+        if signer_info.signature_algorithm.parameters.is_none() {
+            return Err(PkiError::SignatureVerification(
+                "rsaEncryption parameters must be NULL".into(),
+            ));
+        }
+        match *digest_alg {
+            ID_SHA_256 => SHA_256_WITH_RSA_ENCRYPTION,
+            ID_SHA_384 => SHA_384_WITH_RSA_ENCRYPTION,
+            ID_SHA_512 => SHA_512_WITH_RSA_ENCRYPTION,
+            _ => {
+                return Err(PkiError::SignatureVerification(
+                    "unsupported RSA digest algorithm".into(),
+                ));
+            }
+        }
+    } else {
+        *sig_alg
+    };
+
+    let expected_digest = match resolved_sig_alg {
+        SHA_256_WITH_RSA_ENCRYPTION | ECDSA_WITH_SHA_256 => ID_SHA_256,
+        SHA_384_WITH_RSA_ENCRYPTION | ECDSA_WITH_SHA_384 => ID_SHA_384,
+        SHA_512_WITH_RSA_ENCRYPTION | ID_ED25519 => ID_SHA_512,
+        ID_RSASSA_PSS => {
+            let params = signer_info
+                .signature_algorithm
+                .parameters
+                .as_ref()
+                .ok_or_else(|| {
+                    PkiError::SignatureVerification("missing RSA-PSS parameters".into())
+                })?;
+            let pss = params
+                .decode_as::<RsaPssParams>()
+                .map_err(|e| PkiError::SignatureVerification(e.to_string()))?;
+            extract_pss_hash_oid(pss.hash_algorithm.as_ref())
+                .map_err(PkiError::SignatureVerification)?
+        }
+        _ => {
+            return Err(PkiError::SignatureVerification(
+                "unsupported signature algorithm".into(),
+            ));
+        }
+    };
+    if *digest_alg != expected_digest {
+        return Err(PkiError::SignatureVerification(
+            "signature and digest algorithms do not match".into(),
+        ));
+    }
+    if matches!(
+        resolved_sig_alg,
+        SHA_256_WITH_RSA_ENCRYPTION | SHA_384_WITH_RSA_ENCRYPTION | SHA_512_WITH_RSA_ENCRYPTION
+    ) {
+        validate_null_or_absent(signer_info.signature_algorithm.parameters.as_ref())
+            .map_err(PkiError::SignatureVerification)?;
+    }
+
     let signer_spki = &signer_cert.tbs_certificate.subject_public_key_info;
     let public_key_der = signer_spki
         .subject_public_key
@@ -433,7 +523,7 @@ fn verify_cms_signature(
         &data_to_verify,
         signature_bytes,
         public_key_der,
-        sig_alg,
+        &resolved_sig_alg,
         signer_spki,
         signer_info.signature_algorithm.parameters.as_ref(),
     )
@@ -643,9 +733,7 @@ fn verify_signature_with_algorithm_params(
 
 /// Determine the RSA-PSS verification algorithm from signature algorithm parameters.
 ///
-/// RSA-PSS parameters (RFC 4055) encode the hash algorithm. We use a simple heuristic
-/// of searching for hash algorithm OIDs in the DER-encoded parameters, falling back
-/// to SHA-256 if parameters are missing or unparseable.
+/// Require explicit supported hashes, matching MGF1, and a digest-sized salt.
 fn determine_rsa_pss_algorithm(
     sig_alg_params: Option<&der::Any>,
 ) -> Result<&'static dyn aws_lc_rs::signature::VerificationAlgorithm, String> {
@@ -693,13 +781,8 @@ fn extract_pss_hash_oid(
     hash_alg: Option<&spki::AlgorithmIdentifierOwned>,
 ) -> Result<ObjectIdentifier, String> {
     let alg = hash_alg.ok_or("RSA-PSS parameters missing hash algorithm")?;
-    let params = alg
-        .parameters
-        .as_ref()
-        .ok_or("RSA-PSS hash algorithm parameters missing")?;
-    if params.tag() != Tag::Null {
-        return Err("RSA-PSS hash algorithm parameters must be NULL".into());
-    }
+    // RFC 4055 section 2.1 accepts both encodings of SHA-2 parameters.
+    validate_null_or_absent(alg.parameters.as_ref())?;
     Ok(alg.oid)
 }
 
@@ -719,4 +802,90 @@ fn extract_pss_mgf_hash_oid(
         .decode_as::<spki::AlgorithmIdentifierOwned>()
         .map_err(|e| format!("failed to decode MGF1 hash: {e}"))?;
     extract_pss_hash_oid(Some(&hash_alg))
+}
+
+/// Accept only absent parameters or a correctly encoded ASN.1 NULL.
+fn validate_null_or_absent(params: Option<&der::Any>) -> Result<(), String> {
+    if let Some(params) = params {
+        params
+            .decode_as::<der::asn1::Null>()
+            .map_err(|_| "algorithm parameters must be NULL or absent".to_owned())?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PSS accepts both hash encodings but rejects missing, malformed, or unsupported
+    /// fields.
+    #[test]
+    fn pss_parameter_profile() {
+        let hash = spki::AlgorithmIdentifierOwned {
+            oid: ID_SHA_256,
+            parameters: None,
+        };
+        let valid = RsaPssParams {
+            hash_algorithm: Some(hash.clone()),
+            mask_gen_algorithm: Some(spki::AlgorithmIdentifierOwned {
+                oid: const_oid::db::rfc5912::ID_MGF_1,
+                parameters: Some(der::Any::encode_from(&hash).unwrap()),
+            }),
+            salt_length: Some(32),
+            trailer_field: None,
+        };
+        for hash_null in [false, true] {
+            for mgf_null in [false, true] {
+                let mut params = valid.clone();
+                if hash_null {
+                    params.hash_algorithm.as_mut().unwrap().parameters = Some(der::Any::null());
+                }
+                let mut mgf_hash = hash.clone();
+                if mgf_null {
+                    mgf_hash.parameters = Some(der::Any::null());
+                }
+                params.mask_gen_algorithm.as_mut().unwrap().parameters =
+                    Some(der::Any::encode_from(&mgf_hash).unwrap());
+                let encoded = der::Any::encode_from(&params).unwrap();
+                assert!(determine_rsa_pss_algorithm(Some(&encoded)).is_ok());
+            }
+        }
+        assert!(determine_rsa_pss_algorithm(None).is_err());
+        for mutation in 0..10 {
+            let mut params = valid.clone();
+            match mutation {
+                0 => params.hash_algorithm = None,
+                1 => params.mask_gen_algorithm = None,
+                2 => params.salt_length = None,
+                3 => params.trailer_field = Some(2),
+                4 => {
+                    params.hash_algorithm.as_mut().unwrap().parameters =
+                        Some(der::Any::encode_from(&OctetString::new(vec![]).unwrap()).unwrap())
+                }
+                5 => {
+                    params.hash_algorithm.as_mut().unwrap().parameters =
+                        Some(der::Any::new(Tag::Null, vec![0]).unwrap())
+                }
+                6 => params.mask_gen_algorithm.as_mut().unwrap().parameters = None,
+                7 => {
+                    params.mask_gen_algorithm.as_mut().unwrap().parameters = Some(der::Any::null())
+                }
+                8 => params.mask_gen_algorithm.as_mut().unwrap().oid = RSA_ENCRYPTION,
+                9 => {
+                    let mut mgf_hash = hash.clone();
+                    mgf_hash.parameters =
+                        Some(der::Any::encode_from(&OctetString::new(vec![]).unwrap()).unwrap());
+                    params.mask_gen_algorithm.as_mut().unwrap().parameters =
+                        Some(der::Any::encode_from(&mgf_hash).unwrap());
+                }
+                _ => unreachable!(),
+            }
+            let encoded = der::Any::encode_from(&params).unwrap();
+            assert!(
+                determine_rsa_pss_algorithm(Some(&encoded)).is_err(),
+                "mutation={mutation}"
+            );
+        }
+    }
 }
