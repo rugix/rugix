@@ -354,7 +354,9 @@ pub(crate) fn read_optional_metadata(
                 }
                 let mut bundle_signatures = Vec::new();
                 read_into_vec(source, &mut bundle_signatures, head, SIGNATURES_SIZE_LIMIT)?;
-                signatures = Some(decode_slice(&bundle_signatures)?);
+                let decoded = decode_slice(&bundle_signatures)?;
+                crate::validate_signatures(&decoded)?;
+                signatures = Some(decoded);
             }
             _ if tags::is_required(head.tag()) => {
                 bail!("found unexpected required tag {}", head.tag());
@@ -823,6 +825,33 @@ mod tests {
             hash_algorithm: HashAlgorithm::Sha256,
             components: None,
             payload_index: Vec::new(),
+        }
+    }
+
+    /// Resource limits apply while reading signature metadata, before CMS decoding.
+    #[test]
+    fn signature_metadata_resource_limits() {
+        for (count, size, accepted) in [
+            (16, 16, true),
+            (17, 0, false),
+            (1, 16385, false),
+            (16, 16384, false),
+        ] {
+            let signatures = format::Signatures {
+                cms_signatures: (0..count)
+                    .map(|_| format::Bytes { raw: vec![0; size] })
+                    .collect(),
+            };
+            let mut bytes = Vec::new();
+            write_segment_start(&mut bytes, tags::BUNDLE).unwrap();
+            bytes.extend(format::encode::to_vec(&empty_header(), tags::BUNDLE_HEADER));
+            bytes.extend(format::encode::to_vec(&signatures, tags::SIGNATURES));
+            write_segment_start(&mut bytes, tags::PAYLOADS).unwrap();
+            assert_eq!(
+                BundleReader::start(stream(&bytes), None).is_ok(),
+                accepted,
+                "count={count} size={size}"
+            );
         }
     }
 

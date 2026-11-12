@@ -665,7 +665,7 @@ fn verify_bundle_signature(
             }
         };
         match verifier {
-            Ok(verifier) => verifiers.push((root_index, verifier)),
+            Ok(verifier) => verifiers.push(verifier),
             Err(error) => {
                 root_errors += 1;
                 warn!(root_index, error = ?error, "unable to load signature root");
@@ -679,29 +679,28 @@ fn verify_bundle_signature(
     );
     let mut verification_errors = 0usize;
     for (signature_index, signature) in signatures.cms_signatures.iter().enumerate() {
-        for (root_index, verifier) in &verifiers {
-            let result = match verifier.verify(&signature.raw) {
-                Ok(result) => result,
-                Err(error) => {
-                    verification_errors += 1;
-                    info!(signature_index, root_index, error = %error, "signature did not verify");
-                    continue;
-                }
-            };
-            let signed_metadata = match decode_slice::<format::SignedMetadata>(&result.content) {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    verification_errors += 1;
-                    info!(signature_index, root_index, error = ?error, "signed metadata is invalid");
-                    continue;
-                }
-            };
-            if signed_metadata.header_hash
-                == bundle_reader.header_hash(signed_metadata.header_hash.algorithm())
-            {
-                info!(signature_index, root_index, "found valid signature");
-                return Ok(true);
+        let result = match rugix_pki::CmsVerifier::verify_with_any_root(&signature.raw, &verifiers)
+        {
+            Ok(result) => result,
+            Err(error) => {
+                verification_errors += 1;
+                info!(signature_index, error = %error, "signature did not verify");
+                continue;
             }
+        };
+        let signed_metadata = match decode_slice::<format::SignedMetadata>(&result.content) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                verification_errors += 1;
+                info!(signature_index, error = ?error, "signed metadata is invalid");
+                continue;
+            }
+        };
+        if signed_metadata.header_hash
+            == bundle_reader.header_hash(signed_metadata.header_hash.algorithm())
+        {
+            info!(signature_index, "found valid signature");
+            return Ok(true);
         }
     }
     warn!(
