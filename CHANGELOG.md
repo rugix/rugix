@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bound unauthenticated CMS parsing work to mitigate quadratic ASN.1 SET decoding: allow at most 32 KiB of CMS metadata excluding primitive encapsulated content and 16 signer entries. Bundle signature sections are limited to 256 KiB, at most 16 CMS messages, and 16 KiB per message. Bundles exceeding these limits are rejected outright, including hash-based and explicitly insecure installation paths. Rugix Bundler bounds external signature file reads before ASN.1 decoding. Rugix Ctrl decodes each CMS message once across configured roots.
+- Reject CA signer certificates and signer certificates whose extended key usage excludes code signing in the exact-certificate verification API, matching device usage policy. Require absent ECDSA and Ed25519 signature parameters. Return a validation error instead of panicking if the device clock predates the Unix epoch.
+- Omit the default RSA-PSS trailer field when signing to produce canonical DER.
+
 - Update rustix to 1.1.6 to address RUSTSEC-2026-0486 in extended-attribute buffer handling.
 
 - Accept OpenSSL RSA CMS signatures using generic `rsaEncryption` with a separately declared SHA-256, SHA-384, or SHA-512 digest, and RSA-PSS SHA-2 identifiers with absent optional NULL parameters. Continue requiring matching digest algorithms, matching PSS and MGF1 hashes, and digest-sized PSS salts. Update deployed devices with a compatible verifier before distributing signatures using these encodings, including rollback images that must install them.

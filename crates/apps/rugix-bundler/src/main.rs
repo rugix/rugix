@@ -619,7 +619,13 @@ fn main() -> BundleResult<()> {
                 signature,
                 out,
             } => {
-                let signature = std::fs::read(&signature).whatever("unable to read signature")?;
+                let mut signature_bytes = Vec::new();
+                File::open(&signature)
+                    .whatever("unable to open signature")?
+                    .take((rugix_bundle::MAX_CMS_SIGNATURE_SIZE + 1) as u64)
+                    .read_to_end(&mut signature_bytes)
+                    .whatever("unable to read signature")?;
+                let signature = signature_bytes;
                 let signed_data = decode_cms_signed_data(&signature)?;
                 println!("CMS Version: {:?}", signed_data.version);
                 println!(
@@ -718,6 +724,13 @@ fn main() -> BundleResult<()> {
 }
 
 fn decode_cms_signed_data(signature: &[u8]) -> BundleResult<cms::signed_data::SignedData> {
+    if signature.len() > rugix_bundle::MAX_CMS_SIGNATURE_SIZE {
+        bail!(
+            "CMS signature exceeds the {} byte size limit",
+            rugix_bundle::MAX_CMS_SIGNATURE_SIZE
+        );
+    }
+
     let content_info =
         cms::content_info::ContentInfo::from_der(signature).whatever("invalid CMS signature")?;
     if content_info.content_type != ID_SIGNED_DATA {
@@ -867,6 +880,9 @@ mod tests {
     #[test]
     fn malformed_cms_signature_returns_an_error() {
         assert!(decode_cms_signed_data(b"not DER").is_err());
+        let error =
+            decode_cms_signed_data(&vec![0; rugix_bundle::MAX_CMS_SIGNATURE_SIZE + 1]).unwrap_err();
+        assert!(error.to_string().contains("size limit"));
     }
 
     #[cfg(unix)]

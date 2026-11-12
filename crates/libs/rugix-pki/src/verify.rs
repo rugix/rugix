@@ -11,14 +11,12 @@ use aws_lc_rs::signature::RSA_PSS_2048_8192_SHA384;
 use aws_lc_rs::signature::RSA_PSS_2048_8192_SHA512;
 use aws_lc_rs::signature::UnparsedPublicKey;
 use cms::cert::CertificateChoices;
-use cms::content_info::ContentInfo;
 use cms::signed_data::SignedData;
 use cms::signed_data::SignerIdentifier;
 use const_oid::ObjectIdentifier;
 use const_oid::db::rfc5911::ID_CONTENT_TYPE;
 use const_oid::db::rfc5911::ID_DATA;
 use const_oid::db::rfc5911::ID_MESSAGE_DIGEST;
-use const_oid::db::rfc5911::ID_SIGNED_DATA;
 use const_oid::db::rfc5912::ECDSA_WITH_SHA_256;
 use const_oid::db::rfc5912::ECDSA_WITH_SHA_384;
 use const_oid::db::rfc5912::ID_EC_PUBLIC_KEY;
@@ -41,6 +39,7 @@ use webpki::EndEntityCert;
 use webpki::anchor_from_trusted_cert;
 use x509_cert::Certificate;
 use x509_cert::ext::pkix::BasicConstraints;
+use x509_cert::ext::pkix::ExtendedKeyUsage;
 use x509_cert::ext::pkix::KeyUsage as X509KeyUsage;
 
 use std::time::SystemTime;
@@ -95,6 +94,25 @@ impl CmsVerifier {
         verify_cms(cms_der, VerificationPolicy::TrustedRoot(&self.root_cert))
     }
 
+    /// Verify against any configured root, decoding untrusted CMS only once.
+    pub fn verify_with_any_root(
+        cms_der: &[u8],
+        verifiers: &[Self],
+    ) -> PkiResult<VerificationResult> {
+        let signed_data = crate::decode::decode_cms(cms_der)?;
+        let mut last_error = PkiError::SignatureVerification("no trusted roots provided".into());
+        for verifier in verifiers {
+            match verify_signed_data(
+                &signed_data,
+                VerificationPolicy::TrustedRoot(&verifier.root_cert),
+            ) {
+                Ok(result) => return Ok(result),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
+    }
+
     /// Verify a DER-encoded CMS signature and check that the content matches expected
     /// data.
     pub fn verify_content(&self, cms_der: &[u8], expected_content: &[u8]) -> PkiResult<()> {
@@ -108,7 +126,8 @@ impl CmsVerifier {
 
 /// Verify CMS content using a specific PEM-encoded signer certificate.
 ///
-/// Uses the same CMS, digest, signature, and key-usage checks as [CmsVerifier].
+/// Uses the same CMS, digest, signature, digitalSignature and codeSigning
+/// key-usage checks as [CmsVerifier], and rejects CA certificates.
 /// This checks possession of the signing key, but does not validate certificate
 /// validity, a certificate chain, or device trust. Use [CmsVerifier] for those checks.
 /// The caller must compare the returned content with the intended signed metadata.
@@ -128,21 +147,15 @@ enum VerificationPolicy<'a> {
 
 /// Parse and verify an encapsulated CMS message under a certificate policy.
 fn verify_cms(cms_der: &[u8], policy: VerificationPolicy<'_>) -> PkiResult<VerificationResult> {
-    let content_info = ContentInfo::from_der(cms_der)
-        .map_err(|e| PkiError::InvalidCms(format!("failed to parse ContentInfo: {}", e)))?;
+    let signed_data = crate::decode::decode_cms(cms_der)?;
+    verify_signed_data(&signed_data, policy)
+}
 
-    if content_info.content_type != ID_SIGNED_DATA {
-        return Err(PkiError::InvalidCms(format!(
-            "unexpected content type: {}, expected SignedData",
-            content_info.content_type
-        )));
-    }
-
-    let signed_data: SignedData = content_info
-        .content
-        .decode_as()
-        .map_err(|e| PkiError::InvalidCms(format!("failed to parse SignedData: {}", e)))?;
-
+/// Apply a certificate policy to already decoded CMS.
+fn verify_signed_data(
+    signed_data: &SignedData,
+    policy: VerificationPolicy<'_>,
+) -> PkiResult<VerificationResult> {
     let econtent = signed_data
         .encap_content_info
         .econtent
@@ -154,13 +167,13 @@ fn verify_cms(cms_der: &[u8], policy: VerificationPolicy<'_>) -> PkiResult<Verif
         .map_err(|e| PkiError::InvalidCms(format!("failed to decode content: {}", e)))?;
     let content = content_bytes.as_bytes().to_vec();
 
-    let embedded_certs = extract_certificates(&signed_data)?;
+    let embedded_certs = extract_certificates(signed_data)?;
     if signed_data.signer_infos.0.is_empty() {
         return Err(PkiError::NoSignerInfo);
     }
     let mut signer_errors = Vec::new();
     for signer_info in signed_data.signer_infos.0.iter() {
-        match verify_signer(policy, &signed_data, &content, &embedded_certs, signer_info) {
+        match verify_signer(policy, signed_data, &content, &embedded_certs, signer_info) {
             Ok(result) => return Ok(result),
             Err(error) => signer_errors.push(error.to_string()),
         }
@@ -186,19 +199,6 @@ fn verify_signer(
         .map_err(|e| PkiError::DerParse(e.to_string()))?;
 
     validate_end_entity_key_usage(signer_cert)?;
-    let chain_der = match policy {
-        VerificationPolicy::TrustedRoot(root) => {
-            validate_certificate_chain(&signer_cert_der, embedded_certs, root)?
-        }
-        VerificationPolicy::SignerCertificate(expected) => {
-            if signer_cert != expected {
-                return Err(PkiError::SignatureVerification(
-                    "signer certificate does not match expected certificate".into(),
-                ));
-            }
-            Vec::new()
-        }
-    };
 
     // RFC 5652 Section 5.3: The digest algorithm used by the signer should be
     // among those listed in the SignedData digestAlgorithms set.
@@ -228,6 +228,20 @@ fn verify_signer(
     }
 
     verify_cms_signature(content, signer_info, signer_cert)?;
+
+    let chain_der = match policy {
+        VerificationPolicy::TrustedRoot(root) => {
+            validate_certificate_chain(&signer_cert_der, embedded_certs, root)?
+        }
+        VerificationPolicy::SignerCertificate(expected) => {
+            if signer_cert != expected {
+                return Err(PkiError::SignatureVerification(
+                    "signer certificate does not match expected certificate".into(),
+                ));
+            }
+            Vec::new()
+        }
+    };
 
     let signing_time = signer_info
         .signed_attrs
@@ -343,7 +357,10 @@ fn validate_certificate_chain(
         .map(|der| CertificateDer::from_slice(der))
         .collect();
 
-    let time = UnixTime::now();
+    let time = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(UnixTime::since_unix_epoch)
+        .map_err(|_| PkiError::ChainValidation("system clock is before the Unix epoch".into()))?;
 
     let usage = webpki::KeyUsage::required_if_present(
         const_oid::db::rfc5280::ID_KP_CODE_SIGNING.as_bytes(),
@@ -407,6 +424,25 @@ fn is_ca_certificate(cert: &Certificate) -> PkiResult<bool> {
 
 /// Validate that the end-entity certificate is valid for digital signatures.
 fn validate_end_entity_key_usage(cert: &Certificate) -> PkiResult<()> {
+    if is_ca_certificate(cert)? {
+        return Err(PkiError::ChainValidation(
+            "signer certificate must not be a CA".into(),
+        ));
+    }
+    match cert.tbs_certificate.get::<ExtendedKeyUsage>() {
+        Ok(Some((_, usage)))
+            if !usage
+                .0
+                .contains(&const_oid::db::rfc5280::ID_KP_CODE_SIGNING) =>
+        {
+            return Err(PkiError::ChainValidation(
+                "signer certificate not valid for code signing".into(),
+            ));
+        }
+        Err(error) => return Err(PkiError::CertificateParse(error.to_string())),
+        _ => {}
+    }
+
     match cert.tbs_certificate.get::<X509KeyUsage>() {
         Ok(Some((_critical, usage))) => {
             if !usage.digital_signature() {
@@ -438,6 +474,15 @@ fn verify_cms_signature(
     let sig_alg = &signer_info.signature_algorithm.oid;
     let digest_alg = &signer_info.digest_alg.oid;
 
+    if matches!(
+        *sig_alg,
+        ECDSA_WITH_SHA_256 | ECDSA_WITH_SHA_384 | ID_ED25519
+    ) && signer_info.signature_algorithm.parameters.is_some()
+    {
+        return Err(PkiError::SignatureVerification(
+            "ECDSA and Ed25519 signature parameters must be absent".into(),
+        ));
+    }
     validate_null_or_absent(signer_info.digest_alg.parameters.as_ref())
         .map_err(PkiError::SignatureVerification)?;
     let resolved_sig_alg = if *sig_alg == RSA_ENCRYPTION {

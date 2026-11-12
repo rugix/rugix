@@ -648,7 +648,7 @@ fn build_rsa_pss_params(hash_oid: ObjectIdentifier, salt_length: u8) -> PkiResul
         hash_algorithm: Some(hash_alg),
         mask_gen_algorithm: Some(mask_gen_alg),
         salt_length: Some(salt_length),
-        trailer_field: Some(1),
+        trailer_field: None,
     };
 
     let params_der = pss_params

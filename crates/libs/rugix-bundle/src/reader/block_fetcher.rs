@@ -843,6 +843,10 @@ mod tests {
         assert_eq!(signatures.len(), 2);
         assert_eq!(signatures[0].raw, b"first signature");
         assert_eq!(signatures[1].raw, b"second signature");
+        let existing = fs::read(&signed).unwrap();
+        assert!(crate::add_bundle_signature(&rotated, vec![0; 16385], &signed).is_err());
+        assert_eq!(fs::read(&signed).unwrap(), existing);
+
         drop(reader);
 
         let source = BundleSource::from_seekable(fs::File::open(&rotated).unwrap()).unwrap();

@@ -196,11 +196,16 @@ fn test_verification_accepts_rotated_roots_in_either_order() {
         [&pki.other_root_cert_pem, &pki.root_cert_pem],
         [&pki.root_cert_pem, &pki.other_root_cert_pem],
     ] {
-        assert!(roots.iter().any(|root| {
-            CmsVerifier::new(root)
-                .and_then(|verifier| verifier.verify(&signature))
-                .is_ok()
-        }));
+        let verifiers: Vec<_> = roots
+            .iter()
+            .map(|root| CmsVerifier::new(root).unwrap())
+            .collect();
+        assert_eq!(
+            CmsVerifier::verify_with_any_root(&signature, &verifiers)
+                .unwrap()
+                .content,
+            b"root rotation"
+        );
     }
 }
 

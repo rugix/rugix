@@ -34,7 +34,6 @@ use si_crypto_hashes::HashDigest;
 
 use crate::format::Bytes;
 use crate::format::SignedMetadata;
-use crate::format::encode::Encode;
 use crate::format::stlv::SeekReader;
 use crate::format::stlv::write_segment_start;
 use crate::reader::read_optional_metadata;
@@ -64,8 +63,11 @@ const BUNDLE_HEADER_SIZE_LIMIT: NumBytes = NumBytes::kibibytes(128);
 // We need a large limit here as the payload header may contain a block index.
 const PAYLOAD_HEADER_SIZE_LIMIT: NumBytes = NumBytes::mebibytes(32);
 
-// Limit size of signatures to 32 MiB.
-const SIGNATURES_SIZE_LIMIT: NumBytes = NumBytes::mebibytes(32);
+// Signature metadata is attacker-controlled and must have a bounded parsing cost.
+const SIGNATURES_SIZE_LIMIT: NumBytes = NumBytes::kibibytes(256);
+/// Maximum DER-encoded CMS message size accepted in a bundle signature section.
+pub const MAX_CMS_SIGNATURE_SIZE: usize = 16 * 1024;
+const MAX_CMS_SIGNATURES: usize = 16;
 
 /// Compute the encoded header hash using the algorithm declared by the bundle.
 pub fn bundle_hash(bundle: &Path) -> BundleResult<HashDigest> {
@@ -120,14 +122,19 @@ pub fn add_bundle_signature(bundle: &Path, signature: Vec<u8>, out: &Path) -> Bu
     // Read existing signatures.
     let mut signatures = read_optional_metadata(&mut source)?.unwrap_or_default();
     signatures.cms_signatures.push(Bytes { raw: signature });
+    validate_signatures(&signatures)?;
+    let signature_bytes = format::encode::to_vec(&signatures, format::tags::SIGNATURES);
+    if signature_bytes.len() as u64 > SIGNATURES_SIZE_LIMIT.raw {
+        reportify::bail!("signature section exceeds the 256 KiB size limit");
+    }
     atomic_output(out, |bundle_file| {
         write_segment_start(bundle_file, format::tags::BUNDLE)
             .whatever("unable to write bundle root")?;
         bundle_file
             .write_all(&header_bytes)
             .whatever("unable to write bundle header")?;
-        signatures
-            .encode(bundle_file, format::tags::SIGNATURES)
+        bundle_file
+            .write_all(&signature_bytes)
             .whatever("unable to write signatures")?;
         // At this point, we are in the payloads section in the source file.
         write_segment_start(bundle_file, format::tags::PAYLOADS)
@@ -224,6 +231,21 @@ pub(crate) fn paths_refer_to_same_file(input: &Path, output: &Path) -> BundleRes
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error).whatever("unable to resolve output bundle path"),
     }
+}
+
+/// Bound per-signature parsing work and the number of cryptographic attempts.
+fn validate_signatures(signatures: &format::Signatures) -> BundleResult<()> {
+    if signatures.cms_signatures.len() > MAX_CMS_SIGNATURES {
+        reportify::bail!("bundle exceeds the 16 CMS signature limit");
+    }
+    if signatures
+        .cms_signatures
+        .iter()
+        .any(|signature| signature.raw.len() > MAX_CMS_SIGNATURE_SIZE)
+    {
+        reportify::bail!("CMS signature exceeds the 16 KiB size limit");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -11,6 +11,12 @@
 //! - Certificate chain validation
 //! - Support for ECDSA (P-256, P-384), RSA PKCS#1 v1.5, RSA-PSS, and Ed25519 signatures
 //!
+//! # Resource Limits
+//!
+//! Verification and inspection reject more than 32 KiB of CMS metadata (excluding
+//! primitive encapsulated content) or more than 16 signer entries. These limits
+//! bound work on untrusted ASN.1 collections before authentication.
+//!
 //! # Example
 //!
 //! ```
@@ -41,6 +47,7 @@
 //! assert_eq!(result.content, b"Hello, World!");
 //! ```
 
+mod decode;
 mod inspect;
 mod pem;
 mod sign;
