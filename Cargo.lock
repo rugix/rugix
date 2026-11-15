@@ -104,9 +104,9 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "anyver"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa1914af47474b8866e3e00cc571c0a224ed05421286b8b70f7f15912bcc3f1a"
+checksum = "a669c35d5199b0ac7c7e9f1752471ae8c8641c84b1a143ee86cafe705e13ee6c"
 dependencies = [
  "serde",
 ]
