@@ -11,7 +11,7 @@
 - Accept OpenSSL RSA CMS signatures using generic `rsaEncryption` with a separately declared SHA-256, SHA-384, or SHA-512 digest, and RSA-PSS SHA-2 identifiers with absent optional NULL parameters. Continue requiring matching digest algorithms, matching PSS and MGF1 hashes, and digest-sized PSS salts. Update deployed devices with a compatible verifier before distributing signatures using these encodings, including rollback images that must install them.
 - Add `rugix_pki::verify_cms_with_certificate` for checking external signer output with an expected signer certificate using the device's CMS and cryptographic checks. This API does not establish certificate-chain trust or certificate validity.
 
-- Compatibility checks no longer match prereleases of an exclusive upper bound, following PEP 440. For example, `>=5,<6` no longer matches `6.0.0-rc.1`, but still matches `5.3.0-rc.1`. Use a prerelease bound, such as `<6.0.0-rc.2`, to admit prereleases of the bound. Older Rugix Ctrl versions still accept such prereleases.
+- Compatibility checks treat a requirement's version without a prerelease as a line of versions, including its prereleases. `>=5,<6` now matches `5.0.0-rc.1` and no longer matches `6.0.0-rc.1`. `>5` now starts after the whole line `5`, so it no longer matches `5.1.0`; use `>5.0` for that. `<=5` now includes the whole line `5`, such as `5.3.1`. `==` and `!=` stay exact. Requirements can match a whole line with a wildcard, such as `5.*`, or exclude one with `!=5.*`. Older Rugix Ctrl versions evaluate such requirements differently and reject wildcards.
 
 ## Version 1.4.0
 
