@@ -43,7 +43,7 @@ tracing = "0.1"
 xz2 = "0.1.7"
 
 # In-house crates.
-anyver = "0.2.0"
+anyver = "0.3.0"
 byte-calc = { version = "0.2.0", features = ["serde", "bytes"] }
 reportify = "0.2.2"
 si-crypto-hashes = { version = "0.1.2", features = ["serde", "legacy"] }
