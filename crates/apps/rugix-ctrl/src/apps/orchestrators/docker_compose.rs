@@ -14,6 +14,7 @@ use rugix_bundle::manifest::is_valid_environment_variable_name;
 use rugix_bundle::manifest::is_valid_json_pointer;
 use rugix_bundle::manifest::owned_image_prefix;
 use rugix_bundle::manifest::IMAGE_METADATA_PATH;
+use rugix_bundle::manifest::IMAGE_METADATA_SCHEMA_VERSION;
 use rugix_common::path::ValidatedRelativePath;
 use tracing::info;
 use tracing::warn;
@@ -246,6 +247,15 @@ impl DockerCompose {
                 return;
             }
         };
+        if !(1..=IMAGE_METADATA_SCHEMA_VERSION).contains(&metadata.schema_version) {
+            warn!(
+                app = ctx.app_name,
+                path = ?path,
+                version = metadata.schema_version,
+                "unsupported image metadata version, keeping images"
+            );
+            return;
+        }
         let owned_prefix = owned_image_prefix(ctx.app_name);
         let tags = metadata
             .images

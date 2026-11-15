@@ -125,6 +125,10 @@ record XzCompression {
 /// App manifest (`app.toml`) inside a generation directory.
 #[json(rename_all = "kebab-case")]
 record AppManifest {
+    /// Version of the manifest format.
+    ///
+    /// Rugix Ctrl refuses manifests with a version it does not support. Defaults to `1`.
+    format_version?: u32,
     /// Orchestrator to use (e.g., `"docker-compose"`, `"binary"`, `"generic"`).
     orchestrator: string,
     /// Health check configuration.
