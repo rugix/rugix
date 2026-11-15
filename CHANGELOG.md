@@ -11,6 +11,11 @@
 - Accept OpenSSL RSA CMS signatures using generic `rsaEncryption` with a separately declared SHA-256, SHA-384, or SHA-512 digest, and RSA-PSS SHA-2 identifiers with absent optional NULL parameters. Continue requiring matching digest algorithms, matching PSS and MGF1 hashes, and digest-sized PSS salts. Update deployed devices with a compatible verifier before distributing signatures using these encodings, including rollback images that must install them.
 - Add `rugix_pki::verify_cms_with_certificate` for checking external signer output with an expected signer certificate using the device's CMS and cryptographic checks. This API does not establish certificate-chain trust or certificate validity.
 
+- Version the Rugix Apps formats. `app.toml` accepts `format-version`, and `rugix-bundler apps pack` writes `format-version = 1`. Rugix Ctrl refuses app manifests, app directories, and Compose image metadata with format versions it does not support, so that a Rugix Ctrl version never misinterprets files written for a newer one. Files without a format version have version 1. Older Rugix Ctrl versions ignore `format-version`.
+- Record the format version of each app directory in `.rugix/format.json` when Rugix Ctrl first changes the app.
+- Validate `app.toml` before an installed app generation is marked complete: the manifest must have a supported format version and a known orchestrator, and a default configuration must match the configuration schema. Previously, `rugix-ctrl apps install --no-activate` staged such generations and the error surfaced only on activation.
+- Warn about fields in `app.toml` that Rugix Ctrl does not know when installing an app.
+
 ## Version 1.4.0
 
 Behavior Changes:

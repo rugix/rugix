@@ -146,6 +146,10 @@ pub(crate) fn install_payloads(
 
     AppManager::save_payload_states(&generation_dir, &payload_states)
         .whatever("unable to save app payload states")?;
+    // Validating before the generation is complete keeps a generation that cannot be
+    // activated from being staged with `--no-activate`; garbage collection removes it.
+    crate::apps::manifest::validate(&generation_dir)
+        .whatever("app bundle does not contain a valid app generation")?;
     info!(app = %app_name, generation, "finalizing app generation");
     if let Some(bundle_components) = &bundle_components {
         crate::components::write_bundle_components(

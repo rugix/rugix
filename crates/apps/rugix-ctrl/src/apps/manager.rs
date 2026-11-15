@@ -18,6 +18,7 @@ use tracing::warn;
 
 use crate::config::apps::AppConfiguration;
 use crate::config::apps::AppConfigurationState;
+use crate::config::apps::AppDirectoryFormat;
 use crate::config::apps::AppGeneration;
 use crate::config::apps::AppState;
 use crate::config::apps::AppStateActive;
@@ -31,11 +32,17 @@ use crate::payload_db::PayloadState;
 use super::config;
 use super::configuration;
 use super::files::GenerationFiles;
+use super::manifest;
 use super::orchestrators;
 use super::orchestrators::AppContext;
 use super::orchestrators::AppStatus;
 use super::AppsResult;
-use rugix_bundle::manifest::AppManifest;
+
+/// Latest version of the app directory format.
+///
+/// Increase it only for changes to the files in an app directory that an older Rugix
+/// Ctrl would misinterpret, and migrate app directories with older versions.
+const APP_DIRECTORY_FORMAT_VERSION: u32 = 1;
 
 /// An advisory file lock held for the duration of a mutating operation.
 ///
@@ -79,6 +86,7 @@ impl AppManager {
     /// Payload files of an existing generation.
     pub fn generation_files(&self, app_name: &str, generation: u64) -> AppsResult<GenerationFiles> {
         validate_app_name(app_name)?;
+        self.read_directory_format_version(app_name)?;
         if !self.generation_dir_unchecked(app_name, generation).exists() {
             reportify::bail!("app {app_name} has no generation {generation}");
         }
@@ -99,6 +107,9 @@ impl AppManager {
     /// The lock file is created in `<app_dir>/.rugix/lock`. Callers must hold the
     /// returned [`AppLock`] for the duration of the mutating operation. The lock
     /// is released when the guard is dropped.
+    ///
+    /// Fails for an app directory with an unsupported format version and records the
+    /// format version of an app directory that has none.
     pub fn lock_app(&self, app_name: &str) -> AppsResult<AppLock> {
         validate_app_name(app_name)?;
         let lock_dir = self.app_dir(app_name).join(".rugix");
@@ -111,9 +122,39 @@ impl AppManager {
             .write(true)
             .open(&lock_path)
             .whatever("unable to open app lock file")?;
-        nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusive)
+        let lock = nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusive)
             .map_err(|(_file, errno)| errno)
-            .whatever("unable to acquire app lock")
+            .whatever("unable to acquire app lock")?;
+        if self.read_directory_format_version(app_name)?.is_none() {
+            let format = AppDirectoryFormat::new(APP_DIRECTORY_FORMAT_VERSION);
+            let content = serde_json::to_vec_pretty(&format)
+                .whatever("unable to serialize app directory format")?;
+            rugix_common::fsutils::atomic_write(&self.directory_format_path(app_name), &content)
+                .whatever("unable to write app directory format")?;
+        }
+        Ok(lock)
+    }
+
+    /// Read the format version of an app directory, if it records one.
+    ///
+    /// Fails for versions this Rugix Ctrl does not support, so that it never changes or
+    /// interprets an app directory written by a newer version.
+    fn read_directory_format_version(&self, app_name: &str) -> AppsResult<Option<u32>> {
+        let content = match fs::read_to_string(self.directory_format_path(app_name)) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).whatever("unable to read app directory format"),
+        };
+        let version = serde_json::from_str::<AppDirectoryFormat>(&content)
+            .whatever("unable to parse app directory format")?
+            .format_version;
+        if !(1..=APP_DIRECTORY_FORMAT_VERSION).contains(&version) {
+            reportify::bail!(
+                "app {app_name} has directory format version {version}, which this Rugix Ctrl \
+                 does not support (supported: 1 to {APP_DIRECTORY_FORMAT_VERSION})"
+            );
+        }
+        Ok(Some(version))
     }
 
     /// Path to the directory of an app.
@@ -150,6 +191,11 @@ impl AppManager {
     fn configuration_path(&self, app_name: &str, revision: u64) -> PathBuf {
         self.configurations_dir(app_name)
             .join(format!("{revision}.json"))
+    }
+
+    /// Path to the format file of an app directory.
+    fn directory_format_path(&self, app_name: &str) -> PathBuf {
+        self.app_dir(app_name).join(".rugix/format.json")
     }
 
     /// Path to the state file of an app.
@@ -210,6 +256,7 @@ impl AppManager {
     /// Read the persisted app state, defaulting to `Inactive` if absent.
     pub fn read_state(&self, app_name: &str) -> AppsResult<AppState> {
         validate_app_name(app_name)?;
+        self.read_directory_format_version(app_name)?;
         let path = self.state_path(app_name);
         match fs::read_to_string(&path) {
             Ok(content) => serde_json::from_str(&content).whatever("unable to parse app state"),
@@ -265,7 +312,7 @@ impl AppManager {
     pub fn read_configuration(&self, app_name: &str) -> AppsResult<Option<AppConfiguration>> {
         validate_app_name(app_name)?;
         let generation = self.configuration_generation(app_name)?;
-        let manifest = load_manifest(&generation)?;
+        let manifest = manifest::load(&generation)?;
         let revision = self.read_configuration_revision(app_name)?;
         let revision_path = revision.map(|revision| self.configuration_path(app_name, revision));
         Ok(configuration::load_effective(&generation, &manifest, revision, revision_path)?.value)
@@ -278,7 +325,7 @@ impl AppManager {
     ) -> AppsResult<Option<AppConfiguration>> {
         validate_app_name(app_name)?;
         let generation = self.configuration_generation(app_name)?;
-        let manifest = load_manifest(&generation)?;
+        let manifest = manifest::load(&generation)?;
         configuration::load_schema(&generation, &manifest)
     }
 
@@ -367,7 +414,7 @@ impl AppManager {
         generation_dir: &Path,
         value: &AppConfiguration,
     ) -> AppsResult<u64> {
-        let manifest = load_manifest(generation_dir)?;
+        let manifest = manifest::load(generation_dir)?;
         configuration::validate(generation_dir, &manifest, value)?;
         let content = configuration::serialize(value)?;
         if let Some(revision) = self.desired_revision_with_content(app_name, &content)? {
@@ -859,7 +906,7 @@ impl AppManager {
         recovery: bool,
     ) -> AppsResult<()> {
         let gen_dir = self.generation_dir_unchecked(app_name, deployment.generation);
-        let manifest = load_manifest(&gen_dir)?;
+        let manifest = manifest::load(&gen_dir)?;
         let configuration = self.resolve_configuration(app_name, deployment)?;
         let orchestrator = orchestrators::get(manifest.orchestrator.as_str())?;
         let app_dir = self.app_dir(app_name);
@@ -907,7 +954,7 @@ impl AppManager {
         if !gen_dir.exists() {
             return Ok(());
         }
-        let manifest = load_manifest(&gen_dir)?;
+        let manifest = manifest::load(&gen_dir)?;
         let configuration = self.resolve_configuration(app_name, deployment)?;
         let orchestrator = orchestrators::get(manifest.orchestrator.as_str())?;
         let app_dir = self.app_dir(app_name);
@@ -1011,7 +1058,7 @@ impl AppManager {
         recovery: bool,
     ) -> AppsResult<()> {
         let gen_dir = self.generation_dir_unchecked(app_name, deployment.generation);
-        let manifest = load_manifest(&gen_dir)?;
+        let manifest = manifest::load(&gen_dir)?;
         let configuration = self.resolve_configuration(app_name, deployment)?;
         let orchestrator = orchestrators::get(manifest.orchestrator.as_str())?;
         let app_dir = self.app_dir(app_name);
@@ -1043,7 +1090,7 @@ impl AppManager {
         recovery: bool,
     ) -> AppsResult<()> {
         let gen_dir = self.generation_dir_unchecked(app_name, deployment.generation);
-        let manifest = load_manifest(&gen_dir)?;
+        let manifest = manifest::load(&gen_dir)?;
         let configuration = self.resolve_configuration(app_name, deployment)?;
         let orchestrator = orchestrators::get(manifest.orchestrator.as_str())?;
         let app_dir = self.app_dir(app_name);
@@ -1075,7 +1122,7 @@ impl AppManager {
         if !gen_dir.exists() {
             return Ok(AppStatus::Stopped);
         }
-        let manifest = load_manifest(&gen_dir)?;
+        let manifest = manifest::load(&gen_dir)?;
         let configuration = self.resolve_configuration(app_name, deployment)?;
         let orchestrator = orchestrators::get(manifest.orchestrator.as_str())?;
         let app_dir = self.app_dir(app_name);
@@ -1129,6 +1176,7 @@ impl AppManager {
     /// List generations for a given app.
     pub fn list_generations(&self, app_name: &str) -> AppsResult<Vec<ResolvedGeneration>> {
         validate_app_name(app_name)?;
+        self.read_directory_format_version(app_name)?;
         let generations_dir = self.generations_dir(app_name);
         let mut generations = Vec::new();
         if !generations_dir.exists() {
@@ -1206,7 +1254,7 @@ impl AppManager {
     /// Return the orchestrator declared by a generation.
     pub fn read_orchestrator(&self, app_name: &str, generation: u64) -> AppsResult<String> {
         validate_app_name(app_name)?;
-        let manifest = load_manifest(&self.generation_dir_unchecked(app_name, generation))?;
+        let manifest = manifest::load(&self.generation_dir_unchecked(app_name, generation))?;
         Ok(manifest.orchestrator.into())
     }
 
@@ -1521,7 +1569,7 @@ impl AppManager {
         deployment: AppDeployment,
     ) -> AppsResult<configuration::EffectiveConfiguration> {
         let generation_dir = self.generation_dir_unchecked(app_name, deployment.generation);
-        let manifest = load_manifest(&generation_dir)?;
+        let manifest = manifest::load(&generation_dir)?;
         let revision_path = deployment
             .configuration_revision
             .map(|revision| self.configuration_path(app_name, revision));
@@ -1619,13 +1667,6 @@ fn finalize_generation_with(
 ) -> AppsResult<()> {
     synchronize()?;
     mark_complete()
-}
-
-/// Load an app manifest.
-fn load_manifest(gen_dir: &Path) -> AppsResult<AppManifest> {
-    let manifest_path = gen_dir.join("app.toml");
-    let content = fs::read_to_string(&manifest_path).whatever("unable to read app.toml")?;
-    toml::from_str(&content).whatever("unable to parse app.toml")
 }
 
 #[cfg(test)]
@@ -1775,6 +1816,35 @@ esac
                 std::fs::read_link(&current).unwrap(),
                 std::path::Path::new("generations/2")
             );
+        }
+    }
+
+    /// Verifies that locking records the directory format and that Rugix Ctrl refuses to
+    /// read or change an app directory with a newer format.
+    #[test]
+    fn app_directories_with_newer_formats_are_refused() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let manager = AppManager::new(
+            tempdir.path().join("apps"),
+            Store::new(tempdir.path().join("store")),
+            AppsConfig::new(),
+        );
+        drop(manager.lock_app("example").unwrap());
+        let format_path = manager.directory_format_path("example");
+        assert_eq!(
+            std::fs::read_to_string(&format_path).unwrap(),
+            "{\n  \"formatVersion\": 1\n}"
+        );
+        manager.read_state("example").unwrap();
+
+        std::fs::write(&format_path, r#"{"formatVersion": 2}"#).unwrap();
+        for result in [
+            manager.read_state("example").map(drop),
+            manager.lock_app("example").map(drop),
+            manager.list_generations("example").map(drop),
+        ] {
+            let error = result.unwrap_err();
+            assert!(format!("{error:?}").contains("directory format version 2"));
         }
     }
 

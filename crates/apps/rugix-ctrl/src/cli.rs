@@ -1347,7 +1347,7 @@ pub enum UtilsCommand {
 
 #[derive(Debug, Parser)]
 pub enum AppsCommand {
-    /// Install apps from a bundle.
+    /// Install an app from a bundle.
     Install {
         /// Path of the app bundle, `-` to read from stdin, or an HTTP(S) URL.
         bundle: String,
