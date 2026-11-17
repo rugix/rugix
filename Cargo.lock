@@ -104,12 +104,9 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "anyver"
-version = "0.1.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa1914af47474b8866e3e00cc571c0a224ed05421286b8b70f7f15912bcc3f1a"
-dependencies = [
- "serde",
-]
+checksum = "5b6e296b0ae7923cead43ecb5df68f8b7368e1c78361bb6d51a47a5f267c5945"
 
 [[package]]
 name = "ariadne"
