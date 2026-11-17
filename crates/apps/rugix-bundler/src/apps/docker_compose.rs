@@ -28,6 +28,7 @@ use rugix_bundle::manifest::DeliveryConfig;
 use rugix_bundle::manifest::DockerComposeConfig;
 use rugix_bundle::manifest::Payload;
 use rugix_bundle::manifest::IMAGE_METADATA_PATH;
+use rugix_bundle::manifest::IMAGE_METADATA_SCHEMA_VERSION;
 use rugix_bundle::BundleResult;
 use serde::Deserialize;
 use tracing::info;
@@ -474,7 +475,7 @@ fn image_metadata(images: &[PlannedImage], platform: Option<&str>) -> BundleResu
         });
     }
     Ok(ImageMetadata {
-        schema_version: 1,
+        schema_version: IMAGE_METADATA_SCHEMA_VERSION,
         images: entries.into(),
     })
 }

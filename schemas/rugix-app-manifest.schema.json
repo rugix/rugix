@@ -4,6 +4,12 @@
   "type": "object",
   "description": "App manifest (`app.toml`) inside a generation directory.",
   "properties": {
+    "format-version": {
+      "type": "integer",
+      "format": "uint32",
+      "maximum": 4294967295,
+      "minimum": 0
+    },
     "orchestrator": {
       "type": "string"
     },

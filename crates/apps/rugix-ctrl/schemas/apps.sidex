@@ -7,6 +7,16 @@ record AppsConfig {
     service_manager?: string,
 }
 
+/// Format of an app directory, persisted in `.rugix/format.json`.
+///
+/// The version covers every file that Rugix Ctrl maintains in the app directory,
+/// including its generations. An app directory without this file has version `1`.
+#[json(rename_all = "camelCase")]
+record AppDirectoryFormat {
+    /// Version of the app directory format.
+    format_version: u32,
+}
+
 /// Persisted app state.
 #[json(tag = "state", rename_all = "lowercase")]
 variant AppState {

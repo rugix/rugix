@@ -22,6 +22,7 @@ use rugix_bundle::manifest::DeliveryConfig;
 use rugix_bundle::manifest::Payload;
 use rugix_bundle::manifest::UpdateType;
 use rugix_bundle::manifest::XzCompression;
+use rugix_bundle::manifest::APP_MANIFEST_FORMAT_VERSION;
 use rugix_bundle::BundleResult;
 use rugix_chunker::ChunkerAlgorithm;
 use tracing::info;
@@ -123,12 +124,15 @@ fn tar_append_dir(archive: &mut tar::Builder<File>, name: &str, src: &Path) -> B
     walk(archive, name, src)
 }
 
-/// Write an `app.toml` entry into a tar archive.
+/// Write an `app.toml` entry with an explicit format version into a tar archive.
 fn tar_append_app_toml(
     archive: &mut tar::Builder<File>,
-    manifest: &rugix_bundle::manifest::AppManifest,
+    manifest: &AppManifest,
 ) -> BundleResult<()> {
-    let content = toml::to_string_pretty(manifest).whatever("unable to serialize app.toml")?;
+    let manifest = manifest
+        .clone()
+        .with_format_version(Some(APP_MANIFEST_FORMAT_VERSION));
+    let content = toml::to_string_pretty(&manifest).whatever("unable to serialize app.toml")?;
     let bytes = content.as_bytes();
     let mut header = tar::Header::new_gnu();
     header.set_size(bytes.len() as u64);
@@ -546,6 +550,21 @@ mod tests {
     use super::*;
     use rugix_bundle::reader::BundleReader;
     use rugix_bundle::reader::BundleSource;
+
+    /// Verifies packed app manifests declare their format version.
+    #[test]
+    fn app_manifests_declare_their_format_version() {
+        let mut archive = tar::Builder::new(tempfile::tempfile().unwrap());
+        tar_append_app_toml(&mut archive, &AppManifest::new("generic".to_owned())).unwrap();
+        let mut file = archive.into_inner().unwrap();
+        std::io::Seek::rewind(&mut file).unwrap();
+        let mut archive = tar::Archive::new(file);
+        let mut entry = archive.entries().unwrap().next().unwrap().unwrap();
+        let mut content = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut content).unwrap();
+        let manifest = toml::from_str::<AppManifest>(&content).unwrap();
+        assert_eq!(manifest.format_version, Some(APP_MANIFEST_FORMAT_VERSION));
+    }
 
     #[test]
     fn app_archive_includes_reject_reserved_and_duplicate_paths() {

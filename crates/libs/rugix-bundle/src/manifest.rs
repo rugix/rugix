@@ -20,6 +20,17 @@ sidex::include_bundle! {
 pub use generated::compose;
 pub use generated::manifest::*;
 
+/// Latest version of the app manifest (`app.toml`) format.
+///
+/// Rugix Ctrl accepts manifests up to this version. Increase it only for changes that
+/// an older Rugix Ctrl would misinterpret by ignoring them, and have Rugix Bundler
+/// write the lowest version that covers the content of a manifest, so that bundles
+/// using no new features still install on older devices.
+pub const APP_MANIFEST_FORMAT_VERSION: u32 = 1;
+
+/// Latest version of the Compose image metadata format, see [`IMAGE_METADATA_PATH`].
+pub const IMAGE_METADATA_SCHEMA_VERSION: u32 = 1;
+
 /// Check whether a string is an RFC 6901 JSON Pointer.
 pub fn is_valid_json_pointer(pointer: &str) -> bool {
     if pointer.is_empty() {

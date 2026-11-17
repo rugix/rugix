@@ -13,6 +13,11 @@
 
 - Compatibility checks treat a requirement's version without a prerelease as a line of versions, including its prereleases. `>=5,<6` now matches `5.0.0-rc.1` and no longer matches `6.0.0-rc.1`. `>5` now starts after the whole line `5`, so it no longer matches `5.1.0`; use `>5.0` for that. `<=5` now includes the whole line `5`, such as `5.3.1`. `==` and `!=` stay exact. Requirements can match a whole line with a wildcard, such as `5.*`, or exclude one with `!=5.*`. Older Rugix Ctrl versions evaluate such requirements differently and reject wildcards.
 
+- Version the Rugix Apps formats. `app.toml` accepts `format-version`, and `rugix-bundler apps pack` writes `format-version = 1`. Rugix Ctrl refuses app manifests, app directories, and Compose image metadata with format versions it does not support, so that a Rugix Ctrl version never misinterprets files written for a newer one. Files without a format version have version 1. Older Rugix Ctrl versions ignore `format-version`.
+- Record the format version of each app directory in `.rugix/format.json` when Rugix Ctrl first changes the app.
+- Validate `app.toml` before an installed app generation is marked complete: the manifest must have a supported format version and a known orchestrator, and a default configuration must match the configuration schema. Previously, `rugix-ctrl apps install --no-activate` staged such generations and the error surfaced only on activation.
+- Warn about fields in `app.toml` that Rugix Ctrl does not know when installing an app.
+
 ## Version 1.4.0
 
 Behavior Changes:
