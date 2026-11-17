@@ -19,6 +19,7 @@ use crate::operations::apps::ListApps;
 use crate::operations::apps::QueryApp;
 use crate::operations::apps::QueryAppConfiguration;
 use crate::operations::apps::QueryAppConfigurationSchema;
+use crate::operations::apps::QueryAppLogs;
 use crate::operations::apps::RemoveApp;
 use crate::operations::apps::RollbackApp;
 use crate::operations::apps::SetAppConfiguration;
@@ -58,6 +59,7 @@ pub(crate) enum Request {
     QueryApp(QueryApp),
     QueryAppConfiguration(QueryAppConfiguration),
     QueryAppConfigurationSchema(QueryAppConfigurationSchema),
+    QueryAppLogs(QueryAppLogs),
     SetAppConfiguration(SetAppConfiguration),
     FactoryReset(FactoryReset),
     CommitSystem(CommitSystem),
@@ -284,6 +286,7 @@ impl_no_input_daemon_operation!(ListApps, ListApps);
 impl_no_input_daemon_operation!(QueryApp, QueryApp);
 impl_no_input_daemon_operation!(QueryAppConfiguration, QueryAppConfiguration);
 impl_no_input_daemon_operation!(QueryAppConfigurationSchema, QueryAppConfigurationSchema);
+impl_no_input_daemon_operation!(QueryAppLogs, QueryAppLogs);
 impl_no_input_daemon_operation!(SetAppConfiguration, SetAppConfiguration);
 impl_no_input_daemon_operation!(FactoryReset, FactoryReset);
 impl_no_input_daemon_operation!(CommitSystem, CommitSystem);

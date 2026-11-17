@@ -8,6 +8,9 @@ use tracing::info;
 use super::AppContext;
 use super::AppStatus;
 use super::Orchestrator;
+use crate::apps::logs::LogQuery;
+use crate::apps::logs::LogSource;
+use crate::apps::logs::LogSourceFormat;
 use crate::apps::AppsResult;
 
 /// Generic orchestrator delegating lifecycle operations to an `orchestrator` script.
@@ -21,6 +24,14 @@ impl Generic {
 
     /// Run the orchestrator script and return its output.
     fn run_orchestrator(ctx: &AppContext, operation: &str) -> AppsResult<std::process::Output> {
+        let output = Self::orchestrator_command(ctx, operation)
+            .output()
+            .whatever("unable to run orchestrator")?;
+        Ok(output)
+    }
+
+    /// Build the command running an operation of the orchestrator script.
+    fn orchestrator_command(ctx: &AppContext, operation: &str) -> Command {
         let orchestrator = Self::orchestrator_path(ctx);
         let mut command = Command::new(&orchestrator);
         command
@@ -39,8 +50,7 @@ impl Generic {
         if let Some(path) = ctx.configuration_path {
             command.env("RUGIX_APP_CONFIG_PATH", path);
         }
-        let output = command.output().whatever("unable to run orchestrator")?;
-        Ok(output)
+        command
     }
 
     /// Run the orchestrator script and check its result.
@@ -93,5 +103,25 @@ impl Orchestrator for Generic {
     fn stop(&self, ctx: &AppContext) -> AppsResult<()> {
         info!(app = ctx.app_name, "running generic orchestrator: stop");
         Self::run_orchestrator_checked(ctx, "stop")
+    }
+
+    fn log_sources(&self, ctx: &AppContext, query: &LogQuery) -> AppsResult<Vec<LogSource>> {
+        let mut command = Self::orchestrator_command(ctx, "logs");
+        command.env("RUGIX_LOGS_LINES", query.lines.to_string());
+        for (name, timestamp) in [
+            ("RUGIX_LOGS_SINCE", query.since),
+            ("RUGIX_LOGS_UNTIL", query.until),
+        ] {
+            match timestamp {
+                Some(timestamp) => command.env(name, timestamp.to_string()),
+                None => command.env_remove(name),
+            };
+        }
+        Ok(vec![LogSource {
+            command,
+            format: LogSourceFormat::Records,
+            source: None,
+            generation: None,
+        }])
     }
 }

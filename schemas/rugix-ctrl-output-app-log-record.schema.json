@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rugix_ctrl.output.AppLogRecord",
+  "type": "object",
+  "description": "Log record of an app's workload, as printed by `apps logs --json`, one per line.",
+  "properties": {
+    "timestamp": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "severity": {
+      "$ref": "#/$defs/rugix_ctrl.output.AppLogSeverity"
+    },
+    "stream": {
+      "$ref": "#/$defs/rugix_ctrl.output.AppLogStream"
+    },
+    "generation": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "pattern": "^[0-9]+$"
+    },
+    "message": {
+      "type": "string"
+    },
+    "fields": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/rugix_ctrl.output.JsonValue"
+      }
+    },
+    "truncated": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "message"
+  ],
+  "unevaluatedProperties": false,
+  "$defs": {
+    "rugix_ctrl.output.AppLogSeverity": {
+      "enum": [
+        "trace",
+        "debug",
+        "info",
+        "warning",
+        "error",
+        "critical"
+      ],
+      "description": "Severity of a log record."
+    },
+    "rugix_ctrl.output.AppLogStream": {
+      "enum": [
+        "stdout",
+        "stderr"
+      ],
+      "description": "Output stream of a log record."
+    },
+    "rugix_ctrl.output.JsonValue": {}
+  }
+}

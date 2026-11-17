@@ -14,6 +14,8 @@ use rugix_bundle::bundle_hash;
 use rugix_bundle::manifest::AppArchiveDeliveryConfig;
 use rugix_bundle::manifest::AppConfigurationConfig;
 use rugix_bundle::manifest::AppFileDeliveryConfig;
+use rugix_bundle::manifest::AppLogFormat;
+use rugix_bundle::manifest::AppLogsConfig;
 use rugix_bundle::manifest::AppManifest;
 use rugix_bundle::manifest::BlockEncoding;
 use rugix_bundle::manifest::BundleManifest;
@@ -176,6 +178,18 @@ fn tar_append_includes(archive: &mut tar::Builder<File>, includes: &[PathBuf]) -
         }
     }
     Ok(())
+}
+
+/// Declare the log format of the workload in an app manifest.
+fn with_log_format(manifest: AppManifest, logs: &crate::PackLogsArgs) -> AppManifest {
+    let Some(format) = logs.format else {
+        return manifest;
+    };
+    let format = match format {
+        crate::LogFormat::Text => AppLogFormat::Text,
+        crate::LogFormat::Json => AppLogFormat::Json,
+    };
+    manifest.with_logs(Some(AppLogsConfig::new().with_format(Some(format))))
 }
 
 /// Add optional configuration declarations and files to an app manifest and archive.
@@ -451,7 +465,7 @@ pub fn pack_binary(cmd: &super::PackBinaryCmd) -> BundleResult<()> {
         let mut archive = tar::Builder::new(archive_file);
         let manifest = append_configuration(
             &mut archive,
-            AppManifest::new("binary".to_owned()),
+            with_log_format(AppManifest::new("binary".to_owned()), &cmd.logs),
             &cmd.configuration,
         )?;
         tar_append_app_toml(&mut archive, &manifest)?;
@@ -512,7 +526,7 @@ pub fn pack_generic(cmd: &super::PackGenericCmd) -> BundleResult<()> {
         let mut archive = tar::Builder::new(archive_file);
         let manifest = append_configuration(
             &mut archive,
-            AppManifest::new("generic".to_owned()),
+            with_log_format(AppManifest::new("generic".to_owned()), &cmd.logs),
             &cmd.configuration,
         )?;
         tar_append_app_toml(&mut archive, &manifest)?;
@@ -631,6 +645,7 @@ mod tests {
                 schema: None,
                 default: None,
             },
+            logs: crate::PackLogsArgs { format: None },
             metadata_file: None,
             output: output.clone(),
         };

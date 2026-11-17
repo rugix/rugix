@@ -128,6 +128,9 @@ fn dispatch(
         Request::QueryAppConfigurationSchema(operation) => {
             execute_operation(&executor, operation, (), &mut socket)
         }
+        Request::QueryAppLogs(operation) => {
+            execute_operation(&executor, operation, (), &mut socket)
+        }
         Request::SetAppConfiguration(operation) => {
             execute_operation(&executor, operation, (), &mut socket)
         }

@@ -13,6 +13,7 @@ use super::local::ExecutionContext;
 use super::EventSink;
 use super::NoEvent;
 use super::Operation;
+use crate::apps::logs::LogQuery;
 use crate::apps::manager::AppManager;
 use crate::config::apps::AppConfiguration;
 use crate::config::apps::AppState;
@@ -20,6 +21,7 @@ use crate::config::output::AppConfigurationSetOutput;
 use crate::config::output::AppGcAppOutput;
 use crate::config::output::AppInfoOutput;
 use crate::config::output::AppListEntryOutput;
+use crate::config::output::AppLogRecord;
 use crate::config::output::ComponentsCheckOutput;
 use crate::config::output::GenerationInfoOutput;
 use crate::system::SystemResult;
@@ -148,6 +150,32 @@ impl Operation for QueryApp {
         _events: &mut dyn EventSink<Self::Event>,
     ) -> SystemResult<Self::Output> {
         context.with_app_manager(|manager| query_app(manager, self.name))
+    }
+}
+
+/// Read the most recent log records of an application's workload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryAppLogs {
+    pub(crate) name: String,
+    pub(crate) query: LogQuery,
+}
+
+impl Operation for QueryAppLogs {
+    type Input = ();
+    type Event = NoEvent;
+    type Output = Vec<AppLogRecord>;
+
+    fn execute(
+        self,
+        context: &ExecutionContext<'_>,
+        _input: Self::Input,
+        _events: &mut dyn EventSink<Self::Event>,
+    ) -> SystemResult<Self::Output> {
+        context.with_app_manager(|manager| {
+            manager
+                .read_logs(&self.name, &self.query)
+                .whatever("unable to read app logs")
+        })
     }
 }
 

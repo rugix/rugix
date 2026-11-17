@@ -2,7 +2,7 @@
 
 Deactivation and removal remove the app's Rugix-owned image tags from Docker.
 The bundled images stay in the content-addressed store, so reactivation loads
-them from there.
+them from there. The logs of the app are the output of its containers.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from rugix_testkit import Bundler, VMHandle
 
-from support import apps, install_app, wait_for_app_state, wait_until
+from support import app_logs, apps, install_app, wait_for_app_state, wait_until
 
 APP_NAME = "website"
 APP_IMAGE_PREFIX = f"localhost/rugix-apps/{APP_NAME}/"
@@ -114,6 +114,33 @@ def test_apps_docker_compose(
     assert _app_images(vm) == []
     store = vm.run_json(["rugix-ctrl", "store", "info"])
     assert (store["refs"], store["objects"], store["chunks"]) == (0, 0, 0)
+
+
+def test_apps_docker_compose_logs(
+    vm: VMHandle,
+    website_bundle: Path,
+    bundle_url: Callable[[Path], str],
+) -> None:
+    """The logs of the app contain the output of its containers by service,
+    stream, and generation, also after the containers stopped."""
+    install_app(vm, bundle_url(website_bundle))
+    _wait_until_serving(vm)
+    wait_until(
+        lambda: any(
+            "GET / HTTP" in record["message"] for record in app_logs(vm, APP_NAME)
+        ),
+        "the request is in the logs",
+    )
+    vm.run(["rugix-ctrl", "apps", "stop", APP_NAME], hide=True)
+    wait_for_app_state(vm, APP_NAME, "stopped")
+
+    records = app_logs(vm, APP_NAME)
+    assert {(record["source"], record["generation"]) for record in records} == {
+        ("web", 1)
+    }
+    assert {record["stream"] for record in records} == {"stdout", "stderr"}
+    [request] = [record for record in records if "GET / HTTP" in record["message"]]
+    assert request["stream"] == "stdout"
 
 
 def _wait_until_serving(vm: VMHandle) -> None:

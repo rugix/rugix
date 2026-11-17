@@ -18,6 +18,10 @@
 - Validate `app.toml` before an installed app generation is marked complete: the manifest must have a supported format version and a known orchestrator, and a default configuration must match the configuration schema. Previously, `rugix-ctrl apps install --no-activate` staged such generations and the error surfaced only on activation.
 - Warn about fields in `app.toml` that Rugix Ctrl does not know when installing an app.
 
+- Add `rugix-ctrl apps logs` to print the most recent log records of an app's workload in one format for all orchestrators. Docker Compose apps provide the output of their containers, binary apps the journal entries of their service, and generic apps the output of the new optional `logs` operation of their orchestrator script. `--json` prints one JSON object per record, described by `schemas/rugix-ctrl-output-app-log-record.schema.json`. Through the privileged daemon, reading logs requires the `app-lifecycle` feature.
+- Add `logs.format` to `app.toml` and `--log-format` to `rugix-bundler apps pack`. With `json`, Rugix Ctrl turns log lines that are JSON objects into structured records with a severity and fields. Older Rugix Ctrl versions ignore the field.
+- The binary orchestrator tags the journal entries of a workload with its generation by appending `LogExtraFields=RUGIX_APP_GENERATION=N` to the rendered unit.
+
 ## Version 1.4.0
 
 Behavior Changes:

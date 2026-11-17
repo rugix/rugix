@@ -1,0 +1,41 @@
+#!/bin/bash
+# Generic orchestrator script for the generic-logs app.
+#
+# Starting the workload appends lines to a log file in the data directory. The
+# `logs` operation prints a log record of the script followed by the most recent
+# lines of the file.
+set -euo pipefail
+
+LOG="${RUGIX_APP_DATA_DIR}/app.log"
+PIDFILE="${RUGIX_APP_DATA_DIR}/pid"
+
+case "$1" in
+    activate | start)
+        mkdir -p "${RUGIX_APP_DATA_DIR}"
+        echo "plain line" >> "${LOG}"
+        echo '{"level":"error","msg":"json line"}' >> "${LOG}"
+        nohup sleep infinity &>/dev/null &
+        echo $! > "${PIDFILE}"
+        ;;
+    deactivate | stop)
+        if [ -f "${PIDFILE}" ]; then
+            kill "$(cat "${PIDFILE}")" 2>/dev/null || true
+            rm -f "${PIDFILE}"
+        fi
+        ;;
+    status)
+        if [ -f "${PIDFILE}" ] && kill -0 "$(cat "${PIDFILE}")" 2>/dev/null; then
+            echo '{"state": "running"}'
+        else
+            echo '{"state": "stopped"}'
+        fi
+        ;;
+    logs)
+        echo "{\"message\": \"script record\", \"source\": \"script\", \"generation\": ${RUGIX_APP_GENERATION}}"
+        tail -n "${RUGIX_LOGS_LINES}" "${LOG}"
+        ;;
+    *)
+        echo "unknown operation: $1" >&2
+        exit 1
+        ;;
+esac

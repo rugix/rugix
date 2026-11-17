@@ -21,6 +21,9 @@
     },
     "docker-compose": {
       "$ref": "#/$defs/rugix_bundle.manifest.DockerComposeConfig"
+    },
+    "logs": {
+      "$ref": "#/$defs/rugix_bundle.manifest.AppLogsConfig"
     }
   },
   "required": [
@@ -54,6 +57,24 @@
           "format": "uint64",
           "minimum": 0,
           "pattern": "^[0-9]+$"
+        }
+      },
+      "required": [],
+      "unevaluatedProperties": false
+    },
+    "rugix_bundle.manifest.AppLogFormat": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "description": "Format of the lines that an app's workload writes."
+    },
+    "rugix_bundle.manifest.AppLogsConfig": {
+      "type": "object",
+      "description": "Log configuration of an app.",
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/rugix_bundle.manifest.AppLogFormat"
         }
       },
       "required": [],

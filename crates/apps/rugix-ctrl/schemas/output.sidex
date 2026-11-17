@@ -126,6 +126,48 @@ record GenerationInfoOutput {
     staged: bool,
 }
 
+/// Log record of an app's workload, as printed by `apps logs --json`, one per line.
+record AppLogRecord {
+    /// Time at which the record was logged (RFC 3339), if known.
+    timestamp?: string,
+    /// Producer of the record, such as a Compose service or a process name, if known.
+    source?: string,
+    /// Severity of the record, if known.
+    severity?: AppLogSeverity,
+    /// Output stream to which the record was written, if known.
+    stream?: AppLogStream,
+    /// Generation whose workload produced the record, if known.
+    generation?: u64,
+    /// Message of the record.
+    message: string,
+    /// Structured fields of the record.
+    fields?: [string: JsonValue],
+    /// Whether the record was cut because its line or message exceeded a length limit.
+    truncated?: bool,
+}
+
+/// Severity of a log record.
+#[json(tagged = externally, rename_all = "lowercase")]
+#[rust(derive(Copy, PartialEq, Eq))]
+variant AppLogSeverity {
+    Trace,
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Critical,
+}
+
+/// Output stream of a log record.
+#[json(tagged = externally, rename_all = "lowercase")]
+#[rust(derive(Copy, PartialEq, Eq))]
+variant AppLogStream {
+    /// Standard output.
+    Stdout,
+    /// Standard error.
+    Stderr,
+}
+
 /// Result of setting application configuration.
 record AppConfigurationSetOutput {
     /// Newly created configuration revision.

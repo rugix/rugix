@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 use reportify::ResultExt;
 use tracing::info;
@@ -11,6 +12,10 @@ use super::AppContext;
 use super::AppStatus;
 use super::AppStatusMessage;
 use super::Orchestrator;
+use crate::apps::logs;
+use crate::apps::logs::LogQuery;
+use crate::apps::logs::LogSource;
+use crate::apps::logs::LogSourceFormat;
 use crate::apps::systemd;
 use crate::apps::AppsResult;
 
@@ -47,7 +52,8 @@ impl Binary {
         Path::new(systemd::RUNTIME_UNITS_DIR).join(Self::service_name(app_name))
     }
 
-    /// Read the unit template and substitute placeholders.
+    /// Read the unit template, substitute placeholders, and tag the journal entries of
+    /// the unit with the generation.
     fn render_unit(ctx: &AppContext) -> AppsResult<String> {
         let template_path = ctx.generation_dir.join(UNIT_TEMPLATE);
         let template =
@@ -61,7 +67,12 @@ impl Binary {
                     .map(|path| path.to_string_lossy())
                     .unwrap_or_default(),
             );
-        Ok(rendered)
+        let separator = if rendered.ends_with('\n') { "" } else { "\n" };
+        Ok(format!(
+            "{rendered}{separator}\n[Service]\nLogExtraFields={}={}\n",
+            logs::JOURNAL_GENERATION_FIELD,
+            ctx.generation
+        ))
     }
 }
 
@@ -139,5 +150,32 @@ impl Orchestrator for Binary {
         systemd::stop(&service)?;
         info!(app = ctx.app_name, service = %service, "stopped");
         Ok(())
+    }
+
+    fn log_sources(&self, ctx: &AppContext, query: &LogQuery) -> AppsResult<Vec<LogSource>> {
+        Self::require_systemd(ctx)?;
+        let mut command = Command::new("journalctl");
+        // Matching the unit includes systemd's messages about it, such as the exit
+        // status of a crashed workload. Without `--all`, journalctl omits fields
+        // larger than 4 KiB, including long messages.
+        command
+            .arg(format!("--unit={}", Self::service_name(ctx.app_name)))
+            .args(["--output=json", "--all", "--no-pager", "--quiet"])
+            .arg(format!("--lines={}", query.lines));
+        // Journalctl takes whole seconds. Rounding outwards keeps all selected entries;
+        // reading the logs drops the surplus.
+        if let Some(since) = query.since {
+            command.arg(format!("--since=@{}", since.as_second()));
+        }
+        if let Some(until) = query.until {
+            let seconds = until.as_second() + i64::from(until.subsec_nanosecond() > 0);
+            command.arg(format!("--until=@{seconds}"));
+        }
+        Ok(vec![LogSource {
+            command,
+            format: LogSourceFormat::Journal,
+            source: None,
+            generation: None,
+        }])
     }
 }

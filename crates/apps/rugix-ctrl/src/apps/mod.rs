@@ -3,6 +3,7 @@
 pub mod config;
 pub mod configuration;
 pub mod files;
+pub mod logs;
 pub mod manager;
 pub mod manifest;
 pub mod orchestrators;

@@ -7,6 +7,8 @@ use rugix_bundle::manifest::AppManifest;
 use crate::config::apps::AppConfiguration;
 
 use super::files::GenerationFiles;
+use super::logs::LogQuery;
+use super::logs::LogSource;
 use super::AppsResult;
 pub use crate::config::apps::AppStatus;
 pub use crate::config::apps::AppStatusMessage;
@@ -62,6 +64,11 @@ pub trait Orchestrator: Send + Sync {
 
     /// Stop the workload of an already-active generation without tearing down resources.
     fn stop(&self, ctx: &AppContext) -> AppsResult<()>;
+
+    /// Describe where the logs selected by the query are.
+    ///
+    /// The logs may stem from the workloads of several generations.
+    fn log_sources(&self, ctx: &AppContext, query: &LogQuery) -> AppsResult<Vec<LogSource>>;
 }
 
 /// Look up an orchestrator by name.

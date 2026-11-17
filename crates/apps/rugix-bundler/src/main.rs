@@ -139,6 +139,9 @@ pub struct PackDockerComposeCmd {
     /// Application configuration files included in the app bundle.
     #[clap(flatten)]
     configuration: PackConfigurationArgs,
+    /// Log configuration of the app.
+    #[clap(flatten)]
+    logs: PackLogsArgs,
     /// Project an application configuration value into the Compose environment.
     ///
     /// Values use `NAME=JSON_POINTER` syntax and may be repeated.
@@ -188,6 +191,9 @@ pub struct PackBinaryCmd {
     /// Application configuration files included in the app bundle.
     #[clap(flatten)]
     configuration: PackConfigurationArgs,
+    /// Log configuration of the app.
+    #[clap(flatten)]
+    logs: PackLogsArgs,
     /// Path to a JSON file with arbitrary metadata to include in the bundle.
     #[clap(long)]
     metadata_file: Option<PathBuf>,
@@ -211,6 +217,9 @@ pub struct PackGenericCmd {
     /// Application configuration files included in the app bundle.
     #[clap(flatten)]
     configuration: PackConfigurationArgs,
+    /// Log configuration of the app.
+    #[clap(flatten)]
+    logs: PackLogsArgs,
     /// Path to a JSON file with arbitrary metadata to include in the bundle.
     #[clap(long)]
     metadata_file: Option<PathBuf>,
@@ -227,6 +236,26 @@ pub struct PackConfigurationArgs {
     /// Default JSON configuration used until device-specific configuration is set.
     #[clap(long = "config-default")]
     default: Option<PathBuf>,
+}
+
+/// Log configuration shared by all app orchestrators.
+#[derive(Debug, ClapArgs)]
+pub struct PackLogsArgs {
+    /// Format of the lines that the workload writes. Default: text.
+    ///
+    /// With `json`, Rugix Ctrl turns lines that are JSON objects into structured log
+    /// records.
+    #[clap(long = "log-format", value_enum)]
+    format: Option<LogFormat>,
+}
+
+/// Format of the lines that an app's workload writes.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum LogFormat {
+    /// Plain text.
+    Text,
+    /// JSON objects, one per line.
+    Json,
 }
 
 #[derive(Debug, Subcommand)]

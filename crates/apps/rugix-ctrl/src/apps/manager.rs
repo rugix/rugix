@@ -10,6 +10,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use reportify::ResultExt;
+use rugix_bundle::manifest::AppLogFormat;
 use rugix_store::GcSummary;
 use rugix_store::Store;
 use tracing::error;
@@ -27,11 +28,14 @@ use crate::config::apps::AppStateStarting;
 use crate::config::apps::AppStateStopping;
 use crate::config::apps::AppStateSwitching;
 use crate::config::apps::AppsConfig;
+use crate::config::output::AppLogRecord;
 use crate::payload_db::PayloadState;
 
 use super::config;
 use super::configuration;
 use super::files::GenerationFiles;
+use super::logs;
+use super::logs::LogQuery;
 use super::manifest;
 use super::orchestrators;
 use super::orchestrators::AppContext;
@@ -1146,6 +1150,45 @@ impl AppManager {
             .whatever("failed to get app status")
     }
 
+    /// Read the most recent log records of an app's workload.
+    ///
+    /// The orchestrator of the current generation, or of the newest complete generation
+    /// if there is no current one, determines where the logs are. Takes no lock, so that
+    /// reading logs never waits for a transition.
+    pub fn read_logs(&self, app_name: &str, query: &LogQuery) -> AppsResult<Vec<AppLogRecord>> {
+        validate_app_name(app_name)?;
+        let deployment = self.current_or_newest_complete_deployment(app_name)?;
+        let gen_dir = self.generation_dir_unchecked(app_name, deployment.generation);
+        let manifest = manifest::load(&gen_dir)?;
+        let configuration = self.resolve_configuration(app_name, deployment)?;
+        let orchestrator = orchestrators::get(manifest.orchestrator.as_str())?;
+        let app_dir = self.app_dir(app_name);
+        let data_dir = self.data_dir(app_name);
+        let files = self.files_unchecked(app_name, deployment.generation);
+        let ctx = AppContext {
+            app_name,
+            app_dir: &app_dir,
+            generation: deployment.generation,
+            generation_dir: &gen_dir,
+            files: &files,
+            data_dir: &data_dir,
+            configuration_path: configuration.path.as_deref(),
+            configuration: configuration.value.as_ref(),
+            recovery: false,
+            service_manager: &self.service_manager,
+            manifest: &manifest,
+        };
+        let sources = orchestrator
+            .log_sources(&ctx, query)
+            .whatever("failed to determine log sources")?;
+        let format = manifest
+            .logs
+            .as_ref()
+            .and_then(|logs| logs.format.clone())
+            .unwrap_or(AppLogFormat::Text);
+        logs::read_logs(sources, query, &format)
+    }
+
     /// List all installed apps.
     pub fn list_apps(&self) -> AppsResult<Vec<String>> {
         let mut apps = Vec::new();
@@ -1516,8 +1559,14 @@ impl AppManager {
 
     /// Select the generation whose configuration contract currently applies.
     fn configuration_generation(&self, app_name: &str) -> AppsResult<PathBuf> {
+        let deployment = self.current_or_newest_complete_deployment(app_name)?;
+        Ok(self.generation_dir_unchecked(app_name, deployment.generation))
+    }
+
+    /// Select the current deployment or, without one, the newest complete generation.
+    fn current_or_newest_complete_deployment(&self, app_name: &str) -> AppsResult<AppDeployment> {
         if let Some(deployment) = self.current_deployment(app_name)? {
-            return Ok(self.generation_dir_unchecked(app_name, deployment.generation));
+            return Ok(deployment);
         }
         let generation = self
             .list_generations(app_name)?
@@ -1525,7 +1574,7 @@ impl AppManager {
             .rev()
             .find(|generation| generation.complete)
             .ok_or_else(|| reportify::whatever!("app {app_name} has no complete generation"))?;
-        Ok(self.generation_dir_unchecked(app_name, generation.meta.number))
+        Ok(AppDeployment::new(generation.meta.number, None))
     }
 
     /// Reserve a never-reused device-specific configuration revision number.
