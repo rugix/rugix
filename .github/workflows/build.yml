@@ -23,7 +23,7 @@ permissions:
 
 concurrency:
   group: build-${{ github.ref }}-${{ github.event_name == 'push' || inputs.publish || false }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 env:
   RUGIX_GIT_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}

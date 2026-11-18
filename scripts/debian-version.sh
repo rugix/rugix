@@ -3,7 +3,7 @@
 
 rugix_debian_version() {
     local version distance=""
-    version="${RUGIX_GIT_VERSION:-$(git -C "${PROJECT_DIR}" describe --tags --always)}"
+    version="${RUGIX_GIT_VERSION:-$(git -C "${PROJECT_DIR}" describe --tags --always)}" || return
     if [[ "${version}" =~ ^(.*)-([0-9]+)-g([0-9a-f]+)$ ]]; then
         version="${BASH_REMATCH[1]}"
         distance="+${BASH_REMATCH[2]}.g${BASH_REMATCH[3]}"

@@ -71,6 +71,21 @@ class PackageVersionTests(unittest.TestCase):
                     env=environment,
                 )
                 self.assertEqual(converted, expected)
+            shutil.rmtree(root / ".git")
+            environment.pop("RUGIX_GIT_VERSION")
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-e",
+                    "-c",
+                    'source "$PROJECT_DIR/scripts/debian-version.sh"; version=$(rugix_debian_version)',
+                ],
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":
