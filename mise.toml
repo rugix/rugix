@@ -94,3 +94,13 @@ run = './scripts/build-debs.sh "$@"'
 shell = "nix develop \"{{config_root}}#packaging\" --command bash -euo pipefail -c"
 description = "Build the metadata-only Debian source package."
 run = "./scripts/build-source-package.sh"
+
+[tasks."release:preview"]
+description = "Preview a release of the checked-out commit and its notes."
+usage = 'arg "<tag>" help="Release tag, for example v1.5.0"'
+run = 'python scripts/release.py preview "$usage_tag"'
+
+[tasks."release:tag"]
+description = "Tag the latest commit of main and push the release tag."
+usage = 'arg "<tag>" help="Release tag, for example v1.5.0"'
+run = 'python scripts/release.py tag "$usage_tag"'

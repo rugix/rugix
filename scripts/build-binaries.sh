@@ -31,7 +31,7 @@ build_target() {
     echo "==> Building ${target}"
 
     local git_version
-    git_version="$(git -C "${PROJECT_DIR}" describe --tags --always)"
+    git_version="${RUGIX_GIT_VERSION:-$(git -C "${PROJECT_DIR}" describe --tags --always)}"
     export RUGIX_GIT_VERSION="${git_version}"
 
     # Cross must be run from the project directory — it maps the working

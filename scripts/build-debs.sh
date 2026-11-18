@@ -43,23 +43,7 @@ rust_target_to_libc() {
     esac
 }
 
-# Compute a Debian-compatible version from git describe output.
-# v0.8.17         -> 0.8.17
-# v0.8.17-30-g... -> 0.8.17+30.g...
-compute_version() {
-    local git_version
-    git_version="$(git -C "${PROJECT_DIR}" describe --tags --always)"
-    # Strip leading 'v'.
-    git_version="${git_version#v}"
-    # Replace the first '-' (commit count separator) with '+' and any
-    # subsequent '-' with '.' to produce a valid Debian version.
-    if [[ "${git_version}" == *-* ]]; then
-        local base="${git_version%%-*}"
-        local rest="${git_version#*-}"
-        git_version="${base}+${rest//-/.}"
-    fi
-    echo "${git_version}"
-}
+source "${PROJECT_DIR}/scripts/debian-version.sh"
 
 # Descriptions keyed by binary name.
 description_for() {
@@ -173,7 +157,7 @@ EOF
 
 main() {
     local version
-    version="$(compute_version)"
+    version="$(rugix_debian_version)"
     echo "Version: ${version}"
 
     if [ ! -d "${BINARIES_DIR}" ]; then
