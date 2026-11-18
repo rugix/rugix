@@ -1,0 +1,9 @@
+#!/bin/bash
+# Workload of the binary-logs app. Writes a plain and a JSON log line and stays
+# running.
+set -euo pipefail
+
+echo "plain hello"
+echo '{"level":"warn","msg":"structured hello","answer":42}'
+
+exec sleep infinity

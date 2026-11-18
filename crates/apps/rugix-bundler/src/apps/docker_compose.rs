@@ -90,6 +90,7 @@ pub fn pack(cmd: &crate::PackDockerComposeCmd) -> BundleResult<()> {
                     AppHealthCheckConfig::new().with_timeout(Some(timeout)),
                 ));
             }
+            m = super::with_log_format(m, &cmd.logs);
             m = super::append_configuration(&mut archive, m, &cmd.configuration)?;
             let environment = parse_configuration_environment(&cmd.configuration_environment)?;
             if !environment.is_empty() {
@@ -1165,6 +1166,7 @@ services:
                 schema: None,
                 default: None,
             },
+            logs: crate::PackLogsArgs { format: None },
             configuration_environment: Vec::new(),
             metadata_file: None,
             compose_file: compose,

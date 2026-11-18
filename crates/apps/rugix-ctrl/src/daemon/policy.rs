@@ -70,6 +70,7 @@ impl AdmissionPolicy {
             | Request::StopApp(_)
             | Request::GarbageCollectApps(_)
             | Request::QueryAppConfiguration(_)
+            | Request::QueryAppLogs(_)
             | Request::SetAppConfiguration(_) => self.require_app_lifecycle()?,
             Request::RollbackApp(operation) => {
                 self.require_app_lifecycle()?;

@@ -1,0 +1,9 @@
+[Unit]
+Description=Log Writer App
+
+[Service]
+Type=simple
+ExecStart=${GENERATION_DIR}/log-writer
+
+[Install]
+WantedBy=multi-user.target

@@ -137,6 +137,27 @@ record AppManifest {
     configuration?: AppConfigurationConfig,
     /// Docker Compose-specific orchestration configuration.
     docker_compose?: DockerComposeConfig,
+    /// Log configuration.
+    logs?: AppLogsConfig,
+}
+
+/// Log configuration of an app.
+#[json(rename_all = "kebab-case")]
+record AppLogsConfig {
+    /// Format of the lines that the workload writes. Defaults to `text`.
+    format?: AppLogFormat,
+}
+
+/// Format of the lines that an app's workload writes.
+#[json(tagged = externally, rename_all = "lowercase")]
+variant AppLogFormat {
+    /// Plain text. Each line is the message of a log record.
+    Text,
+    /// JSON objects. Rugix Ctrl takes the message from the `msg` or `message`
+    /// key and the severity from the `level`, `severity`, or `lvl` key. The other
+    /// keys become fields of the log record. Lines that are no JSON objects are
+    /// treated as plain text.
+    Json,
 }
 
 /// Application configuration files included in an app generation.

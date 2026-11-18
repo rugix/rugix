@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from typing import Any
@@ -54,6 +55,14 @@ def apps(vm: VMHandle) -> dict[str, Any]:
 def app_info(vm: VMHandle, app: str) -> Any:
     """Return the output of ``rugix-ctrl apps info``."""
     return vm.run_json(["rugix-ctrl", "apps", "info", app])
+
+
+def app_logs(vm: VMHandle, app: str, *args: str) -> list[Any]:
+    """Return the log records that ``rugix-ctrl apps logs --json`` prints."""
+    output = vm.run(
+        ["rugix-ctrl", "apps", "logs", app, "--json", *args], hide=True
+    ).stdout
+    return [json.loads(line) for line in output.splitlines()]
 
 
 def app_state(vm: VMHandle, app: str) -> str | None:

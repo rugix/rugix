@@ -43,7 +43,9 @@ use reportify::whatever;
 use reportify::ResultExt;
 use rugix_common::stream_hasher::StreamHasher;
 
+use crate::apps::logs::LogQuery;
 use crate::config::output::AppFileOutput;
+use crate::config::output::AppLogRecord;
 use crate::config::output::BlockDeviceInfo;
 use crate::daemon::client::DaemonClient;
 use crate::daemon::DaemonOperation;
@@ -58,6 +60,7 @@ use crate::operations::apps::ListApps;
 use crate::operations::apps::QueryApp;
 use crate::operations::apps::QueryAppConfiguration;
 use crate::operations::apps::QueryAppConfigurationSchema;
+use crate::operations::apps::QueryAppLogs;
 use crate::operations::apps::RemoveApp;
 use crate::operations::apps::RollbackApp;
 use crate::operations::apps::SetAppConfiguration;
@@ -575,6 +578,31 @@ pub fn main() -> SystemResult<()> {
                     rugix_cli::json::print_json(&output.generations, false)
                         .whatever("unable to write generations to stdout")?;
                 }
+                AppsCommand::Logs {
+                    app,
+                    lines,
+                    since,
+                    until,
+                    json,
+                } => {
+                    let query = LogQuery {
+                        lines: *lines,
+                        since: *since,
+                        until: *until,
+                    };
+                    let records = execute_operation(
+                        QueryAppLogs {
+                            name: app.clone(),
+                            query,
+                        },
+                        (),
+                    )?;
+                    match print_log_records(&records, *json) {
+                        // The reader, for example, `head`, does not want more records.
+                        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
+                        result => result.whatever("unable to write logs to stdout")?,
+                    }
+                }
                 AppsCommand::Files { app, generation } => {
                     let manager = load_cli_app_manager()?;
                     let generation = resolve_cli_generation(&manager, app, *generation)?;
@@ -762,6 +790,22 @@ fn parse_app_origin(value: &str) -> Result<crate::config::apps::AppOrigin, serde
 fn read_app_configuration(path: &Path) -> SystemResult<crate::config::apps::AppConfiguration> {
     let content = fs::read_to_string(path).whatever("unable to read app configuration file")?;
     crate::apps::configuration::parse(&content).whatever("unable to parse app configuration")
+}
+
+/// Print log records as text or as JSON objects, one per line.
+///
+/// A record spans several lines of text if its message does.
+fn print_log_records(records: &[AppLogRecord], json: bool) -> io::Result<()> {
+    if json {
+        return records
+            .iter()
+            .try_for_each(|record| rugix_cli::json::print_json(record, true));
+    }
+    let mut stdout = io::stdout().lock();
+    for record in records {
+        crate::apps::logs::write_text(&mut stdout, record)?;
+    }
+    stdout.flush()
 }
 
 /// Resolve an optional generation argument, defaulting to the active generation.
@@ -1465,6 +1509,25 @@ pub enum AppsCommand {
     Generations {
         /// App name.
         app: String,
+    },
+    /// Print the most recent log records of an app's workload.
+    Logs {
+        /// App name.
+        app: String,
+        /// Maximum number of records to print.
+        #[clap(long, default_value = "200")]
+        lines: NonZeroUsize,
+        /// Only print records logged at or after this time (RFC 3339), and records
+        /// without time.
+        #[clap(long)]
+        since: Option<sidex::types::Timestamp>,
+        /// Only print records logged at or before this time (RFC 3339), and records
+        /// without time.
+        #[clap(long)]
+        until: Option<sidex::types::Timestamp>,
+        /// Print the records as JSON objects, one per line.
+        #[clap(long)]
+        json: bool,
     },
     /// List the payload files of a generation and where they are kept.
     Files {

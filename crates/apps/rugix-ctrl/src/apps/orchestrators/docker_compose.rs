@@ -4,6 +4,7 @@ use std::fmt::Write;
 use std::fs;
 use std::io;
 use std::io::Read;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
@@ -23,6 +24,9 @@ use super::AppContext;
 use super::AppStatus;
 use super::AppStatusMessage;
 use super::Orchestrator;
+use crate::apps::logs::LogQuery;
+use crate::apps::logs::LogSource;
+use crate::apps::logs::LogSourceFormat;
 use crate::apps::AppsResult;
 
 /// Name of the env file written into the generation directory.
@@ -450,6 +454,92 @@ impl Orchestrator for DockerCompose {
         }
         Ok(())
     }
+
+    fn log_sources(&self, ctx: &AppContext, query: &LogQuery) -> AppsResult<Vec<LogSource>> {
+        let generations_dir = ctx.app_dir.join("generations");
+        let sources = project_containers(ctx.app_name)?
+            .into_iter()
+            .map(|container| {
+                let mut command = Command::new("docker");
+                command
+                    .args(["logs", "--timestamps"])
+                    .arg(format!("--tail={}", query.lines));
+                for (option, timestamp) in [("--since", query.since), ("--until", query.until)] {
+                    if let Some(timestamp) = timestamp {
+                        command.arg(format!(
+                            "{option}={}.{:09}",
+                            timestamp.unix_seconds(),
+                            timestamp.subsec_nanos()
+                        ));
+                    }
+                }
+                command.arg(&container.id);
+                // Compose runs a generation's containers in the generation directory.
+                let generation = Path::new(&container.working_dir)
+                    .strip_prefix(&generations_dir)
+                    .ok()
+                    .and_then(|generation| generation.to_str()?.parse().ok());
+                LogSource {
+                    command,
+                    format: LogSourceFormat::DockerLogs,
+                    source: Some(container.service),
+                    generation,
+                }
+            })
+            .collect();
+        Ok(sources)
+    }
+}
+
+/// Container of an app's Compose project.
+struct ProjectContainer {
+    /// ID of the container.
+    id: String,
+    /// Compose service of the container.
+    service: String,
+    /// Directory in which Compose ran the project.
+    working_dir: String,
+}
+
+/// List the containers of an app's Compose project, including stopped ones.
+///
+/// The containers are ordered by service.
+fn project_containers(app_name: &str) -> AppsResult<Vec<ProjectContainer>> {
+    let output = Command::new("docker")
+        .args(["ps", "--all", "--no-trunc", "--filter"])
+        .arg(format!("label=com.docker.compose.project={app_name}"))
+        .args([
+            "--format",
+            "{{.ID}}\t{{.Label \"com.docker.compose.service\"}}\t{{.Label \"com.docker.compose.project.working_dir\"}}",
+        ])
+        .output()
+        .whatever("unable to run docker ps")?;
+    if !output.status.success() {
+        reportify::bail!(
+            "docker ps failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let mut containers = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|line| {
+            let mut columns = line.splitn(3, '\t');
+            let id = columns
+                .next()
+                .expect("splitting yields at least one column");
+            let (Some(service), Some(working_dir)) = (columns.next(), columns.next()) else {
+                reportify::bail!("unexpected line in output of docker ps: {line:?}");
+            };
+            Ok(ProjectContainer {
+                id: id.to_owned(),
+                service: service.to_owned(),
+                working_dir: working_dir.to_owned(),
+            })
+        })
+        .collect::<AppsResult<Vec<_>>>()?;
+    containers.sort_by(|first, second| first.service.cmp(&second.service));
+    Ok(containers)
 }
 
 /// Stream an image archive into `docker image load`.
