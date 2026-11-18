@@ -6,11 +6,11 @@
 
 use std::collections::BTreeMap;
 
-use jiff::Timestamp;
 use serde::Deserialize;
 use sidex::types::JsonValue;
 use sidex::types::Map;
 use sidex::types::Str;
+use sidex::types::Timestamp;
 
 use crate::config::output::AppLogSeverity;
 
@@ -45,8 +45,12 @@ pub(crate) fn parse_entry(line: &[u8]) -> Option<JournalEntry> {
         fields.remove(name).and_then(FieldValue::into_text)
     };
     let timestamp = text(&mut fields, "__REALTIME_TIMESTAMP")
-        .and_then(|micros| micros.parse().ok())
-        .and_then(|micros| Timestamp::from_microsecond(micros).ok());
+        .and_then(|micros| micros.parse::<i64>().ok())
+        .and_then(|micros| {
+            let nanos = u32::try_from(micros.rem_euclid(1_000_000) * 1_000)
+                .expect("nanoseconds of a second fit into `u32`");
+            Timestamp::from_unix(micros.div_euclid(1_000_000), nanos)
+        });
     let message = text(&mut fields, "MESSAGE").unwrap_or_default();
     let severity = text(&mut fields, "PRIORITY").and_then(|priority| severity(&priority));
     let source = text(&mut fields, "SYSLOG_IDENTIFIER").or_else(|| text(&mut fields, "_COMM"));

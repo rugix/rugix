@@ -128,8 +128,8 @@ record GenerationInfoOutput {
 
 /// Log record of an app's workload, as printed by `apps logs --json`, one per line.
 record AppLogRecord {
-    /// Time at which the record was logged (RFC 3339), if known.
-    timestamp?: string,
+    /// Time at which the record was logged, if known.
+    timestamp?: timestamp,
     /// Producer of the record, such as a Compose service or a process name, if known.
     source?: string,
     /// Severity of the record, if known.

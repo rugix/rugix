@@ -84,7 +84,7 @@ mod tests {
         .map(|(key, value)| (Str::from(key), value))
         .collect::<Map<_, _>>();
         let record = AppLogRecord::new("login failed")
-            .with_timestamp(Some("2026-11-17T10:21:03Z".into()))
+            .with_timestamp(Some("2026-11-17T10:21:03Z".parse().unwrap()))
             .with_source(Some("web".into()))
             .with_severity(Some(AppLogSeverity::Warning))
             .with_fields(Some(fields));

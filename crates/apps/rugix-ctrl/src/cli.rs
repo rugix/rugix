@@ -1520,11 +1520,11 @@ pub enum AppsCommand {
         /// Only print records logged at or after this time (RFC 3339), and records
         /// without time.
         #[clap(long)]
-        since: Option<jiff::Timestamp>,
+        since: Option<sidex::types::Timestamp>,
         /// Only print records logged at or before this time (RFC 3339), and records
         /// without time.
         #[clap(long)]
-        until: Option<jiff::Timestamp>,
+        until: Option<sidex::types::Timestamp>,
         /// Print the records as JSON objects, one per line.
         #[clap(long)]
         json: bool,

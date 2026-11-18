@@ -165,10 +165,10 @@ impl Orchestrator for Binary {
         // Journalctl takes whole seconds. Rounding outwards keeps all selected entries;
         // reading the logs drops the surplus.
         if let Some(since) = query.since {
-            command.arg(format!("--since=@{}", since.as_second()));
+            command.arg(format!("--since=@{}", since.unix_seconds()));
         }
         if let Some(until) = query.until {
-            let seconds = until.as_second() + i64::from(until.subsec_nanosecond() > 0);
+            let seconds = until.unix_seconds() + i64::from(until.subsec_nanos() > 0);
             command.arg(format!("--until=@{seconds}"));
         }
         Ok(vec![LogSource {

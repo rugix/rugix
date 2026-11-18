@@ -5,7 +5,8 @@
   "description": "Log record of an app's workload, as printed by `apps logs --json`, one per line.",
   "properties": {
     "timestamp": {
-      "type": "string"
+      "type": "string",
+      "format": "date-time"
     },
     "source": {
       "type": "string"

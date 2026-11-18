@@ -468,8 +468,8 @@ impl Orchestrator for DockerCompose {
                     if let Some(timestamp) = timestamp {
                         command.arg(format!(
                             "{option}={}.{:09}",
-                            timestamp.as_second(),
-                            timestamp.subsec_nanosecond()
+                            timestamp.unix_seconds(),
+                            timestamp.subsec_nanos()
                         ));
                     }
                 }

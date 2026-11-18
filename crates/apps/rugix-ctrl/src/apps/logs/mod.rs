@@ -17,11 +17,11 @@ use std::process::Command;
 use std::process::Stdio;
 use std::thread;
 
-use jiff::Timestamp;
 use reportify::ResultExt;
 use rugix_bundle::manifest::AppLogFormat;
 use serde::Deserialize;
 use serde::Serialize;
+use sidex::types::Timestamp;
 use tracing::warn;
 
 pub use self::text::write_text;
@@ -119,18 +119,12 @@ pub fn read_logs(
     Ok(records.drain(excess..).collect())
 }
 
-/// Record with its parsed time.
-struct LogEntry {
-    timestamp: Option<Timestamp>,
-    record: AppLogRecord,
-}
-
-/// Run a source and return the selected entries of each of its streams.
+/// Run a source and return the selected records of each of its streams.
 fn read_source(
     mut source: LogSource,
     query: &LogQuery,
     format: &AppLogFormat,
-) -> AppsResult<Vec<VecDeque<LogEntry>>> {
+) -> AppsResult<Vec<VecDeque<AppLogRecord>>> {
     let program = source.command.get_program().to_string_lossy().into_owned();
     let mut child = source
         .command
@@ -174,15 +168,15 @@ fn read_source(
 
 /// Read standard error of a source.
 ///
-/// Returns the entries of the stream if the source format carries one there, and the
+/// Returns the records of the stream if the source format carries them there, and the
 /// last lines for diagnostics.
 fn read_stderr(
     stderr: impl Read,
     parser: &LineParser,
     query: &LogQuery,
-) -> std::io::Result<(VecDeque<LogEntry>, VecDeque<String>)> {
+) -> std::io::Result<(VecDeque<AppLogRecord>, VecDeque<String>)> {
     let mut diagnostics = VecDeque::new();
-    let entries = read_stream(stderr, query, |line| {
+    let records = read_stream(stderr, query, |line| {
         if diagnostics.len() == MAX_DIAGNOSTIC_LINES {
             diagnostics.pop_front();
         }
@@ -193,64 +187,64 @@ fn read_stderr(
                 .expect("every line of `docker logs` is a record")
         })
     })?;
-    Ok((entries, diagnostics))
+    Ok((records, diagnostics))
 }
 
-/// Read a stream of a source and keep the selected entries that `parse` returns for
+/// Read a stream of a source and keep the selected records that `parse` returns for
 /// its lines.
 fn read_stream(
     stream: impl Read,
     query: &LogQuery,
-    mut parse: impl FnMut(lines::Line) -> Option<LogEntry>,
-) -> std::io::Result<VecDeque<LogEntry>> {
+    mut parse: impl FnMut(lines::Line) -> Option<AppLogRecord>,
+) -> std::io::Result<VecDeque<AppLogRecord>> {
     let mut reader = BufReader::new(stream);
-    let mut entries = VecDeque::new();
+    let mut records = VecDeque::new();
     while let Some(line) = lines::read_line(&mut reader, MAX_LINE_BYTES)? {
-        if let Some(entry) = parse(line) {
-            push_selected(&mut entries, entry, query);
+        if let Some(record) = parse(line) {
+            push_selected(&mut records, record, query);
         }
     }
-    Ok(entries)
+    Ok(records)
 }
 
-/// Append an entry if the query selects it, keeping only the most recent entries.
-fn push_selected(entries: &mut VecDeque<LogEntry>, entry: LogEntry, query: &LogQuery) {
-    if !query.selects(entry.timestamp) {
+/// Append a record if the query selects it, keeping only the most recent records.
+fn push_selected(records: &mut VecDeque<AppLogRecord>, record: AppLogRecord, query: &LogQuery) {
+    if !query.selects(record.timestamp) {
         return;
     }
-    if entries.len() == query.lines.get() {
-        entries.pop_front();
+    if records.len() == query.lines.get() {
+        records.pop_front();
     }
-    entries.push_back(entry);
+    records.push_back(record);
 }
 
 /// Merge chronological streams into one, keeping the order within each stream.
 ///
-/// An entry without a time is ordered by the time of the preceding entry of its stream.
-fn merge(streams: Vec<VecDeque<LogEntry>>) -> Vec<AppLogRecord> {
+/// A record without a time is ordered by the time of the preceding record of its stream.
+fn merge(streams: Vec<VecDeque<AppLogRecord>>) -> Vec<AppLogRecord> {
     let mut streams = streams
         .into_iter()
-        .map(|entries| (None, entries))
+        .map(|records| (None, records))
         .collect::<Vec<(Option<Timestamp>, _)>>();
-    let mut records = Vec::new();
+    let mut merged = Vec::new();
     loop {
         let next = streams
             .iter()
             .enumerate()
-            .filter_map(|(index, (previous, entries))| {
-                let entry = entries.front()?;
-                Some((entry.timestamp.or(*previous), index))
+            .filter_map(|(index, (previous, records))| {
+                let record = records.front()?;
+                Some((record.timestamp.or(*previous), index))
             })
             .min();
         let Some((_, index)) = next else {
-            return records;
+            return merged;
         };
-        let (previous, entries) = &mut streams[index];
-        let entry = entries.pop_front().expect("the chosen stream has an entry");
-        if entry.timestamp.is_some() {
-            *previous = entry.timestamp;
+        let (previous, records) = &mut streams[index];
+        let record = records.pop_front().expect("the chosen stream has a record");
+        if record.timestamp.is_some() {
+            *previous = record.timestamp;
         }
-        records.push(entry.record);
+        merged.push(record);
     }
 }
 
@@ -263,13 +257,13 @@ struct LineParser<'source> {
 }
 
 impl LineParser<'_> {
-    /// Parse a line into an entry.
+    /// Parse a line into a record.
     ///
     /// `stream` is the stream of the source's output that carried the line. Returns
     /// `None` for lines that carry no record.
-    fn parse(&self, line: lines::Line, stream: AppLogStream) -> Option<LogEntry> {
+    fn parse(&self, line: lines::Line, stream: AppLogStream) -> Option<AppLogRecord> {
         let text = String::from_utf8_lossy(&line.bytes);
-        let (timestamp, mut record) = match self.source_format {
+        let mut record = match self.source_format {
             LogSourceFormat::DockerLogs => {
                 let (timestamp, message) = match text
                     .split_once(' ')
@@ -281,9 +275,10 @@ impl LineParser<'_> {
                         (None, &*text)
                     }
                 };
-                (
-                    timestamp,
-                    self.workload_record(AppLogRecord::new(message).with_stream(Some(stream))),
+                self.workload_record(
+                    AppLogRecord::new(message)
+                        .with_timestamp(timestamp)
+                        .with_stream(Some(stream)),
                 )
             }
             LogSourceFormat::Journal => {
@@ -295,16 +290,18 @@ impl LineParser<'_> {
                     return None;
                 };
                 let record = AppLogRecord::new(entry.message)
+                    .with_timestamp(entry.timestamp)
                     .with_severity(entry.severity)
                     .with_source(entry.source.map(Into::into))
                     .with_generation(entry.generation)
                     .with_fields((!entry.fields.is_empty()).then_some(entry.fields));
-                (entry.timestamp, self.workload_record(record))
+                self.workload_record(record)
             }
-            LogSourceFormat::Records => parse_record(&text)
-                .unwrap_or_else(|| (None, self.workload_record(AppLogRecord::new(text.as_ref())))),
+            LogSourceFormat::Records => {
+                sidex::formats::json::from_str_strict::<AppLogRecord>(&text)
+                    .unwrap_or_else(|_| self.workload_record(AppLogRecord::new(text.as_ref())))
+            }
         };
-        record.timestamp = timestamp.map(|timestamp| timestamp.to_string().into());
         if record.source.is_none() {
             record.source = self.source.map(Into::into);
         }
@@ -315,7 +312,7 @@ impl LineParser<'_> {
             record.truncated = Some(true);
         }
         truncate_message(&mut record);
-        Some(LogEntry { timestamp, record })
+        Some(record)
     }
 
     /// Interpret a record written by the workload according to the app's log format.
@@ -323,19 +320,6 @@ impl LineParser<'_> {
         app_format::apply(self.app_format, &mut record);
         record
     }
-}
-
-/// Parse a line that is a valid log record.
-fn parse_record(line: &str) -> Option<(Option<Timestamp>, AppLogRecord)> {
-    let record = sidex::formats::json::from_str_strict::<AppLogRecord>(line).ok()?;
-    let timestamp = match record.timestamp.as_deref().map(str::parse).transpose() {
-        Ok(timestamp) => timestamp,
-        Err(error) => {
-            warn!(%line, %error, "log record with invalid timestamp, treating it as text");
-            return None;
-        }
-    };
-    Some((timestamp, record))
 }
 
 /// Cut the message of a record at [`MAX_MESSAGE_BYTES`].
