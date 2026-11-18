@@ -9,7 +9,7 @@
 </h4>
 <p align="center">
   <a href="https://github.com/rugix/rugix/releases"><img alt="Rugix Version Badge" src="https://img.shields.io/github/v/tag/rugix/rugix?label=version"></a>
-  <a href="https://github.com/rugix/rugix/actions"><img alt="Pipeline Status Badge" src="https://img.shields.io/github/actions/workflow/status/rugix/rugix/check-and-lint.yml"></a>
+  <a href="https://github.com/rugix/rugix/actions"><img alt="Pipeline Status Badge" src="https://img.shields.io/github/actions/workflow/status/rugix/rugix/build.yml"></a>
 </p>
 
 Rugix is an open-source toolkit for building and maintaining robust Linux-powered
@@ -114,6 +114,8 @@ When a dependency advisory fails CI, update the affected crate in `Cargo.lock` w
 `cargo update -p <crate> --precise <fixed-version>`, then run `mise run check`. If the
 crate is a direct dependency, also raise its minimum version in the corresponding
 `Cargo.toml` to exclude affected releases.
+
+The [release guide](RELEASING.md) describes release previews, tagging, and automatic publication.
 
 ## Run Directly from Git with Nix
 

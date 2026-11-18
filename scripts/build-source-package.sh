@@ -19,21 +19,7 @@ OUTPUT_DIR="${PROJECT_DIR}/build/source"
 SOURCE_NAME="rugix-debian"
 MAINTAINER="Silitics GmbH <info@silitics.com>"
 
-# Compute a Debian-compatible version from git describe output, in
-# lockstep with scripts/build-debs.sh.
-# v0.8.17         -> 0.8.17
-# v0.8.17-30-g... -> 0.8.17+30.g...
-compute_version() {
-    local git_version
-    git_version="$(git -C "${PROJECT_DIR}" describe --tags --always)"
-    git_version="${git_version#v}"
-    if [[ "${git_version}" == *-* ]]; then
-        local base="${git_version%%-*}"
-        local rest="${git_version#*-}"
-        git_version="${base}+${rest//-/.}"
-    fi
-    echo "${git_version}"
-}
+source "${PROJECT_DIR}/scripts/debian-version.sh"
 
 main() {
     if [ ! -d "${TEMPLATE_DIR}" ]; then
@@ -42,7 +28,7 @@ main() {
     fi
 
     local version commit date
-    version="$(compute_version)"
+    version="$(rugix_debian_version)"
     commit="$(git -C "${PROJECT_DIR}" rev-parse HEAD)"
     date="$(git -C "${PROJECT_DIR}" show -s --format=%aD HEAD)"
 

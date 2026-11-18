@@ -12,8 +12,42 @@ on:
       - "v*"
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the release (requires selecting a release tag)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}-${{ github.event_name == 'push' || inputs.publish || false }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  RUGIX_GIT_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
 
 jobs:
+  checks:
+    uses: ./.github/workflows/check-and-lint.yml
+
+  validate_release:
+    if: github.event_name == 'push' && github.ref_type == 'tag' || inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate Release
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          test "$REF_TYPE" = tag
+          python3 scripts/release.py validate "$TAG"
+
   build_binaries_linux:
     name: "Build Binaries (${{ matrix.target }})"
     runs-on: ubuntu-latest
@@ -216,12 +250,15 @@ jobs:
           path: build/source/*
           if-no-files-found: error
 
-  upload_release_assets:
-    name: "Upload Release Assets"
+  publish_release:
+    name: "Publish Release"
+    if: github.repository == 'rugix/rugix'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     needs:
+      - validate_release
+      - checks
       - build_binaries_linux
       - build_binaries_mac
       - build_debs
@@ -230,6 +267,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Download Binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -247,15 +287,8 @@ jobs:
         with:
           name: source-package
           path: build/source
-      - name: Remove Packages Not Intended for Release
-        run: rm -f build/debs/rugix-util-*.deb
-      - name: List Assets
-        run: |
-          find build/binaries
-          find build/debs
-          find build/source
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Publish Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.ref_name }} build/binaries/* build/debs/* build/source/* --clobber
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: python3 scripts/release.py publish "$TAG"

@@ -1,23 +1,19 @@
 name: Check and Lint
 
 on:
-  # Pull requests cover other branches, so that their pushes do not run twice.
-  push:
-    branches:
-      - main
-    tags:
-      - "v*"
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
-  packaging:
-    name: Test Debian Packaging
+  script_tests:
+    name: Test Release and Packaging Scripts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Test Debian Packaging
-        run: python3 scripts/tests/test_build_debs.py
+      - name: Test Release and Packaging Scripts
+        run: python3 -m unittest discover -s scripts/tests -v
 
   check-and-lint:
     name: Check and Lint
