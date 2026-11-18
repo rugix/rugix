@@ -10,13 +10,16 @@ use crate::config::output::AppLogSeverity;
 
 /// Write a record as text, followed by a newline.
 ///
-/// The text consists of the time, the source, the severity, the message, and the
-/// fields as `key=value` pairs, omitting what the record lacks. It spans several lines
-/// if the message does.
+/// The text consists of the time, the generation as `#N`, the source, the severity,
+/// the message, and the fields as `key=value` pairs, omitting what the record lacks.
+/// It spans several lines if the message does.
 pub fn write_text(out: &mut impl Write, record: &AppLogRecord) -> io::Result<()> {
     let mut parts = Vec::new();
     if let Some(timestamp) = &record.timestamp {
         parts.push(timestamp.to_string());
+    }
+    if let Some(generation) = record.generation {
+        parts.push(format!("#{generation}"));
     }
     if let Some(source) = &record.source {
         parts.push(source.to_string());
@@ -85,6 +88,7 @@ mod tests {
         .collect::<Map<_, _>>();
         let record = AppLogRecord::new("login failed")
             .with_timestamp(Some("2026-11-17T10:21:03Z".parse().unwrap()))
+            .with_generation(Some(3))
             .with_source(Some("web".into()))
             .with_severity(Some(AppLogSeverity::Warning))
             .with_fields(Some(fields));
@@ -92,7 +96,7 @@ mod tests {
         write_text(&mut out, &record).unwrap();
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            "2026-11-17T10:21:03Z web WARNING login failed user=alice note=\"two words\" count=3\n"
+            "2026-11-17T10:21:03Z #3 web WARNING login failed user=alice note=\"two words\" count=3\n"
         );
     }
 }

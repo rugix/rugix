@@ -4,6 +4,7 @@ use std::fmt::Write;
 use std::fs;
 use std::io;
 use std::io::Read;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -24,6 +25,7 @@ use super::AppContext;
 use super::AppStatus;
 use super::AppStatusMessage;
 use super::Orchestrator;
+use crate::apps::logs;
 use crate::apps::logs::LogQuery;
 use crate::apps::logs::LogSource;
 use crate::apps::logs::LogSourceFormat;
@@ -40,6 +42,13 @@ const DIAGNOSTIC_LOG_TAIL: usize = 120;
 
 /// Maximum number of bytes to include in activation failure diagnostics.
 const MAX_DIAGNOSTICS_BYTES: usize = 64 * 1024;
+
+/// Path of the saved log records of a failed activation, relative to the generation
+/// directory.
+const ACTIVATION_LOGS_PATH: &str = ".rugix/activation-logs.jsonl";
+
+/// Number of most recent log records to save when Compose activation fails.
+const ACTIVATION_LOG_RECORDS: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 
 /// Docker Compose orchestrator.
 pub struct DockerCompose;
@@ -173,6 +182,48 @@ impl DockerCompose {
             .as_ref()
             .and_then(|hc| hc.timeout)
             .unwrap_or(DEFAULT_HEALTH_CHECK_TIMEOUT)
+    }
+
+    /// Save the log records of the failed generation's containers (best-effort).
+    ///
+    /// Cleaning up after the failed activation removes the containers together with
+    /// their logs. [`Orchestrator::log_sources`] includes the saved records.
+    fn save_activation_logs(ctx: &AppContext) {
+        let query = LogQuery {
+            lines: ACTIVATION_LOG_RECORDS,
+            since: None,
+            until: None,
+        };
+        let records = container_log_sources(ctx, &query).and_then(|sources| {
+            logs::read_logs(sources, &query, &logs::app_log_format(ctx.manifest))
+        });
+        let records = match records {
+            Ok(records) => records,
+            Err(err) => {
+                warn!(
+                    app = ctx.app_name,
+                    "unable to read logs of failed activation: {err:?}"
+                );
+                return;
+            }
+        };
+        let mut content = String::new();
+        for record in &records {
+            content.push_str(
+                &sidex::formats::json::to_string(record)
+                    .expect("log records can always be encoded as JSON"),
+            );
+            content.push('\n');
+        }
+        let path = ctx.generation_dir.join(ACTIVATION_LOGS_PATH);
+        let parent = path.parent().expect("activation logs path has parent");
+        if let Err(err) = fs::create_dir_all(parent).and_then(|()| fs::write(&path, content)) {
+            warn!(
+                app = ctx.app_name,
+                path = ?path,
+                "unable to save logs of failed activation: {err}"
+            );
+        }
     }
 
     /// Collect best-effort diagnostics while failed containers still exist.
@@ -344,6 +395,7 @@ impl Orchestrator for DockerCompose {
 
         let status = cmd.status().whatever("unable to run docker compose up")?;
         if !status.success() {
+            Self::save_activation_logs(ctx);
             let diagnostics = Self::activation_diagnostics(ctx);
             if let Some(path) = Self::write_activation_diagnostics(ctx, &diagnostics) {
                 reportify::bail!(
@@ -456,39 +508,72 @@ impl Orchestrator for DockerCompose {
     }
 
     fn log_sources(&self, ctx: &AppContext, query: &LogQuery) -> AppsResult<Vec<LogSource>> {
-        let generations_dir = ctx.app_dir.join("generations");
-        let sources = project_containers(ctx.app_name)?
-            .into_iter()
-            .map(|container| {
-                let mut command = Command::new("docker");
-                command
-                    .args(["logs", "--timestamps"])
-                    .arg(format!("--tail={}", query.lines));
-                for (option, timestamp) in [("--since", query.since), ("--until", query.until)] {
-                    if let Some(timestamp) = timestamp {
-                        command.arg(format!(
-                            "{option}={}.{:09}",
-                            timestamp.unix_seconds(),
-                            timestamp.subsec_nanos()
-                        ));
-                    }
-                }
-                command.arg(&container.id);
-                // Compose runs a generation's containers in the generation directory.
-                let generation = Path::new(&container.working_dir)
-                    .strip_prefix(&generations_dir)
-                    .ok()
-                    .and_then(|generation| generation.to_str()?.parse().ok());
-                LogSource {
-                    command,
-                    format: LogSourceFormat::DockerLogs,
-                    source: Some(container.service),
-                    generation,
-                }
-            })
-            .collect();
+        let mut sources = container_log_sources(ctx, query)?;
+        sources.extend(saved_activation_log_sources(ctx)?);
         Ok(sources)
     }
+}
+
+/// Describe the logs of the containers of an app's Compose project.
+fn container_log_sources(ctx: &AppContext, query: &LogQuery) -> AppsResult<Vec<LogSource>> {
+    let generations_dir = ctx.app_dir.join("generations");
+    let sources = project_containers(ctx.app_name)?
+        .into_iter()
+        .map(|container| {
+            let mut command = Command::new("docker");
+            command
+                .args(["logs", "--timestamps"])
+                .arg(format!("--tail={}", query.lines));
+            for (option, timestamp) in [("--since", query.since), ("--until", query.until)] {
+                if let Some(timestamp) = timestamp {
+                    command.arg(format!(
+                        "{option}={}.{:09}",
+                        timestamp.unix_seconds(),
+                        timestamp.subsec_nanos()
+                    ));
+                }
+            }
+            command.arg(&container.id);
+            // Compose runs a generation's containers in the generation directory.
+            let generation = Path::new(&container.working_dir)
+                .strip_prefix(&generations_dir)
+                .ok()
+                .and_then(|generation| generation.to_str()?.parse().ok());
+            LogSource {
+                command,
+                format: LogSourceFormat::DockerLogs,
+                source: Some(container.service),
+                generation,
+            }
+        })
+        .collect();
+    Ok(sources)
+}
+
+/// Describe the saved log records of the failed activations of the app's generations.
+///
+/// The saved records name their source and generation.
+fn saved_activation_log_sources(ctx: &AppContext) -> AppsResult<Vec<LogSource>> {
+    let generations_dir = ctx.app_dir.join("generations");
+    let mut sources = Vec::new();
+    for entry in fs::read_dir(&generations_dir).whatever("unable to read generations directory")? {
+        let path = entry
+            .whatever("unable to read generations directory")?
+            .path()
+            .join(ACTIVATION_LOGS_PATH);
+        if !path.exists() {
+            continue;
+        }
+        let mut command = Command::new("cat");
+        command.arg(path);
+        sources.push(LogSource {
+            command,
+            format: LogSourceFormat::Records,
+            source: None,
+            generation: None,
+        });
+    }
+    Ok(sources)
 }
 
 /// Container of an app's Compose project.

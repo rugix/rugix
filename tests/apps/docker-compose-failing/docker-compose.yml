@@ -1,0 +1,4 @@
+services:
+  web:
+    image: nginx:alpine
+    command: ["sh", "-c", "echo 'web failed to start' >&2; exit 1"]
