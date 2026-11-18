@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep the log records of the containers of a failed Docker Compose activation. Rugix Ctrl saves them to `.rugix/activation-logs.jsonl` in the generation directory before it removes the containers, and `rugix-ctrl apps logs` includes them until the generation is removed. Previously, the output of a failed update was gone from `rugix-ctrl apps logs` after the rollback.
+- Print the generation of each record as `#N` in the text output of `rugix-ctrl apps logs`, so that records of several generations can be told apart.
+
 ## Version 1.4.1
 
 Rugix 1.4.1 adds workload logs to Rugix Apps and improves app validation, format

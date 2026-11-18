@@ -10,7 +10,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use reportify::ResultExt;
-use rugix_bundle::manifest::AppLogFormat;
 use rugix_store::GcSummary;
 use rugix_store::Store;
 use tracing::error;
@@ -1181,12 +1180,7 @@ impl AppManager {
         let sources = orchestrator
             .log_sources(&ctx, query)
             .whatever("failed to determine log sources")?;
-        let format = manifest
-            .logs
-            .as_ref()
-            .and_then(|logs| logs.format.clone())
-            .unwrap_or(AppLogFormat::Text);
-        logs::read_logs(sources, query, &format)
+        logs::read_logs(sources, query, &logs::app_log_format(&manifest))
     }
 
     /// List all installed apps.

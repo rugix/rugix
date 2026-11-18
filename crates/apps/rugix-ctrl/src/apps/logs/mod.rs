@@ -19,6 +19,7 @@ use std::thread;
 
 use reportify::ResultExt;
 use rugix_bundle::manifest::AppLogFormat;
+use rugix_bundle::manifest::AppManifest;
 use serde::Deserialize;
 use serde::Serialize;
 use sidex::types::Timestamp;
@@ -98,6 +99,15 @@ pub enum LogSourceFormat {
     Journal,
     /// Log records as JSON objects or plain lines, one per line.
     Records,
+}
+
+/// Format of the lines that an app's workload writes, as declared in its manifest.
+pub fn app_log_format(manifest: &AppManifest) -> AppLogFormat {
+    manifest
+        .logs
+        .as_ref()
+        .and_then(|logs| logs.format.clone())
+        .unwrap_or(AppLogFormat::Text)
 }
 
 /// Read the most recent records of the given sources in chronological order.

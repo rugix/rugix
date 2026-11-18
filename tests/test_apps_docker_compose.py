@@ -2,7 +2,8 @@
 
 Deactivation and removal remove the app's Rugix-owned image tags from Docker.
 The bundled images stay in the content-addressed store, so reactivation loads
-them from there. The logs of the app are the output of its containers.
+them from there. The logs of the app are the output of its containers,
+including the containers of failed activations.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ APP_NAME = "website"
 APP_IMAGE_PREFIX = f"localhost/rugix-apps/{APP_NAME}/"
 URL = "http://localhost:8080/"
 EXPECTED_BODY = "Hello from Rugix Apps"
+FAILURE_MESSAGE = "web failed to start"
 
 
 @pytest.fixture
@@ -34,25 +36,18 @@ def boot_timeout() -> float:
 
 @pytest.fixture(scope="module")
 def website_bundle(bundler: Bundler, rugix_project: Path) -> Path:
-    output = rugix_project / "apps" / "build" / "docker-compose-website_amd64.rugixb"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    if output.exists():
-        output.unlink()
-    bundler.apps_pack(
-        "docker-compose",
-        [
-            "--pull",
-            "--platform",
-            "linux/amd64",
-            "--app",
-            APP_NAME,
-            "--include",
-            "apps/docker-compose-website/www",
-        ],
-        rugix_project / "apps" / "docker-compose-website" / "docker-compose.yml",
-        output,
+    return _pack(
+        bundler,
+        rugix_project,
+        "docker-compose-website",
+        ["--include", "apps/docker-compose-website/www"],
     )
-    return output
+
+
+@pytest.fixture(scope="module")
+def failing_bundle(bundler: Bundler, rugix_project: Path) -> Path:
+    """Bundle of the app whose container exits right away, so activation fails."""
+    return _pack(bundler, rugix_project, "docker-compose-failing", [])
 
 
 def test_apps_docker_compose(
@@ -141,6 +136,62 @@ def test_apps_docker_compose_logs(
     assert {record["stream"] for record in records} == {"stdout", "stderr"}
     [request] = [record for record in records if "GET / HTTP" in record["message"]]
     assert request["stream"] == "stdout"
+
+
+def test_apps_docker_compose_failed_activation_logs(
+    vm: VMHandle,
+    website_bundle: Path,
+    failing_bundle: Path,
+    bundle_url: Callable[[Path], str],
+) -> None:
+    """The logs of the app keep the output of the containers of a failed
+    activation after the rollback removed them, next to the output of the
+    restored generation, with each record naming its generation."""
+    install_app(vm, bundle_url(website_bundle))
+    _wait_until_serving(vm)
+
+    result = vm.run(
+        [
+            "rugix-ctrl",
+            "apps",
+            "install",
+            "--insecure-skip-bundle-verification",
+            bundle_url(failing_bundle),
+        ],
+        check=False,
+        timeout=600,
+        hide=True,
+    )
+    assert not result.ok
+    assert apps(vm)[APP_NAME]["generation"] == 1
+    _wait_until_serving(vm)
+
+    records = app_logs(vm, APP_NAME)
+    [failure] = [record for record in records if record["message"] == FAILURE_MESSAGE]
+    assert (failure["source"], failure["stream"], failure["generation"]) == (
+        "web",
+        "stderr",
+        2,
+    )
+    assert any(record["generation"] == 1 for record in records)
+
+    text = vm.run(["rugix-ctrl", "apps", "logs", APP_NAME], hide=True).stdout
+    assert f"#2 web {FAILURE_MESSAGE}" in text
+
+
+def _pack(bundler: Bundler, rugix_project: Path, app_dir: str, args: list[str]) -> Path:
+    """Pack the Compose app in *app_dir* as a bundle of the app ``website``."""
+    output = rugix_project / "apps" / "build" / f"{app_dir}_amd64.rugixb"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.exists():
+        output.unlink()
+    bundler.apps_pack(
+        "docker-compose",
+        ["--pull", "--platform", "linux/amd64", "--app", APP_NAME, *args],
+        rugix_project / "apps" / app_dir / "docker-compose.yml",
+        output,
+    )
+    return output
 
 
 def _wait_until_serving(vm: VMHandle) -> None:
