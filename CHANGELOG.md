@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+## Version 1.4.1
+
+Rugix 1.4.1 adds workload logs to Rugix Apps and improves app validation, format
+compatibility, and version requirement matching.
+
+### Rugix Apps
+
+- Inspect Docker Compose and binary workload logs with `rugix-ctrl apps logs`.
+  Generic orchestrators can provide logs through an optional `logs` operation.
+- Read JSON workload logs as structured records using `logs.format` and
+  `--log-format`.
+- Catch invalid manifests and default configurations before an installed app
+  generation is marked complete.
+- Detect unsupported app format versions and warn about unknown manifest fields.
+
+### Compatibility and Fixes
+
+- Support additional OpenSSL RSA CMS signature encodings.
+- Correct version-range matching around prereleases and support wildcard
+  requirements such as `5.*`.
+- Include follow-up fixes for CMS signature handling and a rustix security update.
+
+**Upgrade guidance:** Update Rugix Ctrl on deployed devices, including rollback
+images, before using the newly supported signature encodings. Older Rugix Ctrl
+versions evaluate some version requirements differently and reject wildcards.
+
+<details>
+<summary>Detailed changes and compatibility notes</summary>
+
 - Bound unauthenticated CMS parsing work to mitigate quadratic ASN.1 SET decoding: allow at most 32 KiB of CMS metadata excluding primitive encapsulated content and 16 signer entries. Bundle signature sections are limited to 256 KiB, at most 16 CMS messages, and 16 KiB per message. Bundles exceeding these limits are rejected outright, including hash-based and explicitly insecure installation paths. Rugix Bundler bounds external signature file reads before ASN.1 decoding. Rugix Ctrl decodes each CMS message once across configured roots.
 - Reject CA signer certificates and signer certificates whose extended key usage excludes code signing in the exact-certificate verification API, matching device usage policy. Require absent ECDSA and Ed25519 signature parameters. Return a validation error instead of panicking if the device clock predates the Unix epoch.
 - Omit the default RSA-PSS trailer field when signing to produce canonical DER.
@@ -21,6 +50,8 @@
 - Add `rugix-ctrl apps logs` to print the most recent log records of an app's workload in one format for all orchestrators. Docker Compose apps provide the output of their containers, binary apps the journal entries of their service, and generic apps the output of the new optional `logs` operation of their orchestrator script. `--json` prints one JSON object per record, described by `schemas/rugix-ctrl-output-app-log-record.schema.json`. Through the privileged daemon, reading logs requires the `app-lifecycle` feature.
 - Add `logs.format` to `app.toml` and `--log-format` to `rugix-bundler apps pack`. With `json`, Rugix Ctrl turns log lines that are JSON objects into structured records with a severity and fields. Older Rugix Ctrl versions ignore the field.
 - The binary orchestrator tags the journal entries of a workload with its generation by appending `LogExtraFields=RUGIX_APP_GENERATION=N` to the rendered unit.
+
+</details>
 
 ## Version 1.4.0
 
